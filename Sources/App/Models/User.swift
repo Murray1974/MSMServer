@@ -1,7 +1,7 @@
 import Vapor
 import Fluent
 
-final class User: Model, Content {
+final class User: Model, Content, Authenticatable {
     static let schema = "users"
 
     @ID(key: .id)
@@ -13,7 +13,10 @@ final class User: Model, Content {
     @Field(key: "password_hash")
     var passwordHash: String
 
-    init() { }
+    @Children(for: \.$user)
+    var tokens: [UserToken]
+
+    init() {}
 
     init(id: UUID? = nil, username: String, passwordHash: String) {
         self.id = id
@@ -21,6 +24,3 @@ final class User: Model, Content {
         self.passwordHash = passwordHash
     }
 }
-
-// Allows `req.auth.require(User.self)` and guard middleware to work
-extension User: Authenticatable { }

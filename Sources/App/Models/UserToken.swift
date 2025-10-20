@@ -13,28 +13,32 @@ final class UserToken: Model, Content {
     @Parent(key: "user_id")
     var user: User
 
-    @Field(key: "expires_at")
+    // Optional expiry. If you prefer OptionalField, that's fine too;
+    // Timestamp keeps the db column typed as timestamptz if you want.
+    @Timestamp(key: "expires_at", on: .none)
     var expiresAt: Date?
 
-    init() { }
+    init() {}
 
-    init(value: String, userID: UUID, expiresAt: Date? = nil) {
+    init(id: UUID? = nil, value: String, userID: UUID, expiresAt: Date? = nil) {
+        self.id = id
         self.value = value
         self.$user.id = userID
         self.expiresAt = expiresAt
     }
 }
 
-// This gives us `.authenticator()` and and ties the token to the user.
+// MARK: - Token auth
 extension UserToken: ModelTokenAuthenticatable {
-    static let valueKey = \UserToken.$value
-    static let userKey = \UserToken.$user
-
+    // IMPORTANT: disambiguate the associatedtype `User` using the module-qualified model type
     typealias User = App.User
 
-    // Optional expiry support (deny if expired)
+    // Give the exact key-path types the protocol requires
+    static var valueKey: KeyPath<UserToken, Field<String>> { \UserToken.$value }
+    static var userKey:  KeyPath<UserToken, Parent<App.User>> { \UserToken.$user }
+
     var isValid: Bool {
-        guard let expiresAt else { return true }
-        return expiresAt > Date()
+        guard let exp = expiresAt else { return true }
+        return exp > Date()
     }
 }
