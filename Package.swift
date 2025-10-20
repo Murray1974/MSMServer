@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
@@ -8,12 +8,15 @@ let package = Package(
     ],
     products: [
         .library(name: "App", targets: ["App"]),
-        .executable(name: "Run", targets: ["Run"]),
+        .executable(name: "Run", targets: ["Run"])
     ],
     dependencies: [
-        .package(url: "https://github.com/vapor/vapor.git", from: "4.92.0"),
-        .package(url: "https://github.com/vapor/fluent.git", from: "4.9.0"),
-        .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.8.0"),
+        // Vapor core
+        .package(url: "https://github.com/vapor/vapor.git", from: "4.116.0"),
+        // Fluent ORM
+        .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
+        // Postgres driver for Fluent
+        .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.9.0")
     ],
     targets: [
         .target(
@@ -21,7 +24,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "Fluent", package: "fluent"),
-                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver")
             ],
             path: "Sources/App"
         ),
@@ -31,8 +34,9 @@ let package = Package(
             path: "Sources/Run"
         ),
         .testTarget(
-            name: "AppTests",
-            dependencies: ["App"]
+            name: "MSMServerTests",
+            dependencies: ["App"],
+            path: "Tests"
         )
     ]
 )

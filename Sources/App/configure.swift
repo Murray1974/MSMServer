@@ -1,15 +1,38 @@
 import Vapor
 import Fluent
-import FluentSQLiteDriver
+import FluentPostgresDriver
 
 public func configure(_ app: Application) throws {
-    // DB: SQLite in a file next to the binary (change path if you want)
-    app.databases.use(.sqlite(.file("db.sqlite")), as: .sqlite)
 
-    // (Optional) auto-migrate at startup while developing
+    // MARK: - Database Configuration
+
+    // Environment variables (with defaults for local Docker)
+    let hostname = Environment.get("POSTGRES_HOST") ?? "127.0.0.1"
+    let port = Environment.get("POSTGRES_PORT").flatMap(Int.init) ?? 5432
+    let username = Environment.get("POSTGRES_USER") ?? "vapor"
+    let password = Environment.get("POSTGRES_PASSWORD") ?? "password"
+    let database = Environment.get("POSTGRES_DB") ?? "vapor"
+
+    // Disable TLS for local Postgres container
+    let postgresConfig = SQLPostgresConfiguration(
+        hostname: hostname,
+        port: port,
+        username: username,
+        password: password,
+        database: database,
+        tls: .disable // <- Fixes sslUnsupported error
+    )
+
+    // Register database
+    app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
+
+    // MARK: - Migrations
+
     app.migrations.add(CreateUser())
     app.migrations.add(CreateUserToken())
+    app.migrations.add(SeedUser())
 
-    // routes
+    // MARK: - Routes
+
     try routes(app)
 }
