@@ -2,6 +2,8 @@ import Vapor
 import Fluent
 import FluentPostgresDriver
 
+
+
 public func configure(_ app: Application) throws {
 
     // MARK: - Database Configuration
@@ -26,6 +28,9 @@ public func configure(_ app: Application) throws {
     // Register database
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
 
+    
+    app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
+
     // MARK: - Migrations
 
     app.migrations.add(CreateUser())
@@ -33,6 +38,6 @@ public func configure(_ app: Application) throws {
     app.migrations.add(SeedUser())
 
     // MARK: - Routes
-
+    app.passwords.use(.bcrypt)
     try routes(app)
 }

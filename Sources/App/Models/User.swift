@@ -1,7 +1,7 @@
 import Vapor
 import Fluent
 
-final class User: Model, Content, Authenticatable {
+final class User: Model, Content {
     static let schema = "users"
 
     @ID(key: .id)
@@ -13,10 +13,7 @@ final class User: Model, Content, Authenticatable {
     @Field(key: "password_hash")
     var passwordHash: String
 
-    @Children(for: \.$user)
-    var tokens: [UserToken]
-
-    init() {}
+    init() { }
 
     init(id: UUID? = nil, username: String, passwordHash: String) {
         self.id = id
@@ -24,3 +21,6 @@ final class User: Model, Content, Authenticatable {
         self.passwordHash = passwordHash
     }
 }
+
+// This is correct — keep this!
+extension User: Authenticatable { }
