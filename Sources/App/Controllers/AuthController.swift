@@ -7,6 +7,12 @@ struct LoginRequest: Content {
     let password: String
 }
 
+// Body for POST /auth/password/change
+struct ChangePasswordRequest: Content {
+    let currentPassword: String
+    let newPassword: String
+}
+
 struct AuthController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // Group under /auth
@@ -79,6 +85,32 @@ struct AuthController: RouteCollection {
             // Delete that token from DB
             try await UserToken.query(on: req.db)
                 .filter(\.$value == bearer)
+                .delete()
+
+            return .noContent
+        }
+        
+        // Change password (requires valid Bearer token)
+        // - Verifies current password
+        // - Updates to new password
+        // - Revokes ALL existing tokens for this user
+        // - Returns 204 No Content
+        protected.post("auth","password", "change") { req async throws -> HTTPStatus in
+            let body = try req.content.decode(ChangePasswordRequest.self)
+
+            let user = try req.auth.require(User.self)
+
+            let ok = try Bcrypt.verify(body.currentPassword, created: user.passwordHash)
+            guard ok else {
+                throw Abort(.unauthorized, reason: "Current password is incorrect")
+            }
+
+            user.passwordHash = try Bcrypt.hash(body.newPassword)
+            try await user.save(on: req.db)
+
+            try await UserToken
+                .query(on: req.db)
+                .filter(\.$user.$id == user.requireID())
                 .delete()
 
             return .noContent
