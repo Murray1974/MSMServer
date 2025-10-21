@@ -1,14 +1,8 @@
 import Vapor
 import Fluent
 
-// Body for POST /auth/login
+// Body for /auth/login and /auth/register
 struct LoginRequest: Content {
-    let username: String
-    let password: String
-}
-
-// Body for POST /auth/register
-struct RegisterRequest: Content {
     let username: String
     let password: String
 }
@@ -18,76 +12,71 @@ struct AuthController: RouteCollection {
         // Group under /auth
         let auth = routes.grouped("auth")
 
-        // MARK: - Register
-        // Creates a new user (username must be unique, password is hashed)
+        // --- Public endpoints ---
+        // Register a new user (201 on success, 409 if username taken)
         auth.post("register") { req async throws -> HTTPStatus in
-            let body = try req.content.decode(RegisterRequest.self)
+            let body = try req.content.decode(LoginRequest.self)
 
-            // 1) Ensure username is available
-            let existing = try await User.query(on: req.db)
+            // ensure username is unique
+            let exists = try await User.query(on: req.db)
                 .filter(\.$username == body.username)
-                .first()
-            guard existing == nil else {
-                throw Abort(.conflict, reason: "Username is already taken.")
-            }
+                .first() != nil
+            guard !exists else { throw Abort(.conflict, reason: "username is already taken") }
 
-            // 2) Hash password (bcrypt)
             let hash = try Bcrypt.hash(body.password)
-
-            // 3) Save user
             let user = User(username: body.username, passwordHash: hash)
             try await user.save(on: req.db)
-
             return .created
         }
 
-        // MARK: - Login -> returns token
+        // Login -> returns a token (UserToken)
         auth.post("login") { req async throws -> UserToken in
-            // 1) Decode body
+            // 1) decode
             let body = try req.content.decode(LoginRequest.self)
 
-            // 2) Find user by username
+            // 2) find user
             guard let user = try await User.query(on: req.db)
                 .filter(\.$username == body.username)
                 .first()
             else { throw Abort(.unauthorized) }
 
-            // 3) Verify password
+            // 3) verify password
             let ok = try Bcrypt.verify(body.password, created: user.passwordHash)
             guard ok else { throw Abort(.unauthorized) }
 
-            // 4) Create & save token
+            // 4) create token
             let token = try UserToken.generate(for: user)
             try await token.save(on: req.db)
             return token
         }
 
-        // MARK: - Protected routes (Bearer token required)
-        // Use the *auth* group so protected routes are under /auth/...
-        let protected = auth.grouped(
-            UserToken.authenticator(), // finds token and logs in the user
-            User.guardMiddleware()     // 401 if no user in auth
+        // --- Protected endpoints (Bearer token required) ---
+        let protected = routes.grouped(
+            UserToken.authenticator(),   // resolves token from "Authorization: Bearer <token>"
+            User.guardMiddleware()       // 401 if no user attached
         )
 
-        // Current user
-        protected.get("me") { req async throws -> User in
+        // Who am I?
+        protected.get("auth", "me") { req async throws -> User in
             try req.auth.require(User.self)
         }
 
         // Example protected API
-        protected.get("secret") { req async throws -> String in
+        protected.get("auth", "secret") { req async throws -> String in
             _ = try req.auth.require(User.self)
             return "shhh"
         }
 
-        // Logout: revoke the *current* token (from Authorization header)
-        protected.post("logout") { req async throws -> HTTPStatus in
-            // We only get the logged-in User from the authenticator; to revoke a
-            // specific token we read the raw bearer token from the header.
+        // Logout: delete the current token (204)
+        protected.post("auth", "logout") { req async throws -> HTTPStatus in
+            _ = try req.auth.require(User.self)
+
+            // Extract the *raw* bearer token string
             guard let bearer = req.headers.bearerAuthorization?.token else {
-                throw Abort(.badRequest, reason: "Missing bearer token.")
+                throw Abort(.badRequest, reason: "Missing bearer token")
             }
 
+            // Delete that token from DB
             try await UserToken.query(on: req.db)
                 .filter(\.$value == bearer)
                 .delete()
