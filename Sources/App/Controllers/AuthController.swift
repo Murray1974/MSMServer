@@ -7,6 +7,12 @@ struct LoginRequest: Content {
     let password: String
 }
 
+// Body for POST /auth/register
+struct RegisterRequest: Content {
+    let username: String
+    let password: String
+}
+
 struct AuthController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // Group under /auth
@@ -32,7 +38,28 @@ struct AuthController: RouteCollection {
             try await token.save(on: req.db)
             return token
         }
+        
+        // POST /auth/register -> create a new user
+        auth.post("register") { req async throws -> HTTPStatus in
+            let body = try req.content.decode(RegisterRequest.self)
 
+            // 1) Check if username already exists
+            if let _ = try await User.query(on: req.db)
+                .filter(\.$username == body.username)
+                .first() {
+                throw Abort(.conflict, reason: "Username already taken")
+            }
+
+            // 2) Hash password
+            let hash = try await req.password.async.hash(body.password)
+
+            // 3) Save new user
+            let user = User(username: body.username, passwordHash: hash)
+            try await user.create(on: req.db)
+
+            return .created
+        }
+        
         // Protected routes: requires a valid Bearer token
         let protected = routes.grouped(
             UserToken.authenticator(),   // finds token & logs in user
