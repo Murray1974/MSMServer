@@ -27,16 +27,16 @@ public func configure(_ app: Application) throws {
 
     // Register database
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
-
-    
-    app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
+    app.migrations.add(AddUniqueUsername())
+   
 
     // MARK: - Migrations
 
     app.migrations.add(CreateUser())
     app.migrations.add(CreateUserToken())
     app.migrations.add(SeedUser())
-
+    
+    
     // MARK: - Routes
     app.passwords.use(.bcrypt)
     try routes(app)

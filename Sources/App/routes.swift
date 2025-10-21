@@ -1,11 +1,9 @@
 import Vapor
 
-public func routes(_ app: Application) throws {
-    // Simple health check route
-    app.get { _ in
-        "OK"
-    }
+func routes(_ app: Application) throws {
+    // Health check
+    app.get { _ in "OK" }
 
-    // Register the authentication controller
+    // Auth routes (login/register/logout/me)
     try app.register(collection: AuthController())
 }
