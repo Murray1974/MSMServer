@@ -4,21 +4,16 @@ import Vapor
 /// Keyed by a string (we’ll use client IP + path).
 /// NOT distributed; restarts clear counters.
 public struct RateLimitMiddleware: AsyncMiddleware {
-    public enum Window {
-        case seconds(Int)
-        var duration: TimeInterval {
-            switch self { case .seconds(let s): return TimeInterval(s) }
-        }
-    }
+    public enum Window: Sendable { case seconds(Int); var duration: Int { switch self { case .seconds(let s): return s } } }
 
     private let limit: Int
     private let window: Window
-    private let identify: (Request) -> String
+    private let identify: @Sendable (Request) -> String
 
-    // Shared store (per-process)
+    // ⬅️ Add this line:
     private static let store = RateStore()
 
-    public init(limit: Int, window: Window, identify: @escaping (Request) -> String) {
+    public init(limit: Int, window: Window, identify: @escaping @Sendable (Request) -> String) {
         self.limit = limit
         self.window = window
         self.identify = identify
@@ -29,23 +24,13 @@ public struct RateLimitMiddleware: AsyncMiddleware {
         let allowed = await Self.store.checkAndRecord(
             key: key,
             limit: limit,
-            windowSeconds: Int(window.duration)
+            windowSeconds: window.duration
         )
-
         if !allowed {
-            let retry = Int(window.duration)
-
             var resp = Response(status: .tooManyRequests)
-
-            // Tell clients when to try again
-            resp.headers.replaceOrAdd(name: .retryAfter, value: String(retry))
-
-            // JSON body with retryAfter for better client UX
-            resp.body = .init(string: #"{"error":true,"reason":"Too many requests","retryAfter":\#(retry)}"#)
-
-            // JSON content type
+            resp.headers.replaceOrAdd(name: .retryAfter, value: String(window.duration))
+            resp.body = .init(string: #"{"error":true,"reason":"Too many requests"}"#)
             resp.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
-
             return resp
         }
         return try await next.respond(to: req)

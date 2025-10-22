@@ -25,6 +25,22 @@ public func configure(_ app: Application) throws {
         tls: .disable // <- Fixes sslUnsupported error
     )
 
+    // Logging level: LOG_LEVEL=trace|debug|info|notice|warning|error|critical
+    if let raw = Environment.get("LOG_LEVEL"),
+       let level = Logger.Level(rawValue: raw.lowercased()) {
+        app.logger.logLevel = level
+    } else {
+        app.logger.logLevel = app.environment == .production ? .notice : .debug
+    }
+    
+    // Allow browser apps to call your API
+    let cors = CORSMiddleware(configuration: .init(
+        allowedOrigin: .originBased, // or .all for quick local dev
+        allowedMethods: [.GET, .POST, .PUT, .PATCH, .DELETE, .OPTIONS],
+        allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
+    ))
+    app.middleware.use(cors)
+    
     // Register database
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
     app.migrations.add(AddUniqueUsername())
