@@ -33,14 +33,21 @@ public struct RateLimitMiddleware: AsyncMiddleware {
         )
 
         if !allowed {
-            let resp = Response(status: .tooManyRequests)
-            // Optional: let client know how long to wait
-            resp.headers.replaceOrAdd(name: .retryAfter, value: String(Int(window.duration)))
-            resp.body = .init(string: #"{"error":true,"reason":"Too many requests"}"#)
+            let retry = Int(window.duration)
+
+            var resp = Response(status: .tooManyRequests)
+
+            // Tell clients when to try again
+            resp.headers.replaceOrAdd(name: .retryAfter, value: String(retry))
+
+            // JSON body with retryAfter for better client UX
+            resp.body = .init(string: #"{"error":true,"reason":"Too many requests","retryAfter":\#(retry)}"#)
+
+            // JSON content type
             resp.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+
             return resp
         }
-
         return try await next.respond(to: req)
     }
 }
