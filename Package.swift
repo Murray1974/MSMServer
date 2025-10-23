@@ -35,7 +35,10 @@ let package = Package(
         ),
         .testTarget(
             name: "MSMServerTests",
-            dependencies: ["App"],
+            dependencies: [
+                "App",
+                .product(name: "XCTVapor", package: "vapor")
+            ],
             path: "Tests"
         )
     ]

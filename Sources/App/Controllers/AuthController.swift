@@ -28,7 +28,7 @@ struct AuthController: RouteCollection {
             window: .seconds(cfg.windowSeconds),
             identify: { req in
                 // NOTE: clientIP is a property, not a function → no ()
-                "\(req.clientIP ?? "unknown")|\(req.url.path)"
+                "\(req.clientIP)|\(req.url.path)"
             }
         )
 
@@ -78,17 +78,32 @@ struct AuthController: RouteCollection {
             return "shhh"
         }
 
+        // Logout current session
         protected.post("logout") { req async throws -> HTTPStatus in
             _ = try req.auth.require(User.self)
             guard let bearer = req.headers.bearerAuthorization?.token else {
                 throw Abort(.badRequest, reason: "Missing bearer token")
             }
+
             try await UserToken.query(on: req.db)
                 .filter(\.$value == bearer)
                 .delete()
+
             return .noContent
         }
 
+        // Logout all sessions for the current user
+        protected.post("logout-all") { req async throws -> HTTPStatus in
+            let user = try req.auth.require(User.self)
+
+            try await UserToken.query(on: req.db)
+                .filter(\.$user.$id == user.requireID())
+                .delete()
+
+            return .noContent
+        }
+
+        // Change password and revoke all tokens
         protected.post("password", "change") { req async throws -> HTTPStatus in
             let body = try req.content.decode(ChangePasswordRequest.self)
             let user = try req.auth.require(User.self)
@@ -97,15 +112,6 @@ struct AuthController: RouteCollection {
             guard ok else {
                 throw Abort(.unauthorized, reason: "Current password is incorrect")
             }
-            
-            protected.post("logout-all") { req async throws -> HTTPStatus in
-                let user = try req.auth.require(User.self)
-                try await UserToken.query(on: req.db)
-                    .filter(\.$user.$id == user.requireID())
-                    .delete()
-                return .noContent
-            }
-            
 
             user.passwordHash = try Bcrypt.hash(body.newPassword)
             try await user.save(on: req.db)

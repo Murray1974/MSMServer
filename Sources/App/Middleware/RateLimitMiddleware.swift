@@ -27,7 +27,7 @@ public struct RateLimitMiddleware: AsyncMiddleware {
             windowSeconds: window.duration
         )
         if !allowed {
-            var resp = Response(status: .tooManyRequests)
+            let resp = Response(status: .tooManyRequests)
             resp.headers.replaceOrAdd(name: .retryAfter, value: String(window.duration))
             resp.body = .init(string: #"{"error":true,"reason":"Too many requests"}"#)
             resp.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
