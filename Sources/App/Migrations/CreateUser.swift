@@ -1,16 +1,17 @@
 import Fluent
 
-struct CreateUser: Migration {
-    func prepare(on database: Database) -> EventLoopFuture<Void> {
-        database.schema("users")
+struct CreateUser: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        try await database.schema("users")
             .id()
-            .field("username", .string, .required)
-            .field("password_hash", .string, .required)
-            .unique(on: "username")
+            .field("name", .string, .required)
+            .field("email", .string, .required)
+            .unique(on: "email")
+            .field("passwordHash", .string, .required)
             .create()
     }
 
-    func revert(on database: Database) -> EventLoopFuture<Void> {
-        database.schema("users").delete()
+    func revert(on database: Database) async throws {
+        try await database.schema("users").delete()
     }
 }
