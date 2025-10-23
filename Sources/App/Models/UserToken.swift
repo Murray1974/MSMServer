@@ -42,3 +42,15 @@ extension UserToken: ModelTokenAuthenticatable {
         return exp > Date()
     }
 }
+// MARK: - Token generation helper
+extension UserToken {
+    static func generate(for user: User) throws -> UserToken {
+        let value = Random.tokenBase64()   // 32-byte (256-bit) token, base64
+        let expires = Date().addingTimeInterval(7 * 24 * 60 * 60) // 7 days
+        return UserToken(
+            value: value,
+            userID: try user.requireID(),
+            expiresAt: expires
+        )
+    }
+}

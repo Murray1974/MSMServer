@@ -1,13 +1,9 @@
 import Foundation
 
-extension UserToken {
-    static func generate(for user: User, lifetime: TimeInterval? = 60 * 60 * 24 * 7) throws -> UserToken {
-        // Random 32-byte token
-        var buffer = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
-        let tokenString = Data(buffer).base64EncodedString()
-
-        let expiry = lifetime.map { Date().addingTimeInterval($0) }
-        return try UserToken(value: tokenString, userID: user.requireID(), expiresAt: expiry)
+enum Random {
+    /// Returns a base64 token with `count` random bytes (default 32 = 256 bits).
+    static func tokenBase64(count: Int = 32) -> String {
+        let bytes = (0..<count).map { _ in UInt8.random(in: 0...255) }
+        return Data(bytes).base64EncodedString()
     }
 }
