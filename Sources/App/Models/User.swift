@@ -13,7 +13,13 @@ final class User: Model, Content {
     @Field(key: "password_hash")
     var passwordHash: String
 
-    init() { }
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    @Timestamp(key: "updated_at", on: .update)
+    var updatedAt: Date?
+
+    init() {}
 
     init(id: UUID? = nil, username: String, passwordHash: String) {
         self.id = id
@@ -22,7 +28,22 @@ final class User: Model, Content {
     }
 }
 
-// This is correct — keep this!
-extension User: Authenticatable { }
-// Fluent model is safe on the event loop; opt out of strict checking.
+// Use this in responses instead of sending the full model
+extension User {
+    struct Public: Content {
+        let id: UUID?
+        let username: String
+        let createdAt: Date?
+        let updatedAt: Date?
+    }
+
+    var asPublic: Public {
+        .init(id: id, username: username, createdAt: createdAt, updatedAt: updatedAt)
+    }
+}
+
+// Vapor auth
+extension User: Authenticatable {}
+
+// Swift 6 concurrency
 extension User: @unchecked Sendable {}

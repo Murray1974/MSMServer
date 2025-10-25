@@ -69,8 +69,9 @@ struct AuthController: RouteCollection {
     }
 
     // GET /auth/me
-    func me(req: Request) async throws -> User {
-        return try req.auth.require(User.self)
+    func me(req: Request) async throws -> User.Public {
+        let user = try req.auth.require(User.self)
+        return user.asPublic
     }
 
     // POST /auth/logout (invalidate JUST the presented token)
