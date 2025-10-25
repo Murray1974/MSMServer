@@ -14,12 +14,24 @@ public func configure(_ app: Application) throws {
 
     // MARK: Migrations
     app.migrations.add(CreateUser())
-    app.migrations.add(CreateSessionToken()) // ← our session token table
-    app.migrations.add(SeedUser())         // optional, if you have one
+    app.migrations.add(CreateSessionToken())
+    app.migrations.add(CreateLesson())
+    app.migrations.add(CreateBooking())   // ← NEW
 
+    app.migrations.add(SeedUser())
+    app.migrations.add(SeedLessons())
+    
     // MARK: Password hashing
     app.passwords.use(.bcrypt)
 
+    // CORS for Student App / web client
+    let cors = CORSMiddleware(configuration: .init(
+        allowedOrigin: .all, // or restrict to your client origin
+        allowedMethods: [.GET, .POST, .PUT, .PATCH, .DELETE, .OPTIONS],
+        allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith, .userAgent, .accessControlAllowOrigin]
+    ))
+    app.middleware.use(cors)
+    
     // MARK: Routes
     try routes(app)
 }
