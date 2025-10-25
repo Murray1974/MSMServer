@@ -24,3 +24,5 @@ final class User: Model, Content {
 
 // This is correct — keep this!
 extension User: Authenticatable { }
+// Fluent model is safe on the event loop; opt out of strict checking.
+extension User: @unchecked Sendable {}
