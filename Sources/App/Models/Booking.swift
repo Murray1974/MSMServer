@@ -13,6 +13,17 @@ final class Booking: Model, Content {
     @Parent(key: "lesson_id")
     var lesson: Lesson
 
+    // Audit trail
+    @OptionalParent(key: "cancelled_by")
+    var cancelledBy: User?
+
+    @Timestamp(key: "cancelled_at", on: .none)
+    var cancelledAt: Date?
+
+    // Soft-delete column; calling `delete(on:)` will set this (not hard-delete)
+    @Timestamp(key: "deleted_at", on: .delete)
+    var deletedAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -25,7 +36,6 @@ final class Booking: Model, Content {
     }
 }
 
-// Safe payload for API
 extension Booking {
     struct Public: Content {
         let id: UUID?
@@ -38,5 +48,6 @@ extension Booking {
     }
 }
 
-// Fluent models are event-loop bound
+
+// Fluent models are not Sendable by default
 extension Booking: @unchecked Sendable {}

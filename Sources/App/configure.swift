@@ -16,8 +16,12 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateUser())
     app.migrations.add(CreateSessionToken())
     app.migrations.add(CreateLesson())
-    app.migrations.add(CreateBooking())   // ← NEW
+    app.migrations.add(CreateBooking())
 
+    app.migrations.add(AddUserRole())
+    app.migrations.add(AddBookingSoftDeleteAndAudit())
+    app.migrations.add(UpdateBookingUniqueToActiveOnly())
+    
     app.migrations.add(SeedUser())
     app.migrations.add(SeedLessons())
     

@@ -1,18 +1,19 @@
 import Fluent
 
-struct CreateBooking: AsyncMigration {
-    func prepare(on db: Database) async throws {
-        try await db.schema("bookings")
-            .id()
-            .field("user_id", .uuid, .required, .references("users", "id", onDelete: .cascade))
-            .field("lesson_id", .uuid, .required, .references("lessons", "id", onDelete: .cascade))
-            .field("created_at", .datetime)
-            // One booking per (user, lesson)
-            .unique(on: "user_id", "lesson_id")
+struct CreateBooking: Migration {
+    func prepare(on db: Database) -> EventLoopFuture<Void> {
+        db.schema("bookings")
+            .id() // ← important: creates 'id' UUID PK column
+            .field("user_id", .uuid, .required,
+                   .references("users", "id", onDelete: .cascade))
+            .field("lesson_id", .uuid, .required,
+                   .references("lessons", "id", onDelete: .cascade))
+            .field("created_at", .datetime) // matches @Timestamp(key: "created_at", on: .create)
+            .unique(on: "user_id", "lesson_id") // prevent duplicates (optional but recommended)
             .create()
     }
 
-    func revert(on db: Database) async throws {
-        try await db.schema("bookings").delete()
+    func revert(on db: Database) -> EventLoopFuture<Void> {
+        db.schema("bookings").delete()
     }
 }

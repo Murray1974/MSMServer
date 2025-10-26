@@ -13,6 +13,10 @@ final class User: Model, Content {
     @Field(key: "password_hash")
     var passwordHash: String
 
+    // Simple role string: "student" | "instructor" | "admin"
+    @Field(key: "role")
+    var role: String
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -21,29 +25,27 @@ final class User: Model, Content {
 
     init() {}
 
-    init(id: UUID? = nil, username: String, passwordHash: String) {
+    init(id: UUID? = nil, username: String, passwordHash: String, role: String = "student") {
         self.id = id
         self.username = username
         self.passwordHash = passwordHash
+        self.role = role
     }
 }
 
-// Use this in responses instead of sending the full model
+// Safe projection
 extension User {
     struct Public: Content {
         let id: UUID?
         let username: String
+        let role: String
         let createdAt: Date?
         let updatedAt: Date?
     }
-
     var asPublic: Public {
-        .init(id: id, username: username, createdAt: createdAt, updatedAt: updatedAt)
+        .init(id: id, username: username, role: role, createdAt: createdAt, updatedAt: updatedAt)
     }
 }
 
-// Vapor auth
 extension User: Authenticatable {}
-
-// Swift 6 concurrency
 extension User: @unchecked Sendable {}
