@@ -21,6 +21,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddUserRole())
     app.migrations.add(AddBookingSoftDeleteAndAudit())
     app.migrations.add(UpdateBookingUniqueToActiveOnly())
+    app.migrations.add(AddIndex_Bookings_LessonDeleted())
     
     app.migrations.add(SeedUser())
     app.migrations.add(SeedLessons())
