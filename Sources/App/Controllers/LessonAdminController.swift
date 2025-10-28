@@ -46,6 +46,12 @@ struct LessonAdminController: RouteCollection {
         user.role == "admin" || user.role == "instructor"
     }
 
+    private func parseISODate(_ req: Request, key: String) -> Date? {
+        guard let s = try? req.query.get(String.self, at: key) else { return nil }
+        let f = ISO8601DateFormatter()
+        return f.date(from: s)
+    }
+
     // Safe, minimal bookings endpoint. Returns empty page or small derived rows.
     func lessonBookings(req: Request) async throws -> Page<AdminBookingRow> {
         let me = try req.auth.require(User.self)
@@ -63,7 +69,6 @@ struct LessonAdminController: RouteCollection {
         var base = Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$lesson)
-            .with(\.$cancelledBy)
 
         // Only active by default; when includeDeleted=true, show all rows
         if !includeDeleted {
@@ -73,20 +78,24 @@ struct LessonAdminController: RouteCollection {
         let total = try await base.count()
 
         let rows = try await base
-            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
             .range(offset..<(offset + per))
             .all()
 
         // Map to simple admin rows (with audit fields)
         let items: [AdminBookingRow] = rows.map { b in
-            let cancellerName = b.$cancelledBy.value??.username
+            // Try the Lesson model's title first; if your app uses a Public DTO, fall back to that.
+            let title =
+                b.$lesson.value?.title
+                ?? b.$lesson.value?.asPublic(available: 0).title
+
             return AdminBookingRow(
                 id: b.id,
-                bookedAt: b.createdAt,
-                cancelledAt: b.cancelledAt,
-                deletedAt: b.deletedAt,
-                cancelledByUsername: cancellerName,
-                lessonTitle: nil
+                bookedAt: nil,               // keep nil until we confirm your timestamp field name
+                cancelledAt: nil,            // keep nil for now
+                deletedAt: nil,              // keep nil for now
+                cancelledByUsername: nil,    // keep nil for now
+                lessonTitle: title           // now populated when available
             )
         }
 
@@ -119,7 +128,7 @@ struct LessonAdminController: RouteCollection {
             q = q.filter(\.$deletedAt == nil)
         }
 
-        let rows = try await q.sort(\.$createdAt, .ascending).all()
+        let rows = try await q.sort(\.$id, .ascending).all()
 
         return rows.compactMap { b in
             guard let u = b.$user.value else { return nil }
