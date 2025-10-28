@@ -18,3 +18,4 @@ public func routes(_ app: Application) throws {
     try app.register(collection: LessonsController())
     try app.register(collection: BookingsController())
     try app.register(collection: LessonAdminController())}
+

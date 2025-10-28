@@ -11,6 +11,7 @@ struct LessonAdminController: RouteCollection {
 
         admin.get(":id", "bookings", use: lessonBookings)
         admin.get(":id", "attendees", use: lessonAttendees)
+        admin.get(":id", "stats", use: lessonStats)
     }
 
     struct Page<T: Content>: Content {
@@ -34,6 +35,12 @@ struct LessonAdminController: RouteCollection {
         let id: UUID
         let username: String
         let cancelled: Bool
+    }
+    
+    struct LessonStats: Content {
+        let capacity: Int?
+        let booked: Int
+        let available: Int?
     }
 
     private func pageParams(_ req: Request) -> (page: Int, per: Int, offset: Int) {
@@ -107,6 +114,30 @@ struct LessonAdminController: RouteCollection {
             total: total,
             totalPages: totalPages
         )
+    }
+
+    // Admin: lesson capacity/booked stats (fixed capacity = 1 per slot)
+    func lessonStats(req: Request) async throws -> LessonStats {
+        let me = try req.auth.require(User.self)
+        guard canOverride(me) else { throw Abort(.forbidden) }
+
+        guard let lessonID = req.parameters.get("id", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid lesson id.")
+        }
+
+        // Optional: honor ?includeDeleted=true to count cancelled/soft-deleted
+        let includeDeleted = (try? req.query.get(Bool.self, at: "includeDeleted")) ?? false
+
+        var q = Booking.query(on: req.db).filter(\.$lesson.$id == lessonID)
+        if !includeDeleted {
+            q = q.filter(\.$deletedAt == nil)
+        }
+        let bookedCount = try await q.count()
+
+        let capacity = 1
+        let available = max(0, capacity - bookedCount)
+
+        return LessonStats(capacity: capacity, booked: bookedCount, available: available)
     }
 
     // Safe, minimal attendees endpoint. Returns empty array.
