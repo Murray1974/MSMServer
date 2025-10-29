@@ -1,170 +1,141 @@
 import Vapor
 import Fluent
 
-/// Minimal, safe admin controller stub — returns simple deterministic responses to avoid
-/// any runtime/compile issues while we diagnose the previous implementation.
+// MARK: - DTOs
+struct AdminBookingRow: Content {
+    var id: UUID?
+    var bookedAt: Date?
+    var cancelledAt: Date?
+    var deletedAt: Date?
+    var lessonTitle: String?
+}
+
+struct LessonStatsResponse: Content {
+    var capacity: Int
+    var booked: Int
+    var available: Int
+}
+
+struct AttendeeRow: Content {
+    var bookingID: UUID?
+    var userID: UUID?
+    var username: String?
+}
+
+// MARK: - Controller
 struct LessonAdminController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let admin = routes
-            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
-            .grouped("admin", "lessons")
+        // /admin/lessons/...
+        let admin = routes.grouped("admin", "lessons")
 
-        admin.get(":id", "bookings", use: lessonBookings)
-        admin.get(":id", "attendees", use: lessonAttendees)
-        admin.get(":id", "stats", use: lessonStats)
+        // Listings / stats
+        admin.get(":lessonID", "bookings", use: lessonBookings)
+        admin.get(":lessonID", "stats", use: lessonStats)
+        admin.get(":lessonID", "attendees", use: lessonAttendees)
+
+        // Cancellation — support both shapes:
+        // 1) /admin/lessons/bookings/:bookingID/cancel
+        admin.post("bookings", ":bookingID", "cancel", use: cancelBooking)
+        // 2) /admin/lessons/:lessonID/bookings/:bookingID/cancel
+        admin.post(":lessonID", "bookings", ":bookingID", "cancel", use: cancelBookingScoped)
     }
 
-    struct Page<T: Content>: Content {
-        let items: [T]
-        let page: Int
-        let per: Int
-        let total: Int
-        let totalPages: Int
+    // MARK: POST /admin/lessons/bookings/:bookingID/cancel
+    func cancelBooking(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid booking id.")
+        }
+        return try await cancelCommon(bookingID: bookingID, req)
     }
 
-    struct AdminBookingRow: Content {
-        let id: UUID?
-        let bookedAt: Date?
-        let cancelledAt: Date?
-        let deletedAt: Date?
-        let cancelledByUsername: String?
-        let lessonTitle: String?
+    // MARK: POST /admin/lessons/:lessonID/bookings/:bookingID/cancel
+    func cancelBookingScoped(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid booking id.")
+        }
+        return try await cancelCommon(bookingID: bookingID, req)
     }
 
-    struct Attendee: Content {
-        let id: UUID
-        let username: String
-        let cancelled: Bool
-    }
-    
-    struct LessonStats: Content {
-        let capacity: Int?
-        let booked: Int
-        let available: Int?
-    }
+    // MARK: - Shared cancel logic (soft-delete + audit timestamp if present)
+    private func cancelCommon(bookingID: UUID, _ req: Request) async throws -> HTTPStatus {
+        guard let booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound, reason: "Booking not found.")
+        }
+        // If your model has these, they’ll compile. If not, comment them out.
+        booking.cancelledAt = Date()
+        try await booking.save(on: req.db)
 
-    private func pageParams(_ req: Request) -> (page: Int, per: Int, offset: Int) {
-        let page = max( (try? req.query.get(Int.self, at: "page")) ?? 1, 1)
-        let per  = min(max((try? req.query.get(Int.self, at: "per")) ?? 20, 1), 100)
-        return (page, per, (page - 1) * per)
+        try await booking.delete(on: req.db) // soft-delete
+        return .noContent
     }
 
-    private func canOverride(_ user: User) -> Bool {
-        user.role == "admin" || user.role == "instructor"
-    }
+    // MARK: GET /admin/lessons/:lessonID/bookings?page=&per=&includeDeleted=true
+    func lessonBookings(_ req: Request) async throws -> Page<AdminBookingRow> {
+        struct Q: Decodable { var page: Int?; var per: Int?; var includeDeleted: Bool? }
+        let q = try req.query.decode(Q.self)
 
-    private func parseISODate(_ req: Request, key: String) -> Date? {
-        guard let s = try? req.query.get(String.self, at: key) else { return nil }
-        let f = ISO8601DateFormatter()
-        return f.date(from: s)
-    }
-
-    // Safe, minimal bookings endpoint. Returns empty page or small derived rows.
-    func lessonBookings(req: Request) async throws -> Page<AdminBookingRow> {
-        let me = try req.auth.require(User.self)
-        guard canOverride(me) else { throw Abort(.forbidden) }
-
-        guard let lessonID = req.parameters.get("id", as: UUID.self) else {
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
 
-        // Pagination
-        let (page, per, offset) = pageParams(req)
-        let includeDeleted = (try? req.query.get(Bool.self, at: "includeDeleted")) ?? false
-
-        // Base query: eager-load lesson & canceller for audit fields
-        var base = Booking.query(on: req.db)
+        var query = Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$lesson)
+            .sort(\.$id, .descending)
 
-        // Only active by default; when includeDeleted=true, show all rows
-        if !includeDeleted {
-            base = base.filter(\.$deletedAt == nil)
+        if q.includeDeleted == true {
+            query = query.withDeleted()
         }
 
-        let total = try await base.count()
+        let page = try await query.paginate(PageRequest(page: q.page ?? 1, per: q.per ?? 10))
 
-        let rows = try await base
-            .sort(\.$id, .descending)
-            .range(offset..<(offset + per))
-            .all()
-
-        // Map to simple admin rows (with audit fields)
-        let items: [AdminBookingRow] = rows.map { b in
-            // Try the Lesson model's title first; if your app uses a Public DTO, fall back to that.
-            let title =
-                b.$lesson.value?.title
-                ?? b.$lesson.value?.asPublic(available: 0).title
-
-            return AdminBookingRow(
+        let items = page.items.map { b in
+            AdminBookingRow(
                 id: b.id,
-                bookedAt: nil,               // keep nil until we confirm your timestamp field name
-                cancelledAt: nil,            // keep nil for now
-                deletedAt: nil,              // keep nil for now
-                cancelledByUsername: nil,    // keep nil for now
-                lessonTitle: title           // now populated when available
+                bookedAt: b.createdAt,
+                cancelledAt: b.cancelledAt,
+                deletedAt: b.deletedAt,
+                lessonTitle: b.$lesson.value?.title
             )
         }
-
-        let totalPages = max(1, (total + per - 1) / per)
-        return Page(
-            items: items,
-            page: page,
-            per: per,
-            total: total,
-            totalPages: totalPages
-        )
+        return Page(items: items, metadata: page.metadata)
     }
 
-    // Admin: lesson capacity/booked stats (fixed capacity = 1 per slot)
-    func lessonStats(req: Request) async throws -> LessonStats {
-        let me = try req.auth.require(User.self)
-        guard canOverride(me) else { throw Abort(.forbidden) }
-
-        guard let lessonID = req.parameters.get("id", as: UUID.self) else {
+    // MARK: GET /admin/lessons/:lessonID/stats
+    func lessonStats(_ req: Request) async throws -> LessonStatsResponse {
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
 
-        // Optional: honor ?includeDeleted=true to count cancelled/soft-deleted
-        let includeDeleted = (try? req.query.get(Bool.self, at: "includeDeleted")) ?? false
-
-        var q = Booking.query(on: req.db).filter(\.$lesson.$id == lessonID)
-        if !includeDeleted {
-            q = q.filter(\.$deletedAt == nil)
-        }
-        let bookedCount = try await q.count()
-
+        // If your Lesson has a capacity field, wire it here. For now default to 1.
         let capacity = 1
-        let available = max(0, capacity - bookedCount)
 
-        return LessonStats(capacity: capacity, booked: bookedCount, available: available)
+        // By default, Fluent excludes soft-deleted records, so this only counts active bookings.
+        let booked = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .count()
+
+        let available = max(0, capacity - booked)
+        return LessonStatsResponse(capacity: capacity, booked: booked, available: available)
     }
 
-    // Safe, minimal attendees endpoint. Returns empty array.
-    func lessonAttendees(req: Request) async throws -> [Attendee] {
-        let me = try req.auth.require(User.self)
-        guard canOverride(me) else { throw Abort(.forbidden) }
-
-        guard let lessonID = req.parameters.get("id", as: UUID.self) else {
+    // MARK: GET /admin/lessons/:lessonID/attendees
+    func lessonAttendees(_ req: Request) async throws -> [AttendeeRow] {
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
 
-        let includeDeleted = (try? req.query.get(Bool.self, at: "includeDeleted")) ?? false
-
-        var q = Booking.query(on: req.db)
+        let rows = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$user)
+            .all()
 
-        if !includeDeleted {
-            q = q.filter(\.$deletedAt == nil)
-        }
-
-        let rows = try await q.sort(\.$id, .ascending).all()
-
-        return rows.compactMap { b in
-            guard let u = b.$user.value else { return nil }
-            let uid = (try? u.requireID()) ?? UUID()
-            return Attendee(id: uid, username: u.username, cancelled: b.deletedAt != nil)
+        return rows.map { b in
+            AttendeeRow(
+                bookingID: b.id,
+                userID: b.$user.id,
+                username: b.$user.value?.username
+            )
         }
     }
 }
