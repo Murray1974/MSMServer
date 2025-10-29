@@ -9,6 +9,7 @@ struct LessonsController: RouteCollection {
         // Public reads (upcoming by default, supports ?start=&end= and ?page=&per=)
         lessons.get(use: list)
         lessons.get(":id", use: detail)
+        lessons.get("search", use: searchLessons)
 
         // Protected actions (requires valid bearer token)
         let protected = lessons.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
@@ -145,5 +146,88 @@ struct LessonsController: RouteCollection {
             }
             throw error
         }
+    }
+
+    struct FilteredLessonRow: Content {
+        var id: UUID?
+        var title: String?
+        var startsAt: Date?
+        var endsAt: Date?
+        var capacity: Int
+        var booked: Int
+        var available: Int
+    }
+
+    // MARK: GET /lessons/search?from=YYYY-MM-DD&to=YYYY-MM-DD&availableOnly=true&page=1&per=10
+    func searchLessons(_ req: Request) async throws -> [FilteredLessonRow] {
+        struct Q: Decodable {
+            var from: String?
+            var to: String?
+            var availableOnly: Bool?
+            var page: Int?
+            var per: Int?
+        }
+        let q = try req.query.decode(Q.self)
+
+        let page = max(q.page ?? 1, 1)
+        let per  = min(max(q.per ?? 20, 1), 100)
+        let offset = (page - 1) * per
+
+        var query = Lesson.query(on: req.db)
+
+        // Date-only ISO (yyyy-MM-dd)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withFullDate]
+
+        if let fromStr = q.from, let fromDate = iso.date(from: fromStr) {
+            query = query.filter(\.$startsAt >= fromDate)
+        }
+        if let toStr = q.to, let toDate = iso.date(from: toStr) {
+            query = query.filter(\.$endsAt <= toDate)
+        }
+
+        // Fetch a page of lessons
+        let items = try await query
+            .sort(\.$startsAt, .ascending)
+            .range(offset..<(offset + per))
+            .all()
+
+        guard !items.isEmpty else { return [] }
+
+        // Preload booking counts for these lessons (active only – soft-deleted excluded by default)
+        let ids: [UUID] = items.compactMap { $0.id }
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id ~~ ids)
+            .all()
+
+        var countByLesson: [UUID: Int] = [:]
+        for b in bookings {
+            let lid = b.$lesson.id
+            countByLesson[lid, default: 0] += 1
+        }
+
+        var rows: [FilteredLessonRow] = []
+        rows.reserveCapacity(items.count)
+
+        for lesson in items {
+            guard let lid = lesson.id else { continue }
+            let booked = countByLesson[lid, default: 0]
+            let capacity = lesson.capacity
+            let available = max(0, capacity - booked)
+
+            if q.availableOnly == true && available <= 0 { continue }
+
+            rows.append(FilteredLessonRow(
+                id: lesson.id,
+                title: lesson.title,
+                startsAt: lesson.startsAt,
+                endsAt: lesson.endsAt,
+                capacity: capacity,
+                booked: booked,
+                available: available
+            ))
+        }
+
+        return rows
     }
 }
