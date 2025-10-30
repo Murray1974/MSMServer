@@ -12,6 +12,9 @@ struct StudentBookingsController: RouteCollection {
 
         // POST /bookings/cancel/:bookingID
         student.post("bookings", "cancel", ":bookingID", use: cancelBooking)
+        
+        // POST /bookings/reschedule/:bookingID
+        student.post("bookings", "reschedule", ":bookingID", use: rescheduleBooking)
     }
 
     struct CreateBookingInput: Content {
@@ -80,5 +83,53 @@ struct StudentBookingsController: RouteCollection {
 
         try await booking.delete(on: req.db)
         return .noContent
+    }
+
+    struct RescheduleInput: Content {
+        let newLessonID: UUID
+    }
+
+    // MARK: - reschedule booking
+    func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing booking ID")
+        }
+
+        let input = try req.content.decode(RescheduleInput.self)
+
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$user.$id == userID)
+            .filter(\.$deletedAt == nil)
+            .with(\.$lesson)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found for this user")
+        }
+
+        guard let newLesson = try await Lesson.find(input.newLessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "New lesson not found")
+        }
+
+        let newLessonBookingsCount = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == input.newLessonID)
+            .filter(\.$deletedAt == nil)
+            .count()
+
+        if newLessonBookingsCount >= newLesson.capacity {
+            throw Abort(.conflict, reason: "Target lesson is full")
+        }
+
+        if booking.$lesson.id == input.newLessonID {
+            throw Abort(.conflict, reason: "This booking is already for that lesson")
+        }
+
+        booking.$lesson.id = input.newLessonID
+        try await booking.save(on: req.db)
+
+        return .ok
     }
 }
