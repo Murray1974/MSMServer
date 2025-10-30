@@ -15,6 +15,8 @@ struct StudentBookingsController: RouteCollection {
         
         // POST /bookings/reschedule/:bookingID
         student.post("bookings", "reschedule", ":bookingID", use: rescheduleBooking)
+
+        student.get("bookings", use: myBookings)
     }
 
     struct CreateBookingInput: Content {
@@ -131,5 +133,70 @@ struct StudentBookingsController: RouteCollection {
         try await booking.save(on: req.db)
 
         return .ok
+    }
+
+    // MARK: - get my bookings
+    func myBookings(_ req: Request) async throws -> [StudentBookingDTO] {
+        struct Query: Decodable {
+            var scope: String?
+            var limit: Int?
+        }
+
+        let q = try req.query.decode(Query.self)
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        var query = Booking.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .with(\.$lesson)
+
+        let now = Date()
+        switch q.scope?.lowercased() {
+        case "upcoming":
+            query = query
+                .join(parent: \Booking.$lesson)
+                .filter(Lesson.self, \.$startsAt >= now)
+                .sort(Lesson.self, \.$startsAt, .ascending)
+        case "past":
+            query = query
+                .join(parent: \Booking.$lesson)
+                .filter(Lesson.self, \.$startsAt < now)
+                .sort(Lesson.self, \.$startsAt, .descending)
+        case "cancelled":
+            query = Booking.query(on: req.db)
+                .withDeleted()
+                .filter(\.$user.$id == userID)
+                .filter(\.$deletedAt != nil)
+                .with(\.$lesson)
+                .sort(\.$deletedAt, .descending)
+        default:
+            query = query.sort(\.$createdAt, .descending)
+        }
+
+        if let limit = q.limit, limit > 0 {
+            query = query.limit(limit)
+        }
+
+        let results = try await query.all()
+
+        return results.map { booking in
+            StudentBookingDTO(
+                id: booking.id,
+                lessonID: booking.$lesson.id,
+                lessonTitle: booking.$lesson.value?.title,
+                startsAt: booking.$lesson.value?.startsAt,
+                endsAt: booking.$lesson.value?.endsAt,
+                status: booking.deletedAt == nil ? "active" : "cancelled"
+            )
+        }
+    }
+
+    struct StudentBookingDTO: Content {
+        var id: UUID?
+        var lessonID: UUID?
+        var lessonTitle: String?
+        var startsAt: Date?
+        var endsAt: Date?
+        var status: String
     }
 }
