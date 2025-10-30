@@ -40,6 +40,7 @@ struct LessonAdminController: RouteCollection {
         
         // /admin/students/:studentID/bookings
         admin.get("students", ":studentID", "bookings", use: studentBookings)
+        admin.get("users", ":userID", "bookings", use: userBookings)
         
         // /admin/lessons/...
         let lessons = admin.grouped("lessons")
@@ -238,6 +239,63 @@ struct LessonAdminController: RouteCollection {
         
         let results = try await query.all()
         
+        return results.map { b in
+            AdminBookingRow(
+                id: b.id,
+                bookedAt: b.createdAt,
+                deletedAt: b.deletedAt,
+                lessonTitle: b.$lesson.value?.title
+            )
+        }
+    }
+    
+    // MARK: GET /admin/users/:userID/bookings
+    func userBookings(_ req: Request) async throws -> [AdminBookingRow] {
+        struct Query: Decodable {
+            var scope: String?
+            var limit: Int?
+        }
+        let q = try req.query.decode(Query.self)
+
+        let userID = try req.parameters.require("userID", as: UUID.self)
+
+        // ensure user exists
+        guard try await User.find(userID, on: req.db) != nil else {
+            throw Abort(.notFound, reason: "User not found")
+        }
+
+        var query = Booking.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .with(\.$lesson)
+
+        let now = Date()
+        switch q.scope?.lowercased() {
+        case "upcoming":
+            query = query
+                .join(parent: \Booking.$lesson)
+                .filter(Lesson.self, \.$startsAt >= now)
+                .sort(Lesson.self, \.$startsAt, .ascending)
+        case "past":
+            query = query
+                .join(parent: \Booking.$lesson)
+                .filter(Lesson.self, \.$startsAt < now)
+                .sort(Lesson.self, \.$startsAt, .descending)
+        case "cancelled":
+            query = Booking.query(on: req.db)
+                .withDeleted()
+                .filter(\.$user.$id == userID)
+                .filter(\.$deletedAt != nil)
+                .with(\.$lesson)
+                .sort(\.$deletedAt, .descending)
+        default:
+            query = query.sort(\.$createdAt, .descending)
+        }
+
+        if let limit = q.limit, limit > 0 {
+            query = query.limit(limit)
+        }
+
+        let results = try await query.all()
         return results.map { b in
             AdminBookingRow(
                 id: b.id,

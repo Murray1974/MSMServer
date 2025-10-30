@@ -14,6 +14,7 @@ public func routes(_ app: Application) throws {
         return "db: not-sql"
     }
     
+   
     try app.register(collection: AuthController())
     try app.register(collection: LessonsController())
     try app.register(collection: UserBookingsController())
