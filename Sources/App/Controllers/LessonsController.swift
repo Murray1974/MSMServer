@@ -274,7 +274,9 @@ struct LessonsController: RouteCollection {
             let capacity = lesson.capacity
             let available = max(0, capacity - booked)
 
-            if q.availableOnly == true && available <= 0 { continue }
+            if q.availableOnly == true && (available <= 0 || lesson.endsAt < Date()) {
+                continue
+            }
 
             rows.append(FilteredLessonRow(
                 id: lesson.id,
