@@ -158,8 +158,16 @@ struct LessonsController: RouteCollection {
         var available: Int
     }
 
+    struct LessonSearchResponse: Content {
+        var page: Int
+        var per: Int
+        var total: Int
+        var hasNext: Bool
+        var items: [FilteredLessonRow]
+    }
+
     // MARK: GET /lessons/search?from=YYYY-MM-DD&to=YYYY-MM-DD&availableOnly=true&page=1&per=10
-    func searchLessons(_ req: Request) async throws -> [FilteredLessonRow] {
+    func searchLessons(_ req: Request) async throws -> LessonSearchResponse {
         struct Q: Decodable {
             var from: String?
             var to: String?
@@ -190,13 +198,23 @@ struct LessonsController: RouteCollection {
             query = query.filter(\.$endsAt <= toDate)
         }
 
+        let total = try await query.count()
+
         // Fetch a page of lessons
         let items = try await query
             .sort(\.$startsAt, .ascending)
             .range(offset..<(offset + per))
             .all()
 
-        guard !items.isEmpty else { return [] }
+        guard !items.isEmpty else {
+            return LessonSearchResponse(
+                page: page,
+                per: per,
+                total: total,
+                hasNext: false,
+                items: []
+            )
+        }
 
         let cal = Calendar.current
         var filteredItems = items
@@ -269,6 +287,12 @@ struct LessonsController: RouteCollection {
             ))
         }
 
-        return rows
+        return LessonSearchResponse(
+            page: page,
+            per: per,
+            total: total,
+            hasNext: (offset + rows.count) < total,
+            items: rows
+        )
     }
 }
