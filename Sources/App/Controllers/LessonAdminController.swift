@@ -5,7 +5,6 @@ import Fluent
 struct AdminBookingRow: Content {
     var id: UUID?
     var bookedAt: Date?
-    var cancelledAt: Date?
     var deletedAt: Date?
     var lessonTitle: String?
 }
@@ -22,22 +21,36 @@ struct AttendeeRow: Content {
     var username: String?
 }
 
+struct AdminDashboardSummary: Content {
+    var totalLessons: Int
+    var totalBookings: Int
+    var activeBookings: Int
+    var cancelledBookings: Int
+    var upcomingLessons: Int
+}
+
 // MARK: - Controller
 struct LessonAdminController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
+        // /admin
+        let admin = routes.grouped("admin")
+
+        // /admin/dashboard
+        admin.get("dashboard", use: dashboard)
+
         // /admin/lessons/...
-        let admin = routes.grouped("admin", "lessons")
+        let lessons = admin.grouped("lessons")
 
-        // Listings / stats
-        admin.get(":lessonID", "bookings", use: lessonBookings)
-        admin.get(":lessonID", "stats", use: lessonStats)
-        admin.get(":lessonID", "attendees", use: lessonAttendees)
+        // listings / stats
+        lessons.get(":lessonID", "bookings", use: lessonBookings)
+        lessons.get(":lessonID", "stats", use: lessonStats)
+        lessons.get(":lessonID", "attendees", use: lessonAttendees)
 
-        // Cancellation — support both shapes:
+        // cancellation – two shapes
         // 1) /admin/lessons/bookings/:bookingID/cancel
-        admin.post("bookings", ":bookingID", "cancel", use: cancelBooking)
+        lessons.post("bookings", ":bookingID", "cancel", use: cancelBooking)
         // 2) /admin/lessons/:lessonID/bookings/:bookingID/cancel
-        admin.post(":lessonID", "bookings", ":bookingID", "cancel", use: cancelBookingScoped)
+        lessons.post(":lessonID", "bookings", ":bookingID", "cancel", use: cancelBookingScoped)
     }
 
     // MARK: POST /admin/lessons/bookings/:bookingID/cancel
@@ -53,23 +66,22 @@ struct LessonAdminController: RouteCollection {
         guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid booking id.")
         }
+        // lessonID not strictly needed because bookingID is unique
         return try await cancelCommon(bookingID: bookingID, req)
     }
 
-    // MARK: - Shared cancel logic (soft-delete + audit timestamp if present)
+    // MARK: shared cancel logic
     private func cancelCommon(bookingID: UUID, _ req: Request) async throws -> HTTPStatus {
         guard let booking = try await Booking.find(bookingID, on: req.db) else {
             throw Abort(.notFound, reason: "Booking not found.")
         }
-        // If your model has these, they’ll compile. If not, comment them out.
-        booking.cancelledAt = Date()
-        try await booking.save(on: req.db)
 
-        try await booking.delete(on: req.db) // soft-delete
+        // your current pattern: soft delete = cancel
+        try await booking.delete(on: req.db)
         return .noContent
     }
 
-    // MARK: GET /admin/lessons/:lessonID/bookings?page=&per=&includeDeleted=true
+    // MARK: GET /admin/lessons/:lessonID/bookings
     func lessonBookings(_ req: Request) async throws -> Page<AdminBookingRow> {
         struct Q: Decodable { var page: Int?; var per: Int?; var includeDeleted: Bool? }
         let q = try req.query.decode(Q.self)
@@ -93,11 +105,11 @@ struct LessonAdminController: RouteCollection {
             AdminBookingRow(
                 id: b.id,
                 bookedAt: b.createdAt,
-                cancelledAt: b.cancelledAt,
                 deletedAt: b.deletedAt,
                 lessonTitle: b.$lesson.value?.title
             )
         }
+
         return Page(items: items, metadata: page.metadata)
     }
 
@@ -107,16 +119,20 @@ struct LessonAdminController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
 
-        // If your Lesson has a capacity field, wire it here. For now default to 1.
+        // TODO: once Lesson has a real capacity field, use it here
         let capacity = 1
 
-        // By default, Fluent excludes soft-deleted records, so this only counts active bookings.
         let booked = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .count()
 
         let available = max(0, capacity - booked)
-        return LessonStatsResponse(capacity: capacity, booked: booked, available: available)
+
+        return LessonStatsResponse(
+            capacity: capacity,
+            booked: booked,
+            available: available
+        )
     }
 
     // MARK: GET /admin/lessons/:lessonID/attendees
@@ -137,5 +153,34 @@ struct LessonAdminController: RouteCollection {
                 username: b.$user.value?.username
             )
         }
+    }
+
+    // MARK: GET /admin/dashboard
+    func dashboard(_ req: Request) async throws -> AdminDashboardSummary {
+        // total lessons
+        let totalLessons = try await Lesson.query(on: req.db).count()
+
+        // active bookings (not soft-deleted)
+        let activeBookings = try await Booking.query(on: req.db).count()
+
+        // total bookings (incl. soft-deleted)
+        let totalBookings = try await Booking.query(on: req.db).withDeleted().count()
+
+        // cancelled = total - active
+        let cancelledBookings = max(0, totalBookings - activeBookings)
+
+        // upcoming lessons: startsAt >= now
+        let now = Date()
+        let upcomingLessons = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt >= now)
+            .count()
+
+        return AdminDashboardSummary(
+            totalLessons: totalLessons,
+            totalBookings: totalBookings,
+            activeBookings: activeBookings,
+            cancelledBookings: cancelledBookings,
+            upcomingLessons: upcomingLessons
+        )
     }
 }
