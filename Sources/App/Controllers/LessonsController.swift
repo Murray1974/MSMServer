@@ -289,6 +289,17 @@ struct LessonsController: RouteCollection {
             ))
         }
 
+        // Sort: available first, then by start time ascending
+        rows.sort { lhs, rhs in
+            // 1) lessons with availability should come before full ones
+            if lhs.available > 0 && rhs.available == 0 { return true }
+            if lhs.available == 0 && rhs.available > 0 { return false }
+            // 2) otherwise sort by start date
+            let lDate = lhs.startsAt ?? .distantFuture
+            let rDate = rhs.startsAt ?? .distantFuture
+            return lDate < rDate
+        }
+
         return LessonSearchResponse(
             page: page,
             per: per,
