@@ -166,6 +166,10 @@ struct LessonsController: RouteCollection {
             var availableOnly: Bool?
             var page: Int?
             var per: Int?
+            // can be "2" or "1,3,5"
+            var weekday: String?
+            var startHour: Int?
+            var endHour: Int?
         }
         let q = try req.query.decode(Q.self)
 
@@ -194,8 +198,45 @@ struct LessonsController: RouteCollection {
 
         guard !items.isEmpty else { return [] }
 
+        let cal = Calendar.current
+        var filteredItems = items
+
+        if let wdRaw = q.weekday, !wdRaw.isEmpty {
+            let wantedDays: [Int] = wdRaw
+                .split(separator: ",")
+                .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                .filter { (1...7).contains($0) }
+
+            if !wantedDays.isEmpty {
+                filteredItems = filteredItems.filter { lesson in
+                    let s = lesson.startsAt
+                    let day = cal.component(.weekday, from: s)
+                    return wantedDays.contains(day)
+                }
+            }
+        }
+
+        // Optional time-of-day filtering (e.g., ?startHour=9&endHour=12)
+        if let startHour = q.startHour, let endHour = q.endHour {
+            filteredItems = filteredItems.filter { lesson in
+                let start = Calendar.current.component(.hour, from: lesson.startsAt)
+                let end = Calendar.current.component(.hour, from: lesson.endsAt)
+                return start >= startHour && end <= endHour
+            }
+        } else if let startHour = q.startHour {
+            filteredItems = filteredItems.filter { lesson in
+                let start = Calendar.current.component(.hour, from: lesson.startsAt)
+                return start >= startHour
+            }
+        } else if let endHour = q.endHour {
+            filteredItems = filteredItems.filter { lesson in
+                let end = Calendar.current.component(.hour, from: lesson.endsAt)
+                return end <= endHour
+            }
+        }
+
         // Preload booking counts for these lessons (active only – soft-deleted excluded by default)
-        let ids: [UUID] = items.compactMap { $0.id }
+        let ids: [UUID] = filteredItems.compactMap { $0.id }
         let bookings = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id ~~ ids)
             .all()
@@ -207,9 +248,9 @@ struct LessonsController: RouteCollection {
         }
 
         var rows: [FilteredLessonRow] = []
-        rows.reserveCapacity(items.count)
+        rows.reserveCapacity(filteredItems.count)
 
-        for lesson in items {
+        for lesson in filteredItems {
             guard let lid = lesson.id else { continue }
             let booked = countByLesson[lid, default: 0]
             let capacity = lesson.capacity
