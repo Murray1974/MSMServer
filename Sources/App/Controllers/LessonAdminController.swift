@@ -6,6 +6,8 @@ struct AdminBookingRow: Content {
     var id: UUID?
     var bookedAt: Date?
     var deletedAt: Date?
+    var userID: UUID?
+    var username: String?
     var lessonTitle: String?
 }
 
@@ -97,6 +99,7 @@ struct LessonAdminController: RouteCollection {
         var query = Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$lesson)
+            .with(\.$user)
             .sort(\.$id, .descending)
         
         if q.includeDeleted == true {
@@ -110,6 +113,8 @@ struct LessonAdminController: RouteCollection {
                 id: b.id,
                 bookedAt: b.createdAt,
                 deletedAt: b.deletedAt,
+                userID: b.$user.id,
+                username: b.$user.value?.username,
                 lessonTitle: b.$lesson.value?.title
             )
         }
