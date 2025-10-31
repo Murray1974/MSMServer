@@ -31,6 +31,18 @@ struct AdminDashboardSummary: Content {
     var upcomingLessons: Int
 }
 
+
+struct AdminLessonRow: Content {
+    var id: UUID?
+    var title: String?
+    var startsAt: Date?
+    var endsAt: Date?
+    var capacity: Int
+    var booked: Int
+    var available: Int
+}
+
+
 // MARK: - Controller
 struct LessonAdminController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -47,10 +59,14 @@ struct LessonAdminController: RouteCollection {
         // /admin/lessons/...
         let lessons = admin.grouped("lessons")
         
+        // list all lessons (admin)
+        lessons.get(use: listLessons)
+        
         // listings / stats
         lessons.get(":lessonID", "bookings", use: lessonBookings)
         lessons.get(":lessonID", "stats", use: lessonStats)
         lessons.get(":lessonID", "attendees", use: lessonAttendees)
+        lessons.post(":lessonID", "bookings", use: createLessonBooking)
         
         // cancellation – two shapes
         // 1) /admin/lessons/bookings/:bookingID/cancel
@@ -85,6 +101,66 @@ struct LessonAdminController: RouteCollection {
         // your current pattern: soft delete = cancel
         try await booking.delete(on: req.db)
         return .noContent
+    }
+    
+    
+    // MARK: GET /admin/lessons
+    func listLessons(_ req: Request) async throws -> Page<AdminLessonRow> {
+        struct Query: Decodable {
+            var page: Int?
+            var per: Int?
+            var availableOnly: Bool?
+        }
+        let q = try req.query.decode(Query.self)
+
+        // base query: all lessons, newest first
+        var query = Lesson.query(on: req.db)
+            .sort(\.$startsAt, .ascending)
+
+        let page = try await query.paginate(PageRequest(page: q.page ?? 1, per: q.per ?? 10))
+
+        // we need to compute booked/available per lesson
+        let lessonIDs = page.items.compactMap { $0.id }
+
+        // fetch bookings for all lessons in this page
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id ~~ lessonIDs)
+            .withDeleted() // so we can decide whether to count deleted or not later
+            .all()
+
+        // group bookings by lesson
+        var counts: [UUID: Int] = [:]
+        for b in bookings {
+            // count ONLY active bookings
+            guard b.deletedAt == nil else { continue }
+            let lid = b.$lesson.id      // we already filtered by lessonIDs, so this is fine
+            counts[lid, default: 0] += 1
+        }
+
+        // map to admin rows
+        var rows: [AdminLessonRow] = page.items.map { lesson in
+            let booked = counts[lesson.id!] ?? 0
+            // for now your lessons don't have capacity, so we use 1 as default
+            let capacity = lesson.capacity ?? 1  // if you don't have .capacity on Lesson, change to `let capacity = 1`
+            let available = max(0, capacity - booked)
+
+            return AdminLessonRow(
+                id: lesson.id,
+                title: lesson.title,
+                startsAt: lesson.startsAt,
+                endsAt: lesson.endsAt,
+                capacity: capacity,
+                booked: booked,
+                available: available
+            )
+        }
+
+        // if availableOnly=true, filter after
+        if q.availableOnly == true {
+            rows = rows.filter { $0.available > 0 }
+        }
+
+        return Page(items: rows, metadata: page.metadata)
     }
     
     // MARK: GET /admin/lessons/:lessonID/bookings
@@ -252,6 +328,56 @@ struct LessonAdminController: RouteCollection {
                 lessonTitle: b.$lesson.value?.title
             )
         }
+    }
+    
+    // MARK: POST /admin/lessons/:lessonID/bookings
+    func createLessonBooking(_ req: Request) async throws -> HTTPStatus {
+        struct Input: Content {
+            var userID: UUID
+        }
+
+        let lessonID = try req.parameters.require("lessonID", as: UUID.self)
+        let input = try req.content.decode(Input.self)
+
+        // 1. load lesson
+        guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Lesson not found")
+        }
+
+        // 2. check if user already has a booking for this lesson
+        let existing = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$user.$id == input.userID)
+            .filter(\.$deletedAt == nil)              // only look at active bookings
+            .first()
+
+        if existing != nil {
+            // we could return 200 here, but 409 tells the client "it's already booked"
+            throw Abort(.conflict, reason: "User already booked on this lesson")
+        }
+
+        // 3. capacity check
+        // use lesson.capacity if you have it; otherwise default to 1
+        let capacity = lesson.capacity ?? 1
+
+        let activeCount = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .count()
+
+        guard activeCount < capacity else {
+            throw Abort(.conflict, reason: "Lesson is full")
+        }
+
+        // 4. create booking
+        let booking = Booking()
+        booking.$lesson.id = lessonID
+        booking.$user.id = input.userID
+        booking.createdAt = Date()
+
+        try await booking.save(on: req.db)
+
+        return .created
     }
     
     // MARK: GET /admin/users/:userID/bookings
