@@ -91,20 +91,27 @@ struct StudentBookingsController: RouteCollection {
         let newLessonID: UUID
     }
 
-    // MARK: - reschedule booking
+    // POST /bookings/reschedule/:bookingID
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
+        // 1. who is this?
         let user = try req.auth.require(User.self)
-        let userID = try user.requireID()
 
+        // 2. which booking?
         guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Missing booking ID")
+            throw Abort(.badRequest, reason: "Missing bookingID in path")
         }
 
-        let input = try req.content.decode(RescheduleInput.self)
+        // 3. what lesson do they want instead?
+        struct RescheduleInput: Content {
+            let lessonID: UUID
+        }
+        let body = try req.content.decode(RescheduleInput.self)
 
-        guard let booking = try await Booking.query(on: req.db)
+        // 4. load the booking, make sure it’s theirs and not deleted
+        guard let booking = try await Booking
+            .query(on: req.db)
             .filter(\.$id == bookingID)
-            .filter(\.$user.$id == userID)
+            .filter(\.$user.$id == user.requireID())
             .filter(\.$deletedAt == nil)
             .with(\.$lesson)
             .first()
@@ -112,29 +119,79 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Booking not found for this user")
         }
 
-        guard let newLesson = try await Lesson.find(input.newLessonID, on: req.db) else {
-            throw Abort(.notFound, reason: "New lesson not found")
+        // 5. load the new lesson
+        guard let newLesson = try await Lesson
+            .query(on: req.db)
+            .filter(\.$id == body.lessonID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Lesson to move to not found")
         }
 
-        let newLessonBookingsCount = try await Booking.query(on: req.db)
+        // 6. (optional) capacity check — skip if you don’t want it right now
+        // if let cap = newLesson.capacity, cap <= 0 {
+        //     throw Abort(.conflict, reason: "Lesson is full")
+        // }
+
+        // 7. update booking to point at the new lesson
+        booking.$lesson.id = try newLesson.requireID()
+        try await booking.update(on: req.db)
+
+        return .ok
+    }
+    
+    // MARK: POST /me/bookings/:bookingID/reschedule
+    func rescheduleMyBooking(_ req: Request) async throws -> HTTPStatus {
+        struct Input: Content {
+            var newLessonID: UUID
+        }
+
+        let user = try req.auth.require(User.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+        let input = try req.content.decode(Input.self)
+
+        // 1. load booking & check ownership
+        guard let booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+        guard booking.$user.id == user.id else {
+            throw Abort(.forbidden, reason: "This booking does not belong to you")
+        }
+
+        // 2. load target lesson
+        guard let newLesson = try await Lesson.find(input.newLessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Target lesson not found")
+        }
+
+        // 3. check user is not already booked on target lesson
+        let already = try await Booking.query(on: req.db)
+            .filter(\.$user.$id == user.requireID())
+            .filter(\.$lesson.$id == input.newLessonID)
+            .filter(\.$deletedAt == nil)
+            .first()
+
+        if already != nil {
+            throw Abort(.conflict, reason: "You are already booked on that lesson")
+        }
+
+        // 4. capacity check (same logic as admin)
+        let capacity = newLesson.capacity ?? 1
+        let activeCount = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == input.newLessonID)
             .filter(\.$deletedAt == nil)
             .count()
 
-        if newLessonBookingsCount >= newLesson.capacity {
-            throw Abort(.conflict, reason: "Target lesson is full")
+        guard activeCount < capacity else {
+            throw Abort(.conflict, reason: "That lesson is full")
         }
 
-        if booking.$lesson.id == input.newLessonID {
-            throw Abort(.conflict, reason: "This booking is already for that lesson")
-        }
-
+        // 5. perform the reschedule (just move the booking)
         booking.$lesson.id = input.newLessonID
         try await booking.save(on: req.db)
 
         return .ok
     }
-
+    
     // MARK: - get my bookings
     func myBookings(_ req: Request) async throws -> [StudentBookingDTO] {
         struct Query: Decodable {
