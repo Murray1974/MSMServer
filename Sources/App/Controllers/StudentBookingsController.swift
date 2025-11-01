@@ -1,6 +1,11 @@
 import Vapor
 import Fluent
 
+// payload for rescheduling
+struct RescheduleInput: Content {
+    var newLessonID: UUID
+}
+
 struct StudentBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // student, session-protected
@@ -12,18 +17,20 @@ struct StudentBookingsController: RouteCollection {
 
         // POST /bookings/cancel/:bookingID
         student.post("bookings", "cancel", ":bookingID", use: cancelBooking)
-        
+
         // POST /bookings/reschedule/:bookingID
         student.post("bookings", "reschedule", ":bookingID", use: rescheduleBooking)
 
+        // GET /bookings
         student.get("bookings", use: myBookings)
     }
+
+    // MARK: - create booking
 
     struct CreateBookingInput: Content {
         let lessonID: UUID
     }
 
-    // MARK: - create booking
     func createBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
@@ -52,7 +59,8 @@ struct StudentBookingsController: RouteCollection {
             .filter(\.$deletedAt == nil)
             .count()
 
-        if existingCount >= lesson.capacity {
+        let capacity = lesson.capacity ?? 1
+        if existingCount >= capacity {
             throw Abort(.conflict, reason: "Lesson is full")
         }
 
@@ -66,6 +74,7 @@ struct StudentBookingsController: RouteCollection {
     }
 
     // MARK: - cancel own booking
+
     func cancelBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
@@ -83,15 +92,27 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Booking not found for this user")
         }
 
+        // cache before delete
+        let lessonID = booking.$lesson.id
+        let bookingUUID = try booking.requireID()
+
+        // delete / soft delete
         try await booking.delete(on: req.db)
+
+        // log student cancellation
+        let event = BookingEvent(
+            type: "student.cancelled",
+            userID: userID,
+            lessonID: lessonID,
+            bookingID: bookingUUID
+        )
+        try await event.save(on: req.db)
+
         return .noContent
     }
 
-    struct RescheduleInput: Content {
-        let newLessonID: UUID
-    }
-
     // MARK: - reschedule booking
+
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
@@ -102,6 +123,7 @@ struct StudentBookingsController: RouteCollection {
 
         let input = try req.content.decode(RescheduleInput.self)
 
+        // find this user's booking
         guard let booking = try await Booking.query(on: req.db)
             .filter(\.$id == bookingID)
             .filter(\.$user.$id == userID)
@@ -112,23 +134,28 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Booking not found for this user")
         }
 
+        // find new lesson
         guard let newLesson = try await Lesson.find(input.newLessonID, on: req.db) else {
             throw Abort(.notFound, reason: "New lesson not found")
         }
 
+        // check capacity on new lesson
         let newLessonBookingsCount = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == input.newLessonID)
             .filter(\.$deletedAt == nil)
             .count()
 
-        if newLessonBookingsCount >= newLesson.capacity {
+        let newCapacity = newLesson.capacity ?? 1
+        if newLessonBookingsCount >= newCapacity {
             throw Abort(.conflict, reason: "Target lesson is full")
         }
 
+        // don't "reschedule" to the same lesson
         if booking.$lesson.id == input.newLessonID {
             throw Abort(.conflict, reason: "This booking is already for that lesson")
         }
 
+        // update booking
         booking.$lesson.id = input.newLessonID
         try await booking.save(on: req.db)
 
@@ -136,6 +163,7 @@ struct StudentBookingsController: RouteCollection {
     }
 
     // MARK: - get my bookings
+
     func myBookings(_ req: Request) async throws -> [StudentBookingDTO] {
         struct Query: Decodable {
             var scope: String?
@@ -190,6 +218,8 @@ struct StudentBookingsController: RouteCollection {
             )
         }
     }
+
+    // MARK: - DTO
 
     struct StudentBookingDTO: Content {
         var id: UUID?

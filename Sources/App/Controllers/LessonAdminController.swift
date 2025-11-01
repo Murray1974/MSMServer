@@ -2,6 +2,7 @@ import Vapor
 import Fluent
 
 // MARK: - DTOs
+
 struct AdminBookingRow: Content {
     var id: UUID?
     var bookedAt: Date?
@@ -31,7 +32,6 @@ struct AdminDashboardSummary: Content {
     var upcomingLessons: Int
 }
 
-
 struct AdminLessonRow: Content {
     var id: UUID?
     var title: String?
@@ -42,106 +42,107 @@ struct AdminLessonRow: Content {
     var available: Int
 }
 
-
 // MARK: - Controller
+
 struct LessonAdminController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        // /admin
         let admin = routes.grouped("admin")
-        
-        // /admin/dashboard
+
         admin.get("dashboard", use: dashboard)
-        
-        // /admin/students/:studentID/bookings
         admin.get("students", ":studentID", "bookings", use: studentBookings)
         admin.get("users", ":userID", "bookings", use: userBookings)
-        
-        // /admin/lessons/...
+
         let lessons = admin.grouped("lessons")
-        
-        // list all lessons (admin)
+
         lessons.get(use: listLessons)
-        
-        // listings / stats
         lessons.get(":lessonID", "bookings", use: lessonBookings)
         lessons.get(":lessonID", "stats", use: lessonStats)
         lessons.get(":lessonID", "attendees", use: lessonAttendees)
+
         lessons.post(":lessonID", "bookings", use: createLessonBooking)
-        
-        // cancellation – two shapes
-        // 1) /admin/lessons/bookings/:bookingID/cancel
+
+        // admin cancel endpoints
         lessons.post("bookings", ":bookingID", "cancel", use: cancelBooking)
-        // 2) /admin/lessons/:lessonID/bookings/:bookingID/cancel
         lessons.post(":lessonID", "bookings", ":bookingID", "cancel", use: cancelBookingScoped)
     }
-    
+
+    // MARK: shared cancel logic (ADMIN)
+
+    private func cancelCommon(bookingID: UUID, _ req: Request) async throws -> HTTPStatus {
+        // 👇 IMPORTANT: include soft-deleted (`withDeleted()`)
+        guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found.")
+        }
+
+        // cache IDs
+        let userID = booking.$user.id
+        let lessonID = booking.$lesson.id
+        let bookingUUID = try booking.requireID()
+
+        // perform cancel (even if already deleted, we can just re-delete)
+        try await booking.delete(on: req.db)
+
+        // log admin cancellation
+        let event = BookingEvent(
+            type: "admin.cancelled",
+            userID: userID,
+            lessonID: lessonID,
+            bookingID: bookingUUID
+        )
+        try await event.save(on: req.db)
+
+        return .noContent
+    }
+
+    // MARK: POST /admin/lessons/:lessonID/bookings/:bookingID/cancel
+
+    func cancelBookingScoped(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid booking id.")
+        }
+        return try await cancelCommon(bookingID: bookingID, req)
+    }
+
     // MARK: POST /admin/lessons/bookings/:bookingID/cancel
+
     func cancelBooking(_ req: Request) async throws -> HTTPStatus {
         guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid booking id.")
         }
         return try await cancelCommon(bookingID: bookingID, req)
     }
-    
-    // MARK: POST /admin/lessons/:lessonID/bookings/:bookingID/cancel
-    func cancelBookingScoped(_ req: Request) async throws -> HTTPStatus {
-        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid booking id.")
-        }
-        // lessonID not strictly needed because bookingID is unique
-        return try await cancelCommon(bookingID: bookingID, req)
-    }
-    
-    // MARK: shared cancel logic
-    private func cancelCommon(bookingID: UUID, _ req: Request) async throws -> HTTPStatus {
-        guard let booking = try await Booking.find(bookingID, on: req.db) else {
-            throw Abort(.notFound, reason: "Booking not found.")
-        }
-        
-        // your current pattern: soft delete = cancel
-        try await booking.delete(on: req.db)
-        return .noContent
-    }
-    
-    
+
     // MARK: GET /admin/lessons
+
     func listLessons(_ req: Request) async throws -> Page<AdminLessonRow> {
-        struct Query: Decodable {
-            var page: Int?
-            var per: Int?
-            var availableOnly: Bool?
-        }
+        struct Query: Decodable { var page: Int?; var per: Int?; var availableOnly: Bool? }
         let q = try req.query.decode(Query.self)
 
-        // base query: all lessons, newest first
         var query = Lesson.query(on: req.db)
             .sort(\.$startsAt, .ascending)
 
         let page = try await query.paginate(PageRequest(page: q.page ?? 1, per: q.per ?? 10))
 
-        // we need to compute booked/available per lesson
         let lessonIDs = page.items.compactMap { $0.id }
 
-        // fetch bookings for all lessons in this page
         let bookings = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id ~~ lessonIDs)
-            .withDeleted() // so we can decide whether to count deleted or not later
+            .withDeleted()
             .all()
 
-        // group bookings by lesson
         var counts: [UUID: Int] = [:]
         for b in bookings {
-            // count ONLY active bookings
             guard b.deletedAt == nil else { continue }
-            let lid = b.$lesson.id      // we already filtered by lessonIDs, so this is fine
-            counts[lid, default: 0] += 1
+            counts[b.$lesson.id, default: 0] += 1
         }
 
-        // map to admin rows
         var rows: [AdminLessonRow] = page.items.map { lesson in
             let booked = counts[lesson.id!] ?? 0
-            // for now your lessons don't have capacity, so we use 1 as default
-            let capacity = lesson.capacity ?? 1  // if you don't have .capacity on Lesson, change to `let capacity = 1`
+            let capacity = lesson.capacity ?? 1
             let available = max(0, capacity - booked)
 
             return AdminLessonRow(
@@ -155,35 +156,35 @@ struct LessonAdminController: RouteCollection {
             )
         }
 
-        // if availableOnly=true, filter after
         if q.availableOnly == true {
             rows = rows.filter { $0.available > 0 }
         }
 
         return Page(items: rows, metadata: page.metadata)
     }
-    
+
     // MARK: GET /admin/lessons/:lessonID/bookings
+
     func lessonBookings(_ req: Request) async throws -> Page<AdminBookingRow> {
         struct Q: Decodable { var page: Int?; var per: Int?; var includeDeleted: Bool? }
         let q = try req.query.decode(Q.self)
-        
+
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
-        
+
         var query = Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$lesson)
             .with(\.$user)
             .sort(\.$id, .descending)
-        
+
         if q.includeDeleted == true {
             query = query.withDeleted()
         }
-        
+
         let page = try await query.paginate(PageRequest(page: q.page ?? 1, per: q.per ?? 10))
-        
+
         let items = page.items.map { b in
             AdminBookingRow(
                 id: b.id,
@@ -194,43 +195,44 @@ struct LessonAdminController: RouteCollection {
                 lessonTitle: b.$lesson.value?.title
             )
         }
-        
+
         return Page(items: items, metadata: page.metadata)
     }
-    
+
     // MARK: GET /admin/lessons/:lessonID/stats
+
     func lessonStats(_ req: Request) async throws -> LessonStatsResponse {
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
-        
-        // TODO: once Lesson has a real capacity field, use it here
+
         let capacity = 1
-        
+
         let booked = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .count()
-        
+
         let available = max(0, capacity - booked)
-        
+
         return LessonStatsResponse(
             capacity: capacity,
             booked: booked,
             available: available
         )
     }
-    
+
     // MARK: GET /admin/lessons/:lessonID/attendees
+
     func lessonAttendees(_ req: Request) async throws -> [AttendeeRow] {
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid lesson id.")
         }
-        
+
         let rows = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .with(\.$user)
             .all()
-        
+
         return rows.map { b in
             AttendeeRow(
                 bookingID: b.id,
@@ -239,27 +241,20 @@ struct LessonAdminController: RouteCollection {
             )
         }
     }
-    
+
     // MARK: GET /admin/dashboard
+
     func dashboard(_ req: Request) async throws -> AdminDashboardSummary {
-        // total lessons
         let totalLessons = try await Lesson.query(on: req.db).count()
-        
-        // active bookings (not soft-deleted)
         let activeBookings = try await Booking.query(on: req.db).count()
-        
-        // total bookings (incl. soft-deleted)
         let totalBookings = try await Booking.query(on: req.db).withDeleted().count()
-        
-        // cancelled = total - active
         let cancelledBookings = max(0, totalBookings - activeBookings)
-        
-        // upcoming lessons: startsAt >= now
+
         let now = Date()
         let upcomingLessons = try await Lesson.query(on: req.db)
             .filter(\.$startsAt >= now)
             .count()
-        
+
         return AdminDashboardSummary(
             totalLessons: totalLessons,
             totalBookings: totalBookings,
@@ -268,29 +263,25 @@ struct LessonAdminController: RouteCollection {
             upcomingLessons: upcomingLessons
         )
     }
-    
+
     // MARK: GET /admin/students/:studentID/bookings
+
     func studentBookings(_ req: Request) async throws -> [AdminBookingRow] {
-        struct Query: Decodable {
-            var scope: String?
-            var limit: Int?
-        }
+        struct Query: Decodable { var scope: String?; var limit: Int? }
         let q = try req.query.decode(Query.self)
-        
+
         guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid student id.")
         }
-        
-        // make sure user exists (optional but nicer error)
+
         guard try await User.find(studentID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Student not found")
         }
-        
-        // base query: bookings for this student
+
         var query = Booking.query(on: req.db)
             .filter(\.$user.$id == studentID)
             .with(\.$lesson)
-        
+
         let now = Date()
         switch q.scope?.lowercased() {
         case "upcoming":
@@ -313,13 +304,13 @@ struct LessonAdminController: RouteCollection {
         default:
             query = query.sort(\.$createdAt, .descending)
         }
-        
+
         if let limit = q.limit, limit > 0 {
             query = query.limit(limit)
         }
-        
+
         let results = try await query.all()
-        
+
         return results.map { b in
             AdminBookingRow(
                 id: b.id,
@@ -329,37 +320,30 @@ struct LessonAdminController: RouteCollection {
             )
         }
     }
-    
+
     // MARK: POST /admin/lessons/:lessonID/bookings
+
     func createLessonBooking(_ req: Request) async throws -> HTTPStatus {
-        struct Input: Content {
-            var userID: UUID
-        }
+        struct Input: Content { var userID: UUID }
 
         let lessonID = try req.parameters.require("lessonID", as: UUID.self)
         let input = try req.content.decode(Input.self)
 
-        // 1. load lesson
         guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
-        // 2. check if user already has a booking for this lesson
         let existing = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .filter(\.$user.$id == input.userID)
-            .filter(\.$deletedAt == nil)              // only look at active bookings
+            .filter(\.$deletedAt == nil)
             .first()
 
         if existing != nil {
-            // we could return 200 here, but 409 tells the client "it's already booked"
             throw Abort(.conflict, reason: "User already booked on this lesson")
         }
 
-        // 3. capacity check
-        // use lesson.capacity if you have it; otherwise default to 1
         let capacity = lesson.capacity ?? 1
-
         let activeCount = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
             .filter(\.$deletedAt == nil)
@@ -369,28 +353,23 @@ struct LessonAdminController: RouteCollection {
             throw Abort(.conflict, reason: "Lesson is full")
         }
 
-        // 4. create booking
         let booking = Booking()
         booking.$lesson.id = lessonID
         booking.$user.id = input.userID
         booking.createdAt = Date()
 
         try await booking.save(on: req.db)
-
         return .created
     }
-    
+
     // MARK: GET /admin/users/:userID/bookings
+
     func userBookings(_ req: Request) async throws -> [AdminBookingRow] {
-        struct Query: Decodable {
-            var scope: String?
-            var limit: Int?
-        }
+        struct Query: Decodable { var scope: String?; var limit: Int? }
         let q = try req.query.decode(Query.self)
 
         let userID = try req.parameters.require("userID", as: UUID.self)
 
-        // ensure user exists
         guard try await User.find(userID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "User not found")
         }
@@ -427,6 +406,7 @@ struct LessonAdminController: RouteCollection {
         }
 
         let results = try await query.all()
+
         return results.map { b in
             AdminBookingRow(
                 id: b.id,
