@@ -79,6 +79,11 @@ struct LessonAdminController: RouteCollection {
             capacity: lesson.capacity
         )
         req.application.availabilityHub.broadcast(update)
+        // Broadcast slot.created event to connected instructor agents
+        let hours = Int(round(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 3600))
+        let title = "New \(hours)-hour slot"
+        let msg   = niceDateRange(start: lesson.startsAt, end: lesson.endsAt) + (lesson.title.isEmpty ? "" : " (\(lesson.title))")
+        req.application.broadcastEvent(type: "slot.created", title: title, message: msg)
         return lesson
     }
 

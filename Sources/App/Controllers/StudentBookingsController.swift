@@ -74,17 +74,11 @@ struct StudentBookingsController: RouteCollection {
         booking.$lesson.id = input.lessonID
         try await booking.save(on: req.db)
 
-        // Realtime: notify clients that this slot was booked
+        // Realtime: notify agents that this slot was booked
         let bookedLesson = try await booking.$lesson.get(on: req.db)
-        let update = AvailabilityUpdate(
-            action: "slot.booked",
-            id: try bookedLesson.requireID(),
-            title: bookedLesson.title,
-            startsAt: bookedLesson.startsAt,
-            endsAt: bookedLesson.endsAt,
-            capacity: bookedLesson.capacity
-        )
-        req.application.availabilityHub.broadcast(update)
+        let title = "Slot booked"
+        let msg   = niceDateRange(start: bookedLesson.startsAt, end: bookedLesson.endsAt)
+        req.application.broadcastEvent(type: "slot.booked", title: title, message: msg)
 
         return .created
     }
@@ -116,19 +110,23 @@ struct StudentBookingsController: RouteCollection {
             bookingID: try booking.requireID()
         )
         try await evt.save(on: req.db)
-        // Realtime: booking cancelled -> slot becomes available again
+        // Realtime: booking cancelled -> notify and re-advertise slot
         let freedLesson = try await booking.$lesson.get(on: req.db)
-        let createdUpdate = AvailabilityUpdate(
-            action: "slot.created",
-            id: try freedLesson.requireID(),
-            title: freedLesson.title,
-            startsAt: freedLesson.startsAt,
-            endsAt: freedLesson.endsAt,
-            capacity: freedLesson.capacity
+        let when = niceDateRange(start: freedLesson.startsAt, end: freedLesson.endsAt)
+        
+        // 1) Tell agents a booking was cancelled
+        req.application.broadcastEvent(
+            type: "slot.cancelled",
+            title: "Booking cancelled",
+            message: when
         )
-        let freedLessonID = try freedLesson.requireID()
-        req.logger.info("WS broadcast: slot.created lesson=\(freedLessonID)")
-        req.application.availabilityHub.broadcast(createdUpdate)
+        
+        // 2) Also announce the slot is available again (optional UI refresh)
+        req.application.broadcastEvent(
+            type: "slot.created",
+            title: "Slot available again",
+            message: when
+        )
         return .ok
     }
 
