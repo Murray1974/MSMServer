@@ -79,15 +79,31 @@ public func routes(_ app: Application) throws {
     }
 
     app.post("admin", "test-broadcast") { req async throws -> HTTPStatus in
+        struct Params: Decodable {
+            var type: String?
+            var title: String?
+            var message: String?      // accepted for future use
+            var slotId: UUID?
+            var start: String?        // ISO8601 date string
+            var end: String?          // ISO8601 date string
+            var capacity: Int?
+        }
+        let p = try req.query.decode(Params.self)
+
+        let iso = ISO8601DateFormatter()
         let now = Date()
+        let startsAt = p.start.flatMap { iso.date(from: $0) } ?? now
+        let endsAt = p.end.flatMap { iso.date(from: $0) } ?? now.addingTimeInterval(3600)
+
         let msg = AvailabilityUpdate(
-            action: "slot.created",
-            id: UUID(),
-            title: "Demo Slot",
-            startsAt: now,
-            endsAt: now.addingTimeInterval(3600),
-            capacity: 1
+            action: p.type ?? "slot.created",
+            id: p.slotId ?? UUID(),
+            title: p.title ?? "Demo Slot",
+            startsAt: startsAt,
+            endsAt: endsAt,
+            capacity: p.capacity ?? 1
         )
+
         req.application.availabilityHub.broadcast(msg)
         return .ok
     }
