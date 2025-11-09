@@ -192,17 +192,23 @@ struct BookingsController: RouteCollection {
         booking.$cancelledBy.id = requesterID
         booking.cancelledAt = Date()
         try await booking.delete(on: req.db) // sets deleted_at via @Timestamp(on: .delete)
-        // Realtime: notify clients that this slot was cancelled (no longer available to this booking)
+        // Realtime: booking cancelled (admin/instructor) -> notify & re-advertise slot
         let lesson = try await booking.$lesson.get(on: req.db)
-        let update = AvailabilityUpdate(
-            action: "slot.available",
-            id: try lesson.requireID(),
-            title: lesson.title,
-            startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt,
-            capacity: lesson.capacity
+        let when = niceDateRange(start: lesson.startsAt, end: lesson.endsAt)
+        
+        // 1) Tell agents a booking was cancelled
+        req.application.broadcastEvent(
+            type: "slot.cancelled",
+            title: "Booking cancelled",
+            message: when
         )
-        req.application.availabilityHub.broadcast(update)
+        
+        // 2) Also announce the slot is available again (optional UI refresh)
+        req.application.broadcastEvent(
+            type: "slot.created",
+            title: "Slot available again",
+            message: when
+        )
         return .ok
     }
 
