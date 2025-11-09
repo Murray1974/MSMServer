@@ -1,125 +1,75 @@
 import Vapor
 import Fluent
 
-// Request/Response DTOs
-struct LoginRequest: Content {
-    let username: String
-    let password: String
-}
-
-struct LoginResponse: Content {
-    let token: String
-}
-
-struct ChangePasswordRequest: Content {
-    let currentPassword: String
-    let newPassword: String
-}
-
-/// Authentication routes using opaque session tokens.
 struct AuthController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let auth = routes.grouped("auth")
         auth.post("register", use: register)
         auth.post("login", use: login)
-
-        // Protected
-        let protected = auth.grouped(SessionTokenAuthenticator())
-        protected.get("me", use: me)
-        protected.post("logout", use: logout)
-        protected.post("logout-all", use: logoutAll)
-        protected.post("password", "change", use: changePassword)
+        auth.post("logout", use: logout)
     }
 
-    // POST /auth/register -> 201
-    func register(req: Request) async throws -> HTTPStatus {
-        let body = try req.content.decode(LoginRequest.self)
+    // MARK: - DTOs
+    struct Credentials: Content {
+        let username: String
+        let password: String
+    }
 
-        // Unique username
-        if try await User.query(on: req.db)
-            .filter(\.$username == body.username)
-            .first() != nil
-        {
+    struct LoginResponse: Content {
+        let token: String
+    }
+
+    // MARK: - Handlers
+
+    /// POST /auth/register
+    /// Creates a new user if the username is not taken.
+    func register(_ req: Request) async throws -> HTTPStatus {
+        let input = try req.content.decode(Credentials.self)
+
+        // Ensure username uniqueness
+        if let _ = try await User.query(on: req.db)
+            .filter(\.$username == input.username)
+            .first() {
             throw Abort(.conflict, reason: "Username already exists.")
         }
 
-        let hash = try await req.password.async.hash(body.password)
-        let user = User(username: body.username, passwordHash: hash)
+        // Create user with hashed password
+        let hash = try Bcrypt.hash(input.password)
+        let user = User(username: input.username, passwordHash: hash)
         try await user.save(on: req.db)
+
         return .created
     }
 
-    // POST /auth/login -> { token }
-    func login(req: Request) async throws -> LoginResponse {
-        let body = try req.content.decode(LoginRequest.self)
+    /// POST /auth/login
+    /// Verifies credentials, issues an opaque token, AND creates a server-side session (cookie).
+    func login(_ req: Request) async throws -> LoginResponse {
+        let input = try req.content.decode(Credentials.self)
 
         guard let user = try await User.query(on: req.db)
-            .filter(\.$username == body.username)
-            .first()
-        else { throw Abort(.unauthorized) }
-
-        guard try await req.password.async.verify(body.password, created: user.passwordHash) else {
+            .filter(\.$username == input.username)
+            .first() else {
             throw Abort(.unauthorized)
         }
 
+        let ok = try Bcrypt.verify(input.password, created: user.passwordHash)
+        guard ok else { throw Abort(.unauthorized) }
+
+        // Issue opaque API token (unchanged behaviour if the project already uses tokens)
         let (raw, model) = try SessionToken.generate(for: user, ttl: 60 * 60) // 1 hour
         try await model.save(on: req.db)
+
+        // ALSO create a server-side session so WebSocket & cookie-protected routes work
+        let uid = try user.requireID()
+        req.session.data["userID"] = uid.uuidString   // <-- Sets Set-Cookie: vapor-session=...
 
         return .init(token: raw)
     }
 
-    // GET /auth/me
-    func me(req: Request) async throws -> User.Public {
-        let user = try req.auth.require(User.self)
-        return user.asPublic
-    }
-
-    // POST /auth/logout (invalidate JUST the presented token)
-    func logout(req: Request) async throws -> HTTPStatus {
-        _ = try req.auth.require(User.self) // ensure authenticated
-        guard let bearer = req.headers.bearerAuthorization?.token else {
-            throw Abort(.badRequest, reason: "Missing bearer token")
-        }
-
-        let hash = SessionToken.hash(bearer)
-
-        try await SessionToken.query(on: req.db)
-            .filter(\.$tokenHash == hash)
-            .delete()
-
-        return .noContent
-    }
-
-    // POST /auth/logout-all (invalidate ALL tokens for current user)
-    func logoutAll(req: Request) async throws -> HTTPStatus {
-        let user = try req.auth.require(User.self)
-        let uid = try user.requireID()                 // <- compute first (fixes the 'try to the right' error)
-
-        try await SessionToken.query(on: req.db)
-            .filter(\.$user.$id == uid)
-            .delete()
-
-        return .noContent
-    }
-
-    // POST /auth/password/change
-    func changePassword(req: Request) async throws -> HTTPStatus {
-        let body = try req.content.decode(ChangePasswordRequest.self)
-        let user = try req.auth.require(User.self)
-
-        guard try await req.password.async.verify(body.currentPassword, created: user.passwordHash) else {
-            throw Abort(.unauthorized, reason: "Current password is incorrect")
-        }
-
-        user.passwordHash = try await req.password.async.hash(body.newPassword)
-        try await user.save(on: req.db)
-
-        // Revoke all tokens for this user (force re-login)
-        let uid = try user.requireID()
-        try await SessionToken.query(on: req.db)
-            .filter(\.$user.$id == uid)
-            .delete()
-
+    /// POST /auth/logout
+    /// Destroys the server-side session and (optionally) revokes tokens in future.
+    func logout(_ req: Request) async throws -> HTTPStatus {
+        req.session.destroy()
         return .noContent
     }
 }

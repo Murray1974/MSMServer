@@ -5,18 +5,29 @@ struct StudentBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // student, session-protected
         let student = routes
+            .grouped("student")
             .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
 
-        // POST /bookings  { "lessonID": "…" }
-        student.post("bookings", use: createBooking)
+        // /student/bookings
+        let bookings = student.grouped("bookings")
 
-        // POST /bookings/cancel/:bookingID
-        student.post("bookings", "cancel", ":bookingID", use: cancelBooking)
-        
-        // POST /bookings/reschedule/:bookingID
-        student.post("bookings", "reschedule", ":bookingID", use: rescheduleBooking)
+        // POST /student/bookings  { "lessonID": "…" }
+        bookings.post(use: createBooking)
 
-        student.get("bookings", use: myBookings)
+        // GET /student/bookings  (list my bookings)
+        bookings.get(use: myBookings)
+
+        // /student/bookings/:bookingID/*
+        let byID = bookings.grouped(":bookingID")
+
+        // DELETE /student/bookings/:bookingID      (cancel own booking)
+        byID.delete(use: cancelBooking)
+
+        // POST /student/bookings/:bookingID/cancel (alternate action-style cancel)
+        byID.post("cancel", use: cancelBooking)
+
+        // POST /student/bookings/:bookingID/reschedule
+        byID.post("reschedule", use: rescheduleBooking)
     }
 
     struct CreateBookingInput: Content {
@@ -52,7 +63,8 @@ struct StudentBookingsController: RouteCollection {
             .filter(\.$deletedAt == nil)
             .count()
 
-        if existingCount >= lesson.capacity {
+        let cap = lesson.capacity ?? 1
+        if existingCount >= cap {
             throw Abort(.conflict, reason: "Lesson is full")
         }
 
@@ -61,6 +73,18 @@ struct StudentBookingsController: RouteCollection {
         booking.$user.id = userID
         booking.$lesson.id = input.lessonID
         try await booking.save(on: req.db)
+
+        // Realtime: notify clients that this slot was booked
+        let bookedLesson = try await booking.$lesson.get(on: req.db)
+        let update = AvailabilityUpdate(
+            action: "slot.booked",
+            id: try bookedLesson.requireID(),
+            title: bookedLesson.title,
+            startsAt: bookedLesson.startsAt,
+            endsAt: bookedLesson.endsAt,
+            capacity: bookedLesson.capacity
+        )
+        req.application.availabilityHub.broadcast(update)
 
         return .created
     }
@@ -84,7 +108,28 @@ struct StudentBookingsController: RouteCollection {
         }
 
         try await booking.delete(on: req.db)
-        return .noContent
+        // record event for audit/activity feed
+        let evt = BookingEvent(
+            type: "student.cancelled",
+            userID: try user.requireID(),
+            lessonID: booking.$lesson.id,
+            bookingID: try booking.requireID()
+        )
+        try await evt.save(on: req.db)
+        // Realtime: booking cancelled -> slot becomes available again
+        let freedLesson = try await booking.$lesson.get(on: req.db)
+        let createdUpdate = AvailabilityUpdate(
+            action: "slot.created",
+            id: try freedLesson.requireID(),
+            title: freedLesson.title,
+            startsAt: freedLesson.startsAt,
+            endsAt: freedLesson.endsAt,
+            capacity: freedLesson.capacity
+        )
+        let freedLessonID = try freedLesson.requireID()
+        req.logger.info("WS broadcast: slot.created lesson=\(freedLessonID)")
+        req.application.availabilityHub.broadcast(createdUpdate)
+        return .ok
     }
 
     struct RescheduleInput: Content {
@@ -102,10 +147,10 @@ struct StudentBookingsController: RouteCollection {
         }
 
         // 3. what lesson do they want instead?
-        struct RescheduleInput: Content {
+        struct RescheduleBody: Content {
             let lessonID: UUID
         }
-        let body = try req.content.decode(RescheduleInput.self)
+        let body = try req.content.decode(RescheduleBody.self)
 
         // 4. load the booking, make sure it’s theirs and not deleted
         guard let booking = try await Booking
@@ -135,7 +180,7 @@ struct StudentBookingsController: RouteCollection {
 
         // 7. update booking to point at the new lesson
         booking.$lesson.id = try newLesson.requireID()
-        try await booking.update(on: req.db)
+        try await booking.save(on: req.db)
 
         return .ok
     }

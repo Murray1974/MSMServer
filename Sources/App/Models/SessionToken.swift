@@ -1,6 +1,6 @@
 import Vapor
 import Fluent
-import CryptoKit
+
 
 /// Represents an opaque session token (like a bearer token).
 /// The raw token is only shown once upon creation — only the hash is stored in the database.

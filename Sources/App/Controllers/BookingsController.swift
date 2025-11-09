@@ -192,7 +192,18 @@ struct BookingsController: RouteCollection {
         booking.$cancelledBy.id = requesterID
         booking.cancelledAt = Date()
         try await booking.delete(on: req.db) // sets deleted_at via @Timestamp(on: .delete)
-        return .noContent
+        // Realtime: notify clients that this slot was cancelled (no longer available to this booking)
+        let lesson = try await booking.$lesson.get(on: req.db)
+        let update = AvailabilityUpdate(
+            action: "slot.available",
+            id: try lesson.requireID(),
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: lesson.capacity
+        )
+        req.application.availabilityHub.broadcast(update)
+        return .ok
     }
 
     // MARK: New endpoints
@@ -232,6 +243,17 @@ struct BookingsController: RouteCollection {
         booking.cancelledAt = nil
         booking.$cancelledBy.id = nil
         try await booking.save(on: req.db) // restore fields
+        // Realtime: booking restored -> treat as booked
+        let lesson = try await booking.$lesson.get(on: req.db)
+        let update = AvailabilityUpdate(
+            action: "slot.booked",
+            id: try lesson.requireID(),
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: lesson.capacity
+        )
+        req.application.availabilityHub.broadcast(update)
 
         return .noContent
     }
