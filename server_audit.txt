@@ -1,0 +1,17 @@
+Sources/App/Realtime/AvailabilityHub.swift:34:    func broadcast(_ update: AvailabilityUpdate) {
+Sources/App/Realtime/AvailabilityHub.swift:54:    var availabilityHub: AvailabilityHub {
+Sources/App/routes.swift:23:        app.availabilityHub.add(ws)
+Sources/App/routes.swift:40:    app.webSocket("ws", "instructor") { req, ws in instructorWSHandler(req, ws) }
+Sources/App/routes.swift:42:    app.webSocket("ws", "availability") { req, ws in instructorWSHandler(req, ws) }
+Sources/App/routes.swift:63:        req.application.availabilityHub.broadcast(msg)
+Sources/App/routes.swift:77:        req.application.availabilityHub.broadcast(msg)
+Sources/App/routes.swift:81:    app.post("admin", "test-broadcast") { req async throws -> HTTPStatus in
+Sources/App/routes.swift:107:        req.application.availabilityHub.broadcast(msg)
+Sources/App/routes.swift:149:        req.application.availabilityHub.broadcast(update)
+Sources/App/routes.swift:225:                req.application.availabilityHub.broadcast(update)
+Sources/App/routes.swift:253:                    req.application.availabilityHub.broadcast(update)
+Sources/App/Services/WebSocketBroadcast.swift:16:            self.instructorHub.broadcast(text)     // ✅  // <-- your existing hub
+Sources/App/Services/WebSocketHub.swift:16:    func broadcast(_ text: String) {
+Sources/App/Services/WebSocketHub.swift:25:    var instructorHub: WebSocketHub {
+Sources/App/Controllers/LessonAdminController.swift:81:        req.application.availabilityHub.broadcast(update)
+Sources/App/Controllers/BookingsController.swift:262:        req.application.availabilityHub.broadcast(update)

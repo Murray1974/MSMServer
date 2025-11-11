@@ -38,8 +38,6 @@ public func routes(_ app: Application) throws {
 
     // Primary route used by MSM Agent
     app.webSocket("ws", "instructor") { req, ws in instructorWSHandler(req, ws) }
-    // Alias kept for backwards-compatibility
-    app.webSocket("ws", "availability") { req, ws in instructorWSHandler(req, ws) }
     
     // Route listing for diagnostics (DEBUG only)
     #if DEBUG
