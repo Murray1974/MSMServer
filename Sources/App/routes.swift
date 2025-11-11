@@ -8,7 +8,7 @@ public func routes(_ app: Application) throws {
     // MARK: - Realtime Availability WebSocket (session cookie presence)
     // This version compiles without requiring User: SessionAuthenticatable.
     // It simply checks for a Vapor session cookie or active session and closes if missing.
-    let instructorWSHandler: (Request, WebSocket) -> Void = { req, ws in
+    let instructorWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
         let hasSessionCookie = req.cookies["vapor-session"] != nil
         let hasSessionObject = (req.session.id != nil)
         guard hasSessionCookie || hasSessionObject else {
@@ -38,7 +38,40 @@ public func routes(_ app: Application) throws {
 
     // Primary route used by MSM Agent
     app.webSocket("ws", "instructor") { req, ws in instructorWSHandler(req, ws) }
+
+    // Student WebSocket (Phase 2)
+    app.webSocket("ws", "student") { req, ws in
+        studentWSHandler(req, ws)
+    }
     
+    // Student hub handler: mirrors instructor but registers into studentHub
+    @Sendable func studentWSHandler(_ req: Request, _ ws: WebSocket) {
+        let hasSessionCookie = req.cookies["vapor-session"] != nil
+        let hasSessionObject = (req.session.id != nil)
+        guard hasSessionCookie || hasSessionObject else {
+            req.logger.debug("WS denied (student): no session cookie present")
+            _ = ws.close(code: .policyViolation)
+            return
+        }
+
+        req.logger.info("WS connected (student/session ok)")
+        // Register this socket in the student hub so broadcasts reach student clients
+        req.application.studentHub.add(ws)
+
+        // Send a hello so student clients can confirm connection
+        ws.send(#"{"type":"hello","message":"connected"}"#)
+
+        ws.onText { ws, text in
+            req.logger.info("WS(student) <- \(text)")
+            ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+        }
+
+        ws.onClose.whenComplete { _ in
+            req.logger.info("WS closed (student)")
+            req.application.studentHub.remove(ws)
+        }
+    }
+
     // Route listing for diagnostics (DEBUG only)
     #if DEBUG
     app.get("_routes") { req in

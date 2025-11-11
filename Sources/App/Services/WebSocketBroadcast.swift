@@ -8,16 +8,37 @@ struct BroadcastEvent: Codable {
 }
 
 extension Application {
-    /// Send a simple event to all connected instructor-agent websocket clients.
+    /// Audience for broadcasted events
+    enum BroadcastAudience {
+        case instructors
+        case students
+        case all
+    }
+
+    /// Backwards-compatible convenience (defaults to instructors only)
     func broadcastEvent(type: String, title: String, message: String) {
+        broadcastEvent(type: type, title: title, message: message, to: .instructors)
+    }
+
+    /// Send an event to a specific audience (instructors, students, or both).
+    func broadcastEvent(type: String, title: String, message: String, to audience: BroadcastAudience) {
         let payload = BroadcastEvent(type: type, title: title, message: message)
-        if let data = try? JSONEncoder().encode(payload),
-           let text = String(data: data, encoding: .utf8) {
-            self.instructorHub.broadcast(text)     // ✅  // <-- your existing hub
-            self.logger.info("Broadcasted: \(text)")
-        } else {
+        guard let data = try? JSONEncoder().encode(payload),
+              let text = String(data: data, encoding: .utf8) else {
             self.logger.warning("Broadcast encode failed: type=\(type) title=\(title)")
+            return
         }
+
+        switch audience {
+        case .instructors:
+            self.instructorHub.broadcast(text)
+        case .students:
+            self.studentHub.broadcast(text)
+        case .all:
+            self.instructorHub.broadcast(text)
+            self.studentHub.broadcast(text)
+        }
+        self.logger.info("Broadcasted(\(audience)): \(text)")
     }
 }
 

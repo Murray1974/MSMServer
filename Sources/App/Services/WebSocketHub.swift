@@ -31,4 +31,13 @@ extension Application {
         }
         set { storage[InstructorHubKey.self] = newValue }
     }
+
+    // Student-facing hub (Phase 2): mirrors instructor hub but used for student clients (/ws/student)
+    var studentHub: WebSocketHub {
+        struct StudentHubKey: StorageKey { typealias Value = WebSocketHub }
+        if let hub = storage[StudentHubKey.self] { return hub }
+        let hub = WebSocketHub()
+        storage[StudentHubKey.self] = hub
+        return hub
+    }
 }
