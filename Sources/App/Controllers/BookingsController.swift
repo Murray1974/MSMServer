@@ -192,23 +192,8 @@ struct BookingsController: RouteCollection {
         booking.$cancelledBy.id = requesterID
         booking.cancelledAt = Date()
         try await booking.delete(on: req.db) // sets deleted_at via @Timestamp(on: .delete)
-        // Realtime: booking cancelled (admin/instructor) -> notify & re-advertise slot
         let lesson = try await booking.$lesson.get(on: req.db)
-        let when = niceDateRange(start: lesson.startsAt, end: lesson.endsAt)
-        
-        // 1) Tell agents a booking was cancelled
-        req.application.broadcastEvent(
-            type: "slot.cancelled",
-            title: "Booking cancelled",
-            message: when
-        )
-        
-        // 2) Also announce the slot is available again (optional UI refresh)
-        req.application.broadcastEvent(
-            type: "slot.created",
-            title: "Slot available again",
-            message: when
-        )
+        req.broadcastCancelled(for: lesson)
         return .ok
     }
 
@@ -249,17 +234,8 @@ struct BookingsController: RouteCollection {
         booking.cancelledAt = nil
         booking.$cancelledBy.id = nil
         try await booking.save(on: req.db) // restore fields
-        // Realtime: booking restored -> treat as booked
         let lesson = try await booking.$lesson.get(on: req.db)
-        let update = AvailabilityUpdate(
-            action: "slot.booked",
-            id: try lesson.requireID(),
-            title: lesson.title,
-            startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt,
-            capacity: lesson.capacity
-        )
-        req.application.availabilityHub.broadcast(update)
+        req.broadcastRestored(for: lesson)
 
         return .noContent
     }
@@ -310,5 +286,66 @@ struct BookingsController: RouteCollection {
             deletedAt: booking.deletedAt,
             cancelledBy: cancelledByPublic
         )
+    }
+
+} // End of struct BookingsController
+
+// MARK: - Helper extension for broadcasting booking events
+extension Request {
+    /// Broadcast a "slot.booked" event for the given lesson.
+    /// Call this right after a booking has been created/saved.
+    func broadcastBooked(for lesson: Lesson) throws {
+        let update = AvailabilityUpdate(
+            action: "slot.booked",
+            id: try lesson.requireID(),
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: lesson.capacity
+        )
+        self.application.availabilityHub.broadcast(update)
+    }
+}
+
+extension Request {
+    /// Broadcast a single "slot.rescheduled" event showing the old → new time window.
+    /// Use this after a successful reschedule (once the DB changes are saved).
+    func broadcastRescheduled(old: Lesson, new: Lesson) {
+        let update = AvailabilityUpdate(
+            action: "slot.rescheduled",
+            id: (try? new.requireID()) ?? (try? old.requireID()) ?? UUID(),
+            title: new.title,
+            startsAt: new.startsAt,
+            endsAt: new.endsAt,
+            capacity: new.capacity
+        )
+        self.application.availabilityHub.broadcast(update)
+        self.logger.info("WS broadcast: slot.rescheduled sent for \(update.id)")
+    }
+
+    func broadcastCancelled(for lesson: Lesson) {
+        let update = AvailabilityUpdate(
+            action: "slot.cancelled",
+            id: (try? lesson.requireID()) ?? UUID(),
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: lesson.capacity
+        )
+        self.application.availabilityHub.broadcast(update)
+        self.logger.info("WS broadcast: slot.cancelled sent for \(update.id)")
+    }
+
+    func broadcastRestored(for lesson: Lesson) {
+        let update = AvailabilityUpdate(
+            action: "booking.restored",
+            id: (try? lesson.requireID()) ?? UUID(),
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: lesson.capacity
+        )
+        self.application.availabilityHub.broadcast(update)
+        self.logger.info("WS broadcast: booking.restored sent for \(update.id)")
     }
 }

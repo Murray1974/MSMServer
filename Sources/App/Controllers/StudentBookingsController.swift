@@ -76,9 +76,7 @@ struct StudentBookingsController: RouteCollection {
 
         // Realtime: notify agents that this slot was booked
         let bookedLesson = try await booking.$lesson.get(on: req.db)
-        let title = "Slot booked"
-        let msg   = niceDateRange(start: bookedLesson.startsAt, end: bookedLesson.endsAt)
-        req.application.broadcastEvent(type: "slot.booked", title: title, message: msg)
+        try req.broadcastBooked(for: bookedLesson)
 
         return .created
     }
@@ -112,21 +110,7 @@ struct StudentBookingsController: RouteCollection {
         try await evt.save(on: req.db)
         // Realtime: booking cancelled -> notify and re-advertise slot
         let freedLesson = try await booking.$lesson.get(on: req.db)
-        let when = niceDateRange(start: freedLesson.startsAt, end: freedLesson.endsAt)
-        
-        // 1) Tell agents a booking was cancelled
-        req.application.broadcastEvent(
-            type: "slot.cancelled",
-            title: "Booking cancelled",
-            message: when
-        )
-        
-        // 2) Also announce the slot is available again (optional UI refresh)
-        req.application.broadcastEvent(
-            type: "slot.created",
-            title: "Slot available again",
-            message: when
-        )
+        req.broadcastCancelled(for: freedLesson)
         return .ok
     }
 
@@ -176,9 +160,13 @@ struct StudentBookingsController: RouteCollection {
         //     throw Abort(.conflict, reason: "Lesson is full")
         // }
 
+        // capture the old lesson before changing it (for banner message)
+        let oldLesson = try await booking.$lesson.get(on: req.db)
         // 7. update booking to point at the new lesson
         booking.$lesson.id = try newLesson.requireID()
         try await booking.save(on: req.db)
+        // Realtime: one clean banner for reschedule (old → new)
+        req.broadcastRescheduled(old: oldLesson, new: newLesson)
 
         return .ok
     }
@@ -228,9 +216,15 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.conflict, reason: "That lesson is full")
         }
 
+        // capture old lesson before moving
+        let oldLesson = try await booking.$lesson.get(on: req.db)
+        let newLessonResolved = try await Lesson.find(input.newLessonID, on: req.db)
+            ?? { throw Abort(.notFound, reason: "Target lesson not found") }()
         // 5. perform the reschedule (just move the booking)
-        booking.$lesson.id = input.newLessonID
+        booking.$lesson.id = try newLessonResolved.requireID()
         try await booking.save(on: req.db)
+        // Realtime: one clean banner for reschedule (old → new)
+        req.broadcastRescheduled(old: oldLesson, new: newLessonResolved)
 
         return .ok
     }
