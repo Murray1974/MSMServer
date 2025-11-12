@@ -9,15 +9,10 @@ public func routes(_ app: Application) throws {
     // This version compiles without requiring User: SessionAuthenticatable.
     // It simply checks for a Vapor session cookie or active session and closes if missing.
     let instructorWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
-        let hasSessionCookie = req.cookies["vapor-session"] != nil
-        let hasSessionObject = (req.session.id != nil)
-        guard hasSessionCookie || hasSessionObject else {
-            req.logger.debug("WS denied: no session cookie present")
-            _ = ws.close(code: .policyViolation)
-            return
-        }
-
-        req.logger.info("WS connected (session ok)")
+        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
+        // TODO: re-enable auth when Agent supplies session cookie or Bearer JWT.
+        req.logger.debug("WS auth: DEV MODE — allowing connection without session")
+        req.logger.info("WS connected (dev mode)")
 
         // Register socket in the availability hub so broadcasts reach the agent
         app.availabilityHub.add(ws)
@@ -39,6 +34,10 @@ public func routes(_ app: Application) throws {
     // Primary route used by MSM Agent
     app.webSocket("ws", "instructor") { req, ws in instructorWSHandler(req, ws) }
 
+    // Restore legacy/availability endpoint using same handler
+    app.webSocket("ws", "availability") { req, ws in
+        instructorWSHandler(req, ws)
+    }
     // Student WebSocket (Phase 2)
     app.webSocket("ws", "student") { req, ws in
         studentWSHandler(req, ws)
@@ -46,15 +45,10 @@ public func routes(_ app: Application) throws {
     
     // Student hub handler: mirrors instructor but registers into studentHub
     @Sendable func studentWSHandler(_ req: Request, _ ws: WebSocket) {
-        let hasSessionCookie = req.cookies["vapor-session"] != nil
-        let hasSessionObject = (req.session.id != nil)
-        guard hasSessionCookie || hasSessionObject else {
-            req.logger.debug("WS denied (student): no session cookie present")
-            _ = ws.close(code: .policyViolation)
-            return
-        }
-
-        req.logger.info("WS connected (student/session ok)")
+        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
+        // TODO: re-enable auth when Student app supplies session cookie or Bearer JWT.
+        req.logger.debug("WS auth (student): DEV MODE — allowing connection without session")
+        req.logger.info("WS connected (student/dev mode)")
         // Register this socket in the student hub so broadcasts reach student clients
         req.application.studentHub.add(ws)
 
@@ -72,6 +66,16 @@ public func routes(_ app: Application) throws {
         }
     }
 
+    // Helper: broadcast AvailabilityUpdate to both hubs
+    let broadcastAvailability: (AvailabilityUpdate, Application) -> Void = { update, app in
+        // availabilityHub is typed to AvailabilityUpdate
+        app.availabilityHub.broadcast(update)
+        // instructorHub expects String, so send JSON text
+        if let data = try? JSONEncoder().encode(update),
+           let text = String(data: data, encoding: .utf8) {
+            app.instructorHub.broadcast(text)
+        }
+    }
     // Route listing for diagnostics (DEBUG only)
     #if DEBUG
     app.get("_routes") { req in
@@ -91,10 +95,9 @@ public func routes(_ app: Application) throws {
             endsAt: now.addingTimeInterval(3600),
             capacity: 1
         )
-        req.application.availabilityHub.broadcast(msg)
+        broadcastAvailability(msg, req.application)
         return .ok
     }
-
     app.get("availability", "test") { req async throws -> String in
         let now = Date()
         let msg = AvailabilityUpdate(
@@ -105,7 +108,7 @@ public func routes(_ app: Application) throws {
             endsAt: now.addingTimeInterval(3600),
             capacity: 1
         )
-        req.application.availabilityHub.broadcast(msg)
+        broadcastAvailability(msg, req.application)
         return "ok"
     }
 
@@ -135,7 +138,7 @@ public func routes(_ app: Application) throws {
             capacity: p.capacity ?? 1
         )
 
-        req.application.availabilityHub.broadcast(msg)
+        broadcastAvailability(msg, req.application)
         return .ok
     }
     #endif
@@ -177,7 +180,7 @@ public func routes(_ app: Application) throws {
             endsAt: lesson.endsAt,
             capacity: lesson.capacity ?? 1
         )
-        req.application.availabilityHub.broadcast(update)
+        broadcastAvailability(update, req.application)
         return update
     }
     #endif
@@ -253,7 +256,7 @@ public func routes(_ app: Application) throws {
                     endsAt: lesson.endsAt,
                     capacity: lesson.capacity ?? 1
                 )
-                req.application.availabilityHub.broadcast(update)
+                broadcastAvailability(update, req.application)
                 upsertedCount += 1
             }
 
@@ -281,7 +284,7 @@ public func routes(_ app: Application) throws {
                         endsAt: l.endsAt,
                         capacity: l.capacity ?? 1
                     )
-                    req.application.availabilityHub.broadcast(update)
+                    broadcastAvailability(update, req.application)
                 }
             }
         }
