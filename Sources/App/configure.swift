@@ -23,7 +23,9 @@ public func configure(_ app: Application) throws {
     app.sessions.use(.memory)
     app.middleware.use(SessionsMiddleware(session: app.sessions.driver))
     app.http.server.configuration.hostname = "0.0.0.0"
-
+    
+    app.routes.defaultMaxBodySize = "10mb"
+    
     // register routes
     try app.register(collection: AdminCalendarController())
     try routes(app)
