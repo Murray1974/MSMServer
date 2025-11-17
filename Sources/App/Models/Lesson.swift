@@ -19,6 +19,9 @@ final class Lesson: Model, Content {
     @Field(key: "capacity")
     var capacity: Int
 
+    @Field(key: "calendar_name")
+    var calendarName: String
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -27,12 +30,20 @@ final class Lesson: Model, Content {
 
     init() {}
 
-    init(id: UUID? = nil, title: String, startsAt: Date, endsAt: Date, capacity: Int) {
+    init(
+        id: UUID? = nil,
+        title: String,
+        startsAt: Date,
+        endsAt: Date,
+        capacity: Int,
+        calendarName: String = "Untitled"
+    ) {
         self.id = id
         self.title = title
         self.startsAt = startsAt
         self.endsAt = endsAt
         self.capacity = capacity
+        self.calendarName = calendarName
     }
 }
 

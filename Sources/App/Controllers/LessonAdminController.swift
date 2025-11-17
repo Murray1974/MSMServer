@@ -57,6 +57,7 @@ struct LessonAdminController: RouteCollection {
             var startsAt: Date
             var endsAt: Date
             var capacity: Int?   // 👈 make it optional in the JSON
+            var calendarName: String?
         }
 
         let input = try req.content.decode(Input.self)
@@ -65,7 +66,8 @@ struct LessonAdminController: RouteCollection {
             title: input.title,
             startsAt: input.startsAt,
             endsAt: input.endsAt,
-            capacity: input.capacity ?? 1   // 👈 DEFAULT so build doesn’t fail
+            capacity: input.capacity ?? 1,   // 👈 DEFAULT so build doesn’t fail
+            calendarName: input.calendarName ?? "Untitled"
         )
 
         try await lesson.save(on: req.db)
@@ -94,6 +96,7 @@ struct LessonAdminController: RouteCollection {
             var startsAt: Date
             var endsAt: Date
             var capacity: Int?
+            var calendarName: String?
         }
 
         let input = try req.content.decode(Input.self)
@@ -102,7 +105,8 @@ struct LessonAdminController: RouteCollection {
             title: input.title,
             startsAt: input.startsAt,
             endsAt: input.endsAt,
-            capacity: input.capacity ?? 1
+            capacity: input.capacity ?? 1,
+            calendarName: input.calendarName ?? "Untitled"
         )
 
         try await lesson.save(on: req.db)

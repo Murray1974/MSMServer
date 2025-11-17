@@ -66,14 +66,15 @@ public func routes(_ app: Application) throws {
         }
     }
 
-    // Helper: broadcast AvailabilityUpdate to both hubs
+    // Helper: broadcast AvailabilityUpdate to all relevant hubs
     let broadcastAvailability: (AvailabilityUpdate, Application) -> Void = { update, app in
-        // availabilityHub is typed to AvailabilityUpdate
+        // availabilityHub is typed to AvailabilityUpdate (agent / legacy clients)
         app.availabilityHub.broadcast(update)
-        // instructorHub expects String, so send JSON text
+        // instructorHub & studentHub expect String, so send JSON text
         if let data = try? JSONEncoder().encode(update),
            let text = String(data: data, encoding: .utf8) {
             app.instructorHub.broadcast(text)
+            app.studentHub.broadcast(text)
         }
     }
     // Route listing for diagnostics (DEBUG only)
@@ -203,6 +204,7 @@ public func routes(_ app: Application) throws {
             var endsAt: String
             var title: String?
             var capacity: Int?
+            var calendarName: String?
         }
         struct SyncIn: Content {
             var timezone: String?
@@ -244,6 +246,7 @@ public func routes(_ app: Application) throws {
                 l.endsAt = end
                 l.title = s.title ?? "Unassigned"
                 l.capacity = s.capacity ?? 1
+                l.calendarName = s.calendarName ?? "Untitled"
                 try await l.save(on: req.db)
                 lesson = l
 
@@ -260,11 +263,34 @@ public func routes(_ app: Application) throws {
                 upsertedCount += 1
             }
 
-            // Update simple fields if they changed (title/capacity)
+            // Update simple fields if they changed (title/capacity/calendarName)
             var changed = false
             if let t = s.title, t != lesson.title { lesson.title = t; changed = true }
             if let c = s.capacity, c != lesson.capacity { lesson.capacity = c; changed = true }
-            if changed { try await lesson.save(on: req.db) }
+            if let calName = s.calendarName, calName != lesson.calendarName {
+                lesson.calendarName = calName
+                changed = true
+            }
+            if changed {
+                try await lesson.save(on: req.db)
+
+                // Decide whether this slot should be visible to students based on calendarName.
+                // "Untitled" is treated as the unallocated/available calendar; anything else
+                // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
+                let calendarName = lesson.calendarName ?? "Untitled"
+                let isStudentVisible = (calendarName == "Untitled")
+                let action = isStudentVisible ? "slot.available" : "slot.unavailable"
+
+                let update = AvailabilityUpdate(
+                    action: action,
+                    id: try lesson.requireID(),
+                    title: lesson.title ?? "Unassigned",
+                    startsAt: lesson.startsAt,
+                    endsAt: lesson.endsAt,
+                    capacity: lesson.capacity ?? 1
+                )
+                broadcastAvailability(update, req.application)
+            }
 
             if let id = lesson.id { keepIDs.insert(id) }
         }
@@ -277,7 +303,7 @@ public func routes(_ app: Application) throws {
                     prunedCount += 1
                     // Notify clients this slot is gone
                     let update = AvailabilityUpdate(
-                        action: "slot.booked", // treat as no longer available
+                        action: "slot.unavailable", // treat as no longer available
                         id: try l.requireID(),
                         title: l.title ?? "Unassigned",
                         startsAt: l.startsAt,

@@ -13,6 +13,7 @@ struct StudentLessonController: RouteCollection {
         // NOTE: your model uses `startsAt` (not `startAt`)
         let futureLessons = try await Lesson.query(on: req.db)
             .filter(\.$startsAt > now)
+            .filter(\.$calendarName == "Untitled")
             .all()
 
         var available: [Lesson] = []
