@@ -24,6 +24,10 @@ public func configure(_ app: Application) throws {
     app.middleware.use(SessionsMiddleware(session: app.sessions.driver))
     app.http.server.configuration.hostname = "0.0.0.0"
     app.migrations.add(AddCalendarNameToLesson())
+    app.migrations.add(CreateStudentProfile())
+    app.migrations.add(AddDurationAndActualEndsToBooking())
+    app.migrations.add(AddPickupLocationToBooking())
+    app.migrations.add(AddPickupAddressesToStudentProfiles())
     
     app.routes.defaultMaxBodySize = "10mb"
     

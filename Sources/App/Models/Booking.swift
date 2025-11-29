@@ -1,53 +1,64 @@
 import Vapor
 import Fluent
 
-final class Booking: Model, Content {
+final class Booking: Model, Content, @unchecked Sendable {
     static let schema = "bookings"
 
     @ID(key: .id)
     var id: UUID?
 
+    // The student who owns this booking.
     @Parent(key: "user_id")
     var user: User
 
+    // The lesson slot that this booking is attached to.
     @Parent(key: "lesson_id")
     var lesson: Lesson
 
-    // Audit trail
-    @OptionalParent(key: "cancelled_by")
-    var cancelledBy: User?
+    /// Optional duration in minutes for this booking. When nil, the full
+    /// lesson duration is assumed.
+    @OptionalField(key: "duration_minutes")
+    var durationMinutes: Int?
 
-    @Timestamp(key: "cancelled_at", on: .none)
-    var cancelledAt: Date?
+    /// Optional override for when this booking actually ends. When nil,
+    /// the lesson's `endsAt` is used instead.
+    @OptionalField(key: "actual_ends_at")
+    var actualEndsAt: Date?
 
-    // Soft-delete column; calling `delete(on:)` will set this (not hard-delete)
-    @Timestamp(key: "deleted_at", on: .delete)
-    var deletedAt: Date?
-
+    /// When the booking was created.
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
-    init() {}
+    /// Soft-delete timestamp used for cancelled bookings.
+    @Timestamp(key: "deleted_at", on: .delete)
+    var deletedAt: Date?
 
-    init(id: UUID? = nil, userID: User.IDValue, lessonID: Lesson.IDValue) {
+    /// Optional free-form pickup location for this specific booking.
+    @OptionalField(key: "pickup_location")
+    var pickupLocation: String?
+
+    /// Optional source for the pickup location, e.g. "home", "work",
+    /// "college", or "other".
+    @OptionalField(key: "pickup_source")
+    var pickupSource: String?
+
+    init() { }
+
+    init(
+        id: UUID? = nil,
+        userID: UUID,
+        lessonID: UUID,
+        durationMinutes: Int? = nil,
+        actualEndsAt: Date? = nil,
+        pickupLocation: String? = nil,
+        pickupSource: String? = nil
+    ) {
         self.id = id
         self.$user.id = userID
         self.$lesson.id = lessonID
+        self.durationMinutes = durationMinutes
+        self.actualEndsAt = actualEndsAt
+        self.pickupLocation = pickupLocation
+        self.pickupSource = pickupSource
     }
 }
-
-extension Booking {
-    struct Public: Content {
-        let id: UUID?
-        let bookedAt: Date?
-        let lesson: Lesson.Public
-    }
-
-    var asPublicMinimal: Public {
-        .init(id: id, bookedAt: createdAt, lesson: lesson.asPublic(available: 0))
-    }
-}
-
-
-// Fluent models are not Sendable by default
-extension Booking: @unchecked Sendable {}

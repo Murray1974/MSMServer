@@ -8,7 +8,9 @@ struct CreateBooking: Migration {
                    .references("users", "id", onDelete: .cascade))
             .field("lesson_id", .uuid, .required,
                    .references("lessons", "id", onDelete: .cascade))
-            .field("created_at", .datetime) // matches @Timestamp(key: "created_at", on: .create)
+            .field("created_at", .datetime)
+            .field("pickup_location", .string)
+            .field("pickup_source", .string)
             .unique(on: "user_id", "lesson_id") // prevent duplicates (optional but recommended)
             .create()
     }

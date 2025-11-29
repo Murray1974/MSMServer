@@ -60,7 +60,7 @@ struct BookingsController: RouteCollection {
 
     /// GET /bookings/me?start=...&end=...&page=&per=
     /// Filters by the *lesson* startsAt if start/end are provided.
-    func myBookings(req: Request) async throws -> Page<Booking.Public> {
+    func myBookings(req: Request) async throws -> Page<Booking> {
         let user = try req.auth.require(User.self)
         let uid  = try user.requireID()
         let q    = try? req.query.decode(PageRangeQuery.self)
@@ -87,7 +87,7 @@ struct BookingsController: RouteCollection {
             .all()
 
         return Page(
-            items: rows.map { $0.asPublicMinimal },
+            items: rows,
             page: page, per: per,
             total: total,
             totalPages: Int(ceil(Double(total) / Double(per)))
@@ -96,7 +96,7 @@ struct BookingsController: RouteCollection {
 
     /// GET /bookings/me/past?start=...&end=...&page=&per=
     /// Shows bookings where Lesson.endsAt < now. Range applies to *endsAt*.
-    func myPastBookings(req: Request) async throws -> Page<Booking.Public> {
+    func myPastBookings(req: Request) async throws -> Page<Booking> {
         let user = try req.auth.require(User.self)
         let uid  = try user.requireID()
         let now  = Date()
@@ -123,7 +123,7 @@ struct BookingsController: RouteCollection {
             .all()
 
         return Page(
-            items: rows.map { $0.asPublicMinimal },
+            items: rows,
             page: page, per: per,
             total: total,
             totalPages: Int(ceil(Double(total) / Double(per)))
@@ -132,7 +132,7 @@ struct BookingsController: RouteCollection {
 
     /// GET /bookings/me/upcoming?start=...&end=...&page=&per=
     /// Shows bookings where Lesson.endsAt ≥ now. Range applies to *startsAt*.
-    func myUpcomingBookings(req: Request) async throws -> Page<Booking.Public> {
+    func myUpcomingBookings(req: Request) async throws -> Page<Booking> {
         let user = try req.auth.require(User.self)
         let uid  = try user.requireID()
         let now  = Date()
@@ -159,7 +159,7 @@ struct BookingsController: RouteCollection {
             .all()
 
         return Page(
-            items: rows.map { $0.asPublicMinimal },
+            items: rows,
             page: page, per: per,
             total: total,
             totalPages: Int(ceil(Double(total) / Double(per)))
@@ -185,12 +185,10 @@ struct BookingsController: RouteCollection {
         }
 
         // Already cancelled/soft-deleted?
-        if booking.deletedAt != nil || booking.cancelledAt != nil {
+        if booking.deletedAt != nil {
             return .noContent
         }
 
-        booking.$cancelledBy.id = requesterID
-        booking.cancelledAt = Date()
         try await booking.delete(on: req.db) // sets deleted_at via @Timestamp(on: .delete)
         let lesson = try await booking.$lesson.get(on: req.db)
         req.broadcastCancelled(for: lesson)
@@ -224,15 +222,13 @@ struct BookingsController: RouteCollection {
             throw Abort(.forbidden, reason: "You can only restore your own bookings.")
         }
 
-        // If not deleted/cancelled, nothing to do
-        if booking.deletedAt == nil && booking.cancelledAt == nil {
+        // If not deleted, nothing to do
+        if booking.deletedAt == nil {
             return .noContent
         }
 
-        // Clear audit + soft-delete flag
+        // Clear soft-delete flag
         booking.deletedAt = nil
-        booking.cancelledAt = nil
-        booking.$cancelledBy.id = nil
         try await booking.save(on: req.db) // restore fields
         let lesson = try await booking.$lesson.get(on: req.db)
         req.broadcastRestored(for: lesson)
@@ -262,7 +258,6 @@ struct BookingsController: RouteCollection {
         // Include soft-deleted rows and eager load cancelledBy user
         guard let booking = try await Booking.query(on: req.db)
             .withDeleted()
-            .with(\.$cancelledBy)
             .filter(\.$id == id)
             .first()
         else {
@@ -274,15 +269,15 @@ struct BookingsController: RouteCollection {
             throw Abort(.forbidden, reason: "You can only see history for your own bookings.")
         }
 
-        // Resolve optional parent safely (works whether or not it's eager-loaded)
-        let cancelledByPublic: User.Public? = try await booking.$cancelledBy.get(on: req.db)?.asPublic
+        // No separate cancelledBy tracking for now.
+        let cancelledByPublic: User.Public? = nil
 
         return BookingHistory(
             id: booking.id,
             userID: booking.$user.id,
             lessonID: booking.$lesson.id,
             bookedAt: booking.createdAt,
-            cancelledAt: booking.cancelledAt,
+            cancelledAt: nil,
             deletedAt: booking.deletedAt,
             cancelledBy: cancelledByPublic
         )

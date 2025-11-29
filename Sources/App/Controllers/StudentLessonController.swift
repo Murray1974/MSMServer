@@ -3,27 +3,36 @@ import Fluent
 
 struct StudentLessonController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let student = routes.grouped("student")
+
+        let student = routes
+            .grouped("student")
+            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+
         student.get("lessons", "available", use: availableLessons)
     }
 
     func availableLessons(_ req: Request) async throws -> [Lesson] {
         let now = Date()
 
-        // NOTE: your model uses `startsAt` (not `startAt`)
-        let futureLessons = try await Lesson.query(on: req.db)
+        // 1) Start with all future lessons on the "Untitled" calendar.
+        let candidates = try await Lesson.query(on: req.db)
             .filter(\.$startsAt > now)
             .filter(\.$calendarName == "Untitled")
             .all()
 
+        // 2) For each lesson, check how many active bookings it already has and only
+        //    return those that are not yet full (respecting capacity, defaulting to 1).
         var available: [Lesson] = []
-        for lesson in futureLessons {
-            // check if this lesson already has a booking
-            let hasBooking = try await Booking.query(on: req.db)
-                .filter(\.$lesson.$id == lesson.requireID())
-                .first() != nil
+        for lesson in candidates {
+            guard let lessonID = lesson.id else { continue }
 
-            if !hasBooking {
+            let existingCount = try await Booking.query(on: req.db)
+                .filter(\.$lesson.$id == lessonID)
+                .filter(\.$deletedAt == nil)
+                .count()
+
+            let capacity = lesson.capacity ?? 1
+            if existingCount < capacity {
                 available.append(lesson)
             }
         }

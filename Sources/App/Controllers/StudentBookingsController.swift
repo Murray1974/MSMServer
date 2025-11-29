@@ -11,42 +11,58 @@ struct StudentBookingsController: RouteCollection {
         // /student/bookings
         let bookings = student.grouped("bookings")
 
-        // POST /student/bookings  { "lessonID": "…" }
+        // POST /student/bookings
         bookings.post(use: createBooking)
 
-        // GET /student/bookings  (list my bookings)
+        // GET /student/bookings
         bookings.get(use: myBookings)
 
         // /student/bookings/:bookingID/*
         let byID = bookings.grouped(":bookingID")
 
-        // DELETE /student/bookings/:bookingID      (cancel own booking)
+        // DELETE /student/bookings/:bookingID
         byID.delete(use: cancelBooking)
 
-        // POST /student/bookings/:bookingID/cancel (alternate action-style cancel)
+        // POST /student/bookings/:bookingID/cancel
         byID.post("cancel", use: cancelBooking)
 
         // POST /student/bookings/:bookingID/reschedule
         byID.post("reschedule", use: rescheduleBooking)
+
+        // PATCH /student/bookings/:bookingID/duration  ← NEW ROUTE
+        byID.patch("duration", use: updateDuration)
+
+        // PATCH /student/bookings/:bookingID/pickup
+        byID.patch("pickup", use: updatePickup)
     }
+
+    // MARK: INPUT STRUCTS
 
     struct CreateBookingInput: Content {
         let lessonID: UUID
+        let durationMinutes: Int?
+        let startOffsetMinutes: Int?
     }
 
-    // MARK: - create booking
+    struct UpdateDurationInput: Content {
+        let durationMinutes: Int
+        let startOffsetMinutes: Int?
+    }
+
+    // MARK: CREATE BOOKING
+
     func createBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
 
         let input = try req.content.decode(CreateBookingInput.self)
+        let offsetMinutes = input.startOffsetMinutes ?? 0
 
-        // 1) load lesson
         guard let lesson = try await Lesson.find(input.lessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
-        // 2) prevent duplicate booking for same user+lesson
+        // Prevent duplicates
         let alreadyBooked = try await Booking.query(on: req.db)
             .filter(\.$user.$id == userID)
             .filter(\.$lesson.$id == input.lessonID)
@@ -57,7 +73,7 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.conflict, reason: "You have already booked this lesson")
         }
 
-        // 3) check capacity
+        // Capacity check
         let existingCount = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == input.lessonID)
             .filter(\.$deletedAt == nil)
@@ -68,20 +84,59 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.conflict, reason: "Lesson is full")
         }
 
-        // 4) create booking
-        let booking = Booking()
-        booking.$user.id = userID
-        booking.$lesson.id = input.lessonID
+        // Check duration+offset inside slot
+        if let mins = input.durationMinutes {
+            let slotMinutes = Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60)
+            if offsetMinutes < 0 || offsetMinutes + mins > slotMinutes {
+                throw Abort(.badRequest, reason: "Requested duration/offset exceeds lesson length (\(slotMinutes)m)")
+            }
+        }
+
+        // Build the booking
+        var actualEndsAt: Date? = nil
+        if let mins = input.durationMinutes {
+            let effectiveStart = lesson.startsAt.addingTimeInterval(Double(offsetMinutes) * 60)
+            actualEndsAt = effectiveStart.addingTimeInterval(Double(mins) * 60)
+        }
+
+        // Default pickup from StudentProfile
+        var defaultPickupSource: String? = nil
+        var defaultPickupLocation: String? = nil
+
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        {
+            let home = profile.pickupHome?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let work = profile.pickupWork?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let college = profile.pickupCollege?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let school = profile.pickupSchool?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let a = home, !a.isEmpty { defaultPickupSource = "home"; defaultPickupLocation = a }
+            else if let a = work, !a.isEmpty { defaultPickupSource = "work"; defaultPickupLocation = a }
+            else if let a = college, !a.isEmpty { defaultPickupSource = "college"; defaultPickupLocation = a }
+            else if let a = school, !a.isEmpty { defaultPickupSource = "school"; defaultPickupLocation = a }
+        }
+
+        let booking = Booking(
+            userID: userID,
+            lessonID: input.lessonID,
+            durationMinutes: input.durationMinutes,
+            actualEndsAt: actualEndsAt
+        )
+        booking.pickupSource = defaultPickupSource
+        booking.pickupLocation = defaultPickupLocation
+
         try await booking.save(on: req.db)
 
-        // Realtime: notify agents that this slot was booked
         let bookedLesson = try await booking.$lesson.get(on: req.db)
         try req.broadcastBooked(for: bookedLesson)
 
         return .created
     }
 
-    // MARK: - cancel own booking
+    // MARK: CANCEL BOOKING
+
     func cancelBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
@@ -90,7 +145,6 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.badRequest, reason: "Missing booking ID")
         }
 
-        // only cancel booking that belongs to this user
         guard let booking = try await Booking.query(on: req.db)
             .filter(\.$id == bookingID)
             .filter(\.$user.$id == userID)
@@ -100,7 +154,7 @@ struct StudentBookingsController: RouteCollection {
         }
 
         try await booking.delete(on: req.db)
-        // record event for audit/activity feed
+
         let evt = BookingEvent(
             type: "student.cancelled",
             userID: try user.requireID(),
@@ -108,128 +162,123 @@ struct StudentBookingsController: RouteCollection {
             bookingID: try booking.requireID()
         )
         try await evt.save(on: req.db)
-        // Realtime: booking cancelled -> notify and re-advertise slot
+
         let freedLesson = try await booking.$lesson.get(on: req.db)
         req.broadcastCancelled(for: freedLesson)
         return .ok
     }
 
+    // MARK: RESCHEDULE
+
     struct RescheduleInput: Content {
         let newLessonID: UUID
     }
 
-    // POST /bookings/reschedule/:bookingID
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
-        // 1. who is this?
         let user = try req.auth.require(User.self)
 
-        // 2. which booking?
         guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Missing bookingID in path")
+            throw Abort(.badRequest, reason: "Missing bookingID")
         }
 
-        // 3. what lesson do they want instead?
-        struct RescheduleBody: Content {
-            let lessonID: UUID
-        }
-        let body = try req.content.decode(RescheduleBody.self)
+        let body = try req.content.decode(RescheduleInput.self)
 
-        // 4. load the booking, make sure it’s theirs and not deleted
-        guard let booking = try await Booking
-            .query(on: req.db)
+        guard let booking = try await Booking.query(on: req.db)
             .filter(\.$id == bookingID)
             .filter(\.$user.$id == user.requireID())
             .filter(\.$deletedAt == nil)
             .with(\.$lesson)
             .first()
         else {
-            throw Abort(.notFound, reason: "Booking not found for this user")
+            throw Abort(.notFound, reason: "Booking not found")
         }
 
-        // 5. load the new lesson
-        guard let newLesson = try await Lesson
-            .query(on: req.db)
-            .filter(\.$id == body.lessonID)
-            .first()
-        else {
+        guard let newLesson = try await Lesson.find(body.newLessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson to move to not found")
         }
 
-        // 6. (optional) capacity check — skip if you don’t want it right now
-        // if let cap = newLesson.capacity, cap <= 0 {
-        //     throw Abort(.conflict, reason: "Lesson is full")
-        // }
-
-        // capture the old lesson before changing it (for banner message)
         let oldLesson = try await booking.$lesson.get(on: req.db)
-        // 7. update booking to point at the new lesson
+
         booking.$lesson.id = try newLesson.requireID()
+
+        if let mins = booking.durationMinutes {
+            let newStart = newLesson.startsAt
+            booking.actualEndsAt = newStart.addingTimeInterval(Double(mins) * 60)
+        } else {
+            booking.actualEndsAt = nil
+        }
+
         try await booking.save(on: req.db)
-        // Realtime: one clean banner for reschedule (old → new)
         req.broadcastRescheduled(old: oldLesson, new: newLesson)
 
         return .ok
     }
-    
-    // MARK: POST /me/bookings/:bookingID/reschedule
-    func rescheduleMyBooking(_ req: Request) async throws -> HTTPStatus {
-        struct Input: Content {
-            var newLessonID: UUID
-        }
 
+    // MARK: UPDATE DURATION (NEW)
+
+    func updateDuration(_ req: Request) async throws -> StudentBookingDTO {
         let user = try req.auth.require(User.self)
         let bookingID = try req.parameters.require("bookingID", as: UUID.self)
-        let input = try req.content.decode(Input.self)
+        let input = try req.content.decode(UpdateDurationInput.self)
 
-        // 1. load booking & check ownership
-        guard let booking = try await Booking.find(bookingID, on: req.db) else {
-            throw Abort(.notFound, reason: "Booking not found")
-        }
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .with(\.$lesson)
+            .first()
+        else { throw Abort(.notFound) }
+
         guard booking.$user.id == user.id else {
             throw Abort(.forbidden, reason: "This booking does not belong to you")
         }
 
-        // 2. load target lesson
-        guard let newLesson = try await Lesson.find(input.newLessonID, on: req.db) else {
-            throw Abort(.notFound, reason: "Target lesson not found")
+        guard let lesson = booking.$lesson.value else {
+            throw Abort(.internalServerError, reason: "Booking missing lesson")
         }
 
-        // 3. check user is not already booked on target lesson
-        let already = try await Booking.query(on: req.db)
-            .filter(\.$user.$id == user.requireID())
-            .filter(\.$lesson.$id == input.newLessonID)
-            .filter(\.$deletedAt == nil)
-            .first()
+        let slotMinutes = Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60)
 
-        if already != nil {
-            throw Abort(.conflict, reason: "You are already booked on that lesson")
+        // Determine effective start
+        let effectiveStart: Date
+        if let offset = input.startOffsetMinutes {
+            effectiveStart = lesson.startsAt.addingTimeInterval(Double(offset) * 60)
+        } else if let mins = booking.durationMinutes,
+                  let actualEnd = booking.actualEndsAt {
+            effectiveStart = actualEnd.addingTimeInterval(Double(-mins) * 60)
+        } else {
+            effectiveStart = lesson.startsAt
         }
 
-        // 4. capacity check (same logic as admin)
-        let capacity = newLesson.capacity ?? 1
-        let activeCount = try await Booking.query(on: req.db)
-            .filter(\.$lesson.$id == input.newLessonID)
-            .filter(\.$deletedAt == nil)
-            .count()
+        let newOffsetMinutes = Int(effectiveStart.timeIntervalSince(lesson.startsAt) / 60)
 
-        guard activeCount < capacity else {
-            throw Abort(.conflict, reason: "That lesson is full")
+        if newOffsetMinutes < 0 ||
+            newOffsetMinutes + input.durationMinutes > slotMinutes
+        {
+            throw Abort(.badRequest, reason: "Requested duration/offset exceeds lesson slot.")
         }
 
-        // capture old lesson before moving
-        let oldLesson = try await booking.$lesson.get(on: req.db)
-        let newLessonResolved = try await Lesson.find(input.newLessonID, on: req.db)
-            ?? { throw Abort(.notFound, reason: "Target lesson not found") }()
-        // 5. perform the reschedule (just move the booking)
-        booking.$lesson.id = try newLessonResolved.requireID()
+        let newEndsAt = effectiveStart.addingTimeInterval(Double(input.durationMinutes) * 60)
+
+        booking.durationMinutes = input.durationMinutes
+        booking.actualEndsAt = newEndsAt
+
         try await booking.save(on: req.db)
-        // Realtime: one clean banner for reschedule (old → new)
-        req.broadcastRescheduled(old: oldLesson, new: newLessonResolved)
 
-        return .ok
+        return StudentBookingDTO(
+            id: booking.id,
+            lessonID: booking.$lesson.id,
+            lessonTitle: lesson.title,
+            startsAt: effectiveStart,
+            endsAt: newEndsAt,
+            status: "active",
+            pickupLocation: booking.pickupLocation,
+            pickupSource: booking.pickupSource,
+            lessonStartsAt: lesson.startsAt,
+            lessonEndsAt: lesson.endsAt
+        )
     }
-    
-    // MARK: - get my bookings
+
+    // MARK: GET MY BOOKINGS
+
     func myBookings(_ req: Request) async throws -> [StudentBookingDTO] {
         struct Query: Decodable {
             var scope: String?
@@ -238,24 +287,28 @@ struct StudentBookingsController: RouteCollection {
 
         let q = try req.query.decode(Query.self)
         let user = try req.auth.require(User.self)
+
         let userID = try user.requireID()
+        let now = Date()
 
         var query = Booking.query(on: req.db)
+            .withDeleted()
             .filter(\.$user.$id == userID)
             .with(\.$lesson)
 
-        let now = Date()
         switch q.scope?.lowercased() {
         case "upcoming":
             query = query
                 .join(parent: \Booking.$lesson)
                 .filter(Lesson.self, \.$startsAt >= now)
                 .sort(Lesson.self, \.$startsAt, .ascending)
+
         case "past":
             query = query
                 .join(parent: \Booking.$lesson)
                 .filter(Lesson.self, \.$startsAt < now)
                 .sort(Lesson.self, \.$startsAt, .descending)
+
         case "cancelled":
             query = Booking.query(on: req.db)
                 .withDeleted()
@@ -263,6 +316,7 @@ struct StudentBookingsController: RouteCollection {
                 .filter(\.$deletedAt != nil)
                 .with(\.$lesson)
                 .sort(\.$deletedAt, .descending)
+
         default:
             query = query.sort(\.$createdAt, .descending)
         }
@@ -274,16 +328,32 @@ struct StudentBookingsController: RouteCollection {
         let results = try await query.all()
 
         return results.map { booking in
-            StudentBookingDTO(
+            let lesson = booking.$lesson.value
+
+            let baseEndsAt = booking.actualEndsAt ?? lesson?.endsAt
+            let effectiveStart: Date?
+            if let mins = booking.durationMinutes, let end = baseEndsAt {
+                effectiveStart = end.addingTimeInterval(Double(-mins) * 60)
+            } else {
+                effectiveStart = lesson?.startsAt
+            }
+
+            return StudentBookingDTO(
                 id: booking.id,
                 lessonID: booking.$lesson.id,
-                lessonTitle: booking.$lesson.value?.title,
-                startsAt: booking.$lesson.value?.startsAt,
-                endsAt: booking.$lesson.value?.endsAt,
-                status: booking.deletedAt == nil ? "active" : "cancelled"
+                lessonTitle: lesson?.title,
+                startsAt: effectiveStart,
+                endsAt: baseEndsAt,
+                status: booking.deletedAt == nil ? "active" : "cancelled",
+                pickupLocation: booking.pickupLocation,
+                pickupSource: booking.pickupSource,
+                lessonStartsAt: lesson?.startsAt,
+                lessonEndsAt: lesson?.endsAt
             )
         }
     }
+
+    // MARK: DTO
 
     struct StudentBookingDTO: Content {
         var id: UUID?
@@ -292,5 +362,36 @@ struct StudentBookingsController: RouteCollection {
         var startsAt: Date?
         var endsAt: Date?
         var status: String
+        var pickupLocation: String?
+        var pickupSource: String?
+        var lessonStartsAt: Date?
+        var lessonEndsAt: Date?
+    }
+
+    // MARK: UPDATE PICKUP
+
+    func updatePickup(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+        let input = try req.content.decode(UpdatePickupInput.self)
+
+        guard var booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+
+        guard booking.$user.id == user.id else {
+            throw Abort(.forbidden)
+        }
+
+        booking.pickupLocation = input.pickupLocation
+        booking.pickupSource = input.pickupSource
+
+        try await booking.save(on: req.db)
+        return .ok
+    }
+
+    struct UpdatePickupInput: Content {
+        var pickupLocation: String?
+        var pickupSource: String?
     }
 }
