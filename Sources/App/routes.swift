@@ -2,9 +2,44 @@ import Vapor
 import Fluent
 import Foundation
 
-private struct SyncResult: Content { let upserted: Int; let pruned: Int }
+private struct SlotLink: Content {
+    let externalID: String
+    let lessonID: UUID
+}
+
+private struct SyncResult: Content {
+    let upserted: Int
+    let pruned: Int
+    let links: [SlotLink]
+}
 
 public func routes(_ app: Application) throws {
+    // Parse ISO8601 date strings with or without fractional seconds.
+    func parseISO8601(_ s: String) -> Date? {
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = isoFrac.date(from: s) { return d }
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: s)
+    }
+    // MARK: - Basic diagnostics
+    // Used by mobile clients / Settings screens to verify the server is reachable.
+    app.get("health") { req -> Response in
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
+        res.body = .init(string: "ok")
+        return res
+    }
+
+    // Convenience root route so hitting http://HOST:PORT/ in a browser isn't a 404.
+    app.get { req -> Response in
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
+        res.body = .init(string: "MSMServer running")
+        return res
+    }
     // MARK: - Realtime Availability WebSocket (session cookie presence)
     // This version compiles without requiring User: SessionAuthenticatable.
     // It simply checks for a Vapor session cookie or active session and closes if missing.
@@ -16,6 +51,7 @@ public func routes(_ app: Application) throws {
 
         // Register socket in the availability hub so broadcasts reach the agent
         app.availabilityHub.add(ws)
+        app.instructorHub.add(ws)
 
         // Send a small hello so clients can confirm connection visually
         ws.send(#"{"type":"hello","message":"connected"}"#)
@@ -26,8 +62,17 @@ public func routes(_ app: Application) throws {
             ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
         }
 
+        ws.onPing { ws, data in
+            req.logger.debug("WS(instructor) ping")
+        }
+
+        ws.onPong { ws, data in
+            req.logger.debug("WS(instructor) pong")
+        }
+
         ws.onClose.whenComplete { _ in
             req.logger.info("WS closed (session ok)")
+            app.instructorHub.remove(ws)
         }
     }
 
@@ -75,6 +120,10 @@ public func routes(_ app: Application) throws {
            let text = String(data: data, encoding: .utf8) {
             app.instructorHub.broadcast(text)
             app.studentHub.broadcast(text)
+
+            // Also send a lightweight poke so instructor apps know to refresh slots.
+            let slotsUpdatedJson = #"{"type":"slots_updated"}"#
+            app.instructorHub.broadcast(slotsUpdatedJson)
         }
     }
     // Route listing for diagnostics (DEBUG only)
@@ -200,6 +249,7 @@ public func routes(_ app: Application) throws {
     app.post("instructor", "sync", "available") { req async throws -> SyncResult in
         struct SlotIn: Content {
             var id: UUID?
+            var externalID: String?
             var startsAt: String
             var endsAt: String
             var title: String?
@@ -213,7 +263,6 @@ public func routes(_ app: Application) throws {
         }
 
         let input = try req.content.decode(SyncIn.self)
-        let iso = ISO8601DateFormatter()
 
         // Load all future lessons to optionally prune those not present in the payload
         let now = Date()
@@ -223,10 +272,11 @@ public func routes(_ app: Application) throws {
 
         var keepIDs = Set<UUID>()
         var upsertedCount = 0
+        var links: [SlotLink] = []
 
         for s in input.slots {
-            guard let start = iso.date(from: s.startsAt),
-                  let end = iso.date(from: s.endsAt) else {
+            guard let start = parseISO8601(s.startsAt),
+                  let end = parseISO8601(s.endsAt) else {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
             }
 
@@ -292,6 +342,11 @@ public func routes(_ app: Application) throws {
                 broadcastAvailability(update, req.application)
             }
 
+            if let externalID = s.externalID {
+                let lessonID = try lesson.requireID()
+                links.append(.init(externalID: externalID, lessonID: lessonID))
+            }
+
             if let id = lesson.id { keepIDs.insert(id) }
         }
 
@@ -315,7 +370,7 @@ public func routes(_ app: Application) throws {
             }
         }
 
-        return SyncResult(upserted: upsertedCount, pruned: prunedCount)
+        return SyncResult(upserted: upsertedCount, pruned: prunedCount, links: links)
     }
 
     let admin = app.grouped("admin")
@@ -351,6 +406,20 @@ public func routes(_ app: Application) throws {
         return try await query.all()
     }
 
+    // MARK: - Student: mark booking as paid
+    app.post("student", "bookings", ":bookingId", "payment") { req async throws -> HTTPStatus in
+        struct PayIn: Content { let method: String }
+        _ = try req.content.decode(PayIn.self)
+        guard let bookingId = req.parameters.get("bookingId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingId missing or invalid")
+        }
+
+        // TODO: Replace this placeholder with real DB update logic.
+        req.logger.info("(TEMP) Mark booking paid: \(bookingId)")
+
+        return .ok
+    }
+
     // controllers
     try app.register(collection: AuthController())
     try app.register(collection: LessonsController())
@@ -359,6 +428,8 @@ public func routes(_ app: Application) throws {
     try app.register(collection: LessonAdminController())
     try app.register(collection: StudentBookingsController())
     try app.register(collection: StudentLessonController())
+    try app.register(collection: InstructorLessonController())
+    try app.register(collection: ConfirmedLessonController())
     
     // GET /me/booking-events (session cookie presence required)
     app.get("me", "booking-events") { req async throws -> [BookingEvent] in

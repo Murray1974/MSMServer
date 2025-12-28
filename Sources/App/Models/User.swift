@@ -42,6 +42,7 @@ extension User {
         let createdAt: Date?
         let updatedAt: Date?
     }
+
     var asPublic: Public {
         .init(id: id, username: username, role: role, createdAt: createdAt, updatedAt: updatedAt)
     }

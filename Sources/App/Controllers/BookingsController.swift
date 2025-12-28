@@ -1,346 +1,246 @@
 import Vapor
 import Fluent
+import Foundation
 
-/// Protected endpoints for the authenticated user's bookings
+struct ManualBookingIn: Content {
+    let studentName: String
+    let startsAt: Date
+    let endsAt: Date
+}
+
+struct WorkBookingIn: Content {
+    let lessonID: UUID
+    let studentName: String
+}
+
+struct WorkBookingsSyncIn: Content {
+    let bookings: [WorkBookingIn]
+}
+
+struct WorkBookingsSyncOut: Content {
+    let ok: Bool
+    let upserted: Int
+}
+
 struct BookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let protected = routes
-            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
-            .grouped("bookings")
-
-        // Existing
-        protected.get("me", use: myBookings)                 // ?start=&end=&page=&per=
-        protected.get("me", "past", use: myPastBookings)     // ?start=&end=&page=&per=
-        protected.get("me", "upcoming", use: myUpcomingBookings) // ?start=&end=&page=&per=
-        protected.delete(":id", use: cancel)
-
-        // New
-        protected.post(":id", "restore", use: restore)
-        protected.get(":id", "history", use: history)
+        // DEV unblock: manual booking creation is called from the Instructor app
+        routes.grouped("bookings").post("manual", use: createManualBooking)
+        // Agent: import/upsert bookings from the instructor's "work" calendar.
+        routes.grouped("instructor", "sync").post("work-bookings", use: syncWorkBookings)
     }
 
-    // MARK: - Support types & helpers
+    func createManualBooking(req: Request) async throws -> Response {
+        let input = try req.content.decode(ManualBookingIn.self)
 
-    struct PageRangeQuery: Content {
-        var page: Int?
-        var per: Int?
-        /// ISO 8601 string, e.g. 2025-10-26T00:00:00Z
-        var start: String?
-        /// ISO 8601 string, e.g. 2025-10-27T00:00:00Z
-        var end: String?
-    }
-
-    struct Page<T: Content>: Content {
-        let items: [T]
-        let page: Int
-        let per: Int
-        let total: Int
-        let totalPages: Int
-    }
-
-    private func parseISO8601(_ s: String?) -> Date? {
-        guard let s else { return nil }
-        let isoFull = ISO8601DateFormatter()
-        isoFull.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return isoFull.date(from: s) ?? ISO8601DateFormatter().date(from: s)
-    }
-
-    private func pageParams(from q: PageRangeQuery?) -> (page: Int, per: Int, offset: Int) {
-        let page = max(q?.page ?? 1, 1)
-        let per  = min(max(q?.per ?? 20, 1), 100)
-        let offset = (page - 1) * per
-        return (page, per, offset)
-    }
-
-    private func canOverride(_ user: User) -> Bool {
-        user.role == "admin" || user.role == "instructor"
-    }
-
-    // MARK: - Handlers
-
-    /// GET /bookings/me?start=...&end=...&page=&per=
-    /// Filters by the *lesson* startsAt if start/end are provided.
-    func myBookings(req: Request) async throws -> Page<Booking> {
-        let user = try req.auth.require(User.self)
-        let uid  = try user.requireID()
-        let q    = try? req.query.decode(PageRangeQuery.self)
-        let (page, per, offset) = pageParams(from: q)
-
-        let startDate = parseISO8601(q?.start)
-        let endDate   = parseISO8601(q?.end)
-
-        // Base for counting
-        var base = Booking.query(on: req.db)
-            .filter(\.$user.$id == uid)
-            .join(parent: \Booking.$lesson)
-
-        if let s = startDate { base = base.filter(Lesson.self, \.$startsAt >= s) }
-        if let e = endDate   { base = base.filter(Lesson.self, \.$startsAt <= e) }
-
-        let total = try await base.count()
-
-        // Page with eager loaded lesson
-        let rows = try await base
-            .with(\.$lesson)
-            .sort(Lesson.self, \.$startsAt, .descending)
-            .range(offset..<(offset + per))
-            .all()
-
-        return Page(
-            items: rows,
-            page: page, per: per,
-            total: total,
-            totalPages: Int(ceil(Double(total) / Double(per)))
-        )
-    }
-
-    /// GET /bookings/me/past?start=...&end=...&page=&per=
-    /// Shows bookings where Lesson.endsAt < now. Range applies to *endsAt*.
-    func myPastBookings(req: Request) async throws -> Page<Booking> {
-        let user = try req.auth.require(User.self)
-        let uid  = try user.requireID()
-        let now  = Date()
-        let q    = try? req.query.decode(PageRangeQuery.self)
-        let (page, per, offset) = pageParams(from: q)
-
-        let startDate = parseISO8601(q?.start)
-        let endDate   = parseISO8601(q?.end)
-
-        var base = Booking.query(on: req.db)
-            .filter(\.$user.$id == uid)
-            .join(parent: \Booking.$lesson)
-            .filter(Lesson.self, \.$endsAt < now)
-
-        if let s = startDate { base = base.filter(Lesson.self, \.$endsAt >= s) }
-        if let e = endDate   { base = base.filter(Lesson.self, \.$endsAt <= e) }
-
-        let total = try await base.count()
-
-        let rows = try await base
-            .with(\.$lesson)
-            .sort(Lesson.self, \.$endsAt, .descending)
-            .range(offset..<(offset + per))
-            .all()
-
-        return Page(
-            items: rows,
-            page: page, per: per,
-            total: total,
-            totalPages: Int(ceil(Double(total) / Double(per)))
-        )
-    }
-
-    /// GET /bookings/me/upcoming?start=...&end=...&page=&per=
-    /// Shows bookings where Lesson.endsAt ≥ now. Range applies to *startsAt*.
-    func myUpcomingBookings(req: Request) async throws -> Page<Booking> {
-        let user = try req.auth.require(User.self)
-        let uid  = try user.requireID()
-        let now  = Date()
-        let q    = try? req.query.decode(PageRangeQuery.self)
-        let (page, per, offset) = pageParams(from: q)
-
-        let startDate = parseISO8601(q?.start)
-        let endDate   = parseISO8601(q?.end)
-
-        var base = Booking.query(on: req.db)
-            .filter(\.$user.$id == uid)
-            .join(parent: \Booking.$lesson)
-            .filter(Lesson.self, \.$endsAt >= now)
-
-        if let s = startDate { base = base.filter(Lesson.self, \.$startsAt >= s) }
-        if let e = endDate   { base = base.filter(Lesson.self, \.$startsAt <= e) }
-
-        let total = try await base.count()
-
-        let rows = try await base
-            .with(\.$lesson)
-            .sort(Lesson.self, \.$startsAt, .ascending)
-            .range(offset..<(offset + per))
-            .all()
-
-        return Page(
-            items: rows,
-            page: page, per: per,
-            total: total,
-            totalPages: Int(ceil(Double(total) / Double(per)))
-        )
-    }
-
-    /// DELETE /bookings/:id  (owner OR instructor/admin)
-    /// Idempotent. Uses soft-delete; also sets cancelledBy/cancelledAt.
-    func cancel(req: Request) async throws -> HTTPStatus {
-        let requester = try req.auth.require(User.self)
-        let requesterID = try requester.requireID()
-
-        guard let id = req.parameters.get("id", as: UUID.self),
-              let booking = try await Booking.find(id, on: req.db)
-        else {
-            // Idempotent: missing or already soft-deleted → 204
-            return .noContent
+        // 1) Resolve or create a STUDENT user (manual / legacy)
+        func slug(_ name: String) -> String {
+            let lower = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return lower
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         }
 
-        let isOwner = booking.$user.id == requesterID
-        guard isOwner || canOverride(requester) else {
-            throw Abort(.forbidden, reason: "You can only cancel your own bookings.")
+        let username = slug(input.studentName)
+        let user: User
+        if let existing = try await User.query(on: req.db)
+            .filter(\.$username == username)
+            .first() {
+            user = existing
+        } else {
+            let u = User()
+            u.username = username
+            u.passwordHash = "manual"
+            u.role = "student"
+            try await u.save(on: req.db)
+            user = u
         }
 
-        // Already cancelled/soft-deleted?
-        if booking.deletedAt != nil {
-            return .noContent
+        // 2) Resolve the Lesson slot (calendar-synced)
+        guard let lesson = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt == input.startsAt)
+            .filter(\.$endsAt == input.endsAt)
+            .first() else {
+            throw Abort(.notFound, reason: "No lesson slot exists for this time window")
         }
 
-        try await booking.delete(on: req.db) // sets deleted_at via @Timestamp(on: .delete)
-        let lesson = try await booking.$lesson.get(on: req.db)
-        req.broadcastCancelled(for: lesson)
-        return .ok
+        // 3) Create booking if it doesn't already exist
+        let lessonID = try lesson.requireID()
+        let userID = try user.requireID()
+
+        let booking: Booking
+        if let existing = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$user.$id == userID)
+            .first() {
+            booking = existing
+        } else {
+            let b = Booking()
+            b.$user.id = userID
+            b.$lesson.id = lessonID
+            try await b.save(on: req.db)
+            booking = b
+        }
+
+        let bookingID = try booking.requireID()
+
+        // 4) Broadcast booking change so Instructor app refreshes
+        let payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID.uuidString,
+            "bookingID": bookingID.uuidString,
+            "status": "booked"
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            req.application.instructorHub.broadcast(text)
+            req.application.studentHub.broadcast(text)
+        }
+
+        // 5) Return minimal success payload
+        struct Out: Content {
+            let ok: Bool
+            let bookingID: UUID
+            let lessonID: UUID
+        }
+
+        let out = Out(ok: true, bookingID: bookingID, lessonID: lessonID)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(out)
+
+        var res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+        res.body = .init(data: data)
+        return res
     }
 
-    // MARK: New endpoints
+    func syncWorkBookings(req: Request) async throws -> Response {
+        let input = try req.content.decode(WorkBookingsSyncIn.self)
 
-    /// POST /bookings/:id/restore  (owner OR instructor/admin)
-    /// Idempotent restore: if already active, returns 204.
-    func restore(req: Request) async throws -> HTTPStatus {
-        let requester = try req.auth.require(User.self)
-        let requesterID = try requester.requireID()
-
-        guard let id = req.parameters.get("id", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid booking id.")
+        func slug(_ name: String) -> String {
+            let lower = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return lower
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         }
 
-        // Need withDeleted() to find soft-deleted rows
-        guard let booking = try await Booking.query(on: req.db)
-            .withDeleted()
-            .filter(\.$id == id)
-            .first()
-        else {
-            // Treat missing as idempotent success
-            return .noContent
+        var upserted = 0
+
+        for item in input.bookings {
+            // 1) Resolve lesson by ID
+            guard let lesson = try await Lesson.find(item.lessonID, on: req.db) else {
+                // Skip unknown lessons rather than failing the whole batch
+                req.logger.warning("work-bookings: lesson not found: \(item.lessonID)")
+                continue
+            }
+
+            // 2) Resolve or create a student user for this calendar title
+            let username = slug(item.studentName)
+            let user: User
+            if let existing = try await User.query(on: req.db)
+                .filter(\.$username == username)
+                .first() {
+                user = existing
+            } else {
+                let u = User()
+                u.username = username
+                u.passwordHash = "manual"
+                u.role = "student"
+                try await u.save(on: req.db)
+                user = u
+            }
+
+            let lessonID = try lesson.requireID()
+            let userID = try user.requireID()
+
+            // 3) Upsert booking keyed by lessonID + userID
+            let booking: Booking
+            if let existing = try await Booking.query(on: req.db)
+                .filter(\.$lesson.$id == lessonID)
+                .filter(\.$user.$id == userID)
+                .first() {
+                booking = existing
+            } else {
+                let b = Booking()
+                b.$user.id = userID
+                b.$lesson.id = lessonID
+                try await b.save(on: req.db)
+                booking = b
+                upserted += 1
+            }
+
+            // 4) Broadcast booking change so apps refresh
+            let bookingID = (try? booking.requireID())
+            let payload: [String: Any] = [
+                "type": "booking_changed",
+                "lessonID": lessonID.uuidString,
+                "bookingID": bookingID?.uuidString ?? "",
+                "status": "booked"
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+               let text = String(data: data, encoding: .utf8) {
+                req.application.instructorHub.broadcast(text)
+                req.application.studentHub.broadcast(text)
+            }
         }
 
-        let isOwner = booking.$user.id == requesterID
-        guard isOwner || canOverride(requester) else {
-            throw Abort(.forbidden, reason: "You can only restore your own bookings.")
-        }
-
-        // If not deleted, nothing to do
-        if booking.deletedAt == nil {
-            return .noContent
-        }
-
-        // Clear soft-delete flag
-        booking.deletedAt = nil
-        try await booking.save(on: req.db) // restore fields
-        let lesson = try await booking.$lesson.get(on: req.db)
-        req.broadcastRestored(for: lesson)
-
-        return .noContent
-    }
-
-    struct BookingHistory: Content {
-        let id: UUID?
-        let userID: UUID
-        let lessonID: UUID
-        let bookedAt: Date?
-        let cancelledAt: Date?
-        let deletedAt: Date?
-        let cancelledBy: User.Public?
-    }
-
-    /// GET /bookings/:id/history  (owner OR instructor/admin)
-    func history(req: Request) async throws -> BookingHistory {
-        let requester = try req.auth.require(User.self)
-        let requesterID = try requester.requireID()
-
-        guard let id = req.parameters.get("id", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid booking id.")
-        }
-
-        // Include soft-deleted rows and eager load cancelledBy user
-        guard let booking = try await Booking.query(on: req.db)
-            .withDeleted()
-            .filter(\.$id == id)
-            .first()
-        else {
-            throw Abort(.notFound, reason: "Booking not found.")
-        }
-
-        let isOwner = booking.$user.id == requesterID
-        guard isOwner || canOverride(requester) else {
-            throw Abort(.forbidden, reason: "You can only see history for your own bookings.")
-        }
-
-        // No separate cancelledBy tracking for now.
-        let cancelledByPublic: User.Public? = nil
-
-        return BookingHistory(
-            id: booking.id,
-            userID: booking.$user.id,
-            lessonID: booking.$lesson.id,
-            bookedAt: booking.createdAt,
-            cancelledAt: nil,
-            deletedAt: booking.deletedAt,
-            cancelledBy: cancelledByPublic
-        )
-    }
-
-} // End of struct BookingsController
-
-// MARK: - Helper extension for broadcasting booking events
-extension Request {
-    /// Broadcast a "slot.booked" event for the given lesson.
-    /// Call this right after a booking has been created/saved.
-    func broadcastBooked(for lesson: Lesson) throws {
-        let update = AvailabilityUpdate(
-            action: "slot.booked",
-            id: try lesson.requireID(),
-            title: lesson.title,
-            startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt,
-            capacity: lesson.capacity
-        )
-        self.application.availabilityHub.broadcast(update)
+        let out = WorkBookingsSyncOut(ok: true, upserted: upserted)
+        let data = try JSONEncoder().encode(out)
+        var res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+        res.body = .init(data: data)
+        return res
     }
 }
 
+// MARK: - WebSocket broadcast helpers (used by StudentBookingsController)
 extension Request {
-    /// Broadcast a single "slot.rescheduled" event showing the old → new time window.
-    /// Use this after a successful reschedule (once the DB changes are saved).
-    func broadcastRescheduled(old: Lesson, new: Lesson) {
-        let update = AvailabilityUpdate(
-            action: "slot.rescheduled",
-            id: (try? new.requireID()) ?? (try? old.requireID()) ?? UUID(),
-            title: new.title,
-            startsAt: new.startsAt,
-            endsAt: new.endsAt,
-            capacity: new.capacity
-        )
-        self.application.availabilityHub.broadcast(update)
-        self.logger.info("WS broadcast: slot.rescheduled sent for \(update.id)")
+    /// Broadcast that a lesson has been booked.
+    func broadcastBooked(for lesson: Lesson) throws {
+        let lessonID = try lesson.requireID().uuidString
+        let payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID,
+            "status": "booked"
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            application.instructorHub.broadcast(text)
+            application.studentHub.broadcast(text)
+        }
     }
 
+    /// Broadcast that a booking has been cancelled / slot freed.
     func broadcastCancelled(for lesson: Lesson) {
-        let update = AvailabilityUpdate(
-            action: "slot.cancelled",
-            id: (try? lesson.requireID()) ?? UUID(),
-            title: lesson.title,
-            startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt,
-            capacity: lesson.capacity
-        )
-        self.application.availabilityHub.broadcast(update)
-        self.logger.info("WS broadcast: slot.cancelled sent for \(update.id)")
+        let lessonID = (try? lesson.requireID().uuidString) ?? ""
+        let payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID,
+            "status": "cancelled"
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            application.instructorHub.broadcast(text)
+            application.studentHub.broadcast(text)
+        }
     }
 
-    func broadcastRestored(for lesson: Lesson) {
-        let update = AvailabilityUpdate(
-            action: "booking.restored",
-            id: (try? lesson.requireID()) ?? UUID(),
-            title: lesson.title,
-            startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt,
-            capacity: lesson.capacity
-        )
-        self.application.availabilityHub.broadcast(update)
-        self.logger.info("WS broadcast: booking.restored sent for \(update.id)")
+    /// Broadcast that a booking has been rescheduled to a new lesson.
+    func broadcastRescheduled(old oldLesson: Lesson, new newLesson: Lesson) {
+        let oldID = (try? oldLesson.requireID().uuidString) ?? ""
+        let newID = (try? newLesson.requireID().uuidString) ?? ""
+        let payload: [String: Any] = [
+            "type": "booking_changed",
+            "oldLessonID": oldID,
+            "newLessonID": newID,
+            "status": "rescheduled"
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            application.instructorHub.broadcast(text)
+            application.studentHub.broadcast(text)
+        }
     }
 }

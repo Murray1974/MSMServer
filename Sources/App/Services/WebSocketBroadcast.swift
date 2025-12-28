@@ -2,9 +2,35 @@ import Vapor
 
 // Shape the agent understands
 struct BroadcastEvent: Codable {
-    let type: String        // e.g. "slot.created" | "slot.booked" | "slot.cancelled"
+    let type: String        // e.g. "slot.created" | "slot.available" | "slot.unavailable" | "booking_changed"
     let title: String       // short title for the banner
     let message: String     // detail line (date/time, location, student, etc.)
+
+    // Optional identifiers for agents/apps that want to take action.
+    let lessonID: UUID?
+    let bookingID: UUID?
+
+    // Optional status (e.g. "booked", "cancelled", "unavailable")
+    let status: String?
+
+    // Optional human reason (e.g. instructor set slot to personal)
+    let reason: String?
+
+    init(type: String,
+         title: String,
+         message: String,
+         lessonID: UUID? = nil,
+         bookingID: UUID? = nil,
+         status: String? = nil,
+         reason: String? = nil) {
+        self.type = type
+        self.title = title
+        self.message = message
+        self.lessonID = lessonID
+        self.bookingID = bookingID
+        self.status = status
+        self.reason = reason
+    }
 }
 
 extension Application {
@@ -23,6 +49,43 @@ extension Application {
     /// Send an event to a specific audience (instructors, students, or both).
     func broadcastEvent(type: String, title: String, message: String, to audience: BroadcastAudience) {
         let payload = BroadcastEvent(type: type, title: title, message: message)
+        guard let data = try? JSONEncoder().encode(payload),
+              let text = String(data: data, encoding: .utf8) else {
+            self.logger.warning("Broadcast encode failed: type=\(type) title=\(title)")
+            return
+        }
+
+        switch audience {
+        case .instructors:
+            self.instructorHub.broadcast(text)
+        case .students:
+            self.studentHub.broadcast(text)
+        case .all:
+            self.instructorHub.broadcast(text)
+            self.studentHub.broadcast(text)
+        }
+        self.logger.info("Broadcasted(\(audience)): \(text)")
+    }
+
+    /// Rich broadcast used when agents/apps need identifiers to mutate local state (e.g. moving EventKit events).
+    func broadcastLessonEvent(type: String,
+                             title: String,
+                             message: String,
+                             lessonID: UUID?,
+                             bookingID: UUID? = nil,
+                             status: String? = nil,
+                             reason: String? = nil,
+                             to audience: BroadcastAudience = .instructors) {
+        let payload = BroadcastEvent(
+            type: type,
+            title: title,
+            message: message,
+            lessonID: lessonID,
+            bookingID: bookingID,
+            status: status,
+            reason: reason
+        )
+
         guard let data = try? JSONEncoder().encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             self.logger.warning("Broadcast encode failed: type=\(type) title=\(title)")

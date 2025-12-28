@@ -28,6 +28,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddDurationAndActualEndsToBooking())
     app.migrations.add(AddPickupLocationToBooking())
     app.migrations.add(AddPickupAddressesToStudentProfiles())
+    app.migrations.add(CreateConfirmedLesson())
+    app.migrations.add(AddStatusToConfirmedLessons())
     
     app.routes.defaultMaxBodySize = "10mb"
     

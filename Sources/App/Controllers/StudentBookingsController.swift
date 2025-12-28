@@ -1,6 +1,17 @@
 import Vapor
 import Fluent
 
+extension Booking {
+    /// Temporary shim so StudentBookingsController can compile while
+    /// we wire up a real paymentStatus field on the Booking model.
+    /// This does *not* persist anything to the database yet – it always
+    /// reads as nil and ignores writes.
+    var paymentStatus: String? {
+        get { nil }
+        set { /* no-op for now */ }
+    }
+}
+
 struct StudentBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // student, session-protected
@@ -17,8 +28,8 @@ struct StudentBookingsController: RouteCollection {
         // GET /student/bookings
         bookings.get(use: myBookings)
 
-        // /student/bookings/:bookingID/*
-        let byID = bookings.grouped(":bookingID")
+        // /student/bookings/:bookingId/*
+        let byID = bookings.grouped(":bookingId")
 
         // DELETE /student/bookings/:bookingID
         byID.delete(use: cancelBooking)
@@ -34,6 +45,9 @@ struct StudentBookingsController: RouteCollection {
 
         // PATCH /student/bookings/:bookingID/pickup
         byID.patch("pickup", use: updatePickup)
+
+        // POST /student/bookings/:bookingID/paid
+        byID.post("paid", use: markPaid)
     }
 
     // MARK: INPUT STRUCTS
@@ -47,6 +61,10 @@ struct StudentBookingsController: RouteCollection {
     struct UpdateDurationInput: Content {
         let durationMinutes: Int
         let startOffsetMinutes: Int?
+    }
+
+    struct MarkPaidInput: Content {
+        var method: String?
     }
 
     // MARK: CREATE BOOKING
@@ -141,7 +159,7 @@ struct StudentBookingsController: RouteCollection {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
 
-        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+        guard let bookingID = req.parameters.get("bookingId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Missing booking ID")
         }
 
@@ -177,7 +195,7 @@ struct StudentBookingsController: RouteCollection {
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
 
-        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+        guard let bookingID = req.parameters.get("bookingId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Missing bookingID")
         }
 
@@ -218,7 +236,7 @@ struct StudentBookingsController: RouteCollection {
 
     func updateDuration(_ req: Request) async throws -> StudentBookingDTO {
         let user = try req.auth.require(User.self)
-        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
         let input = try req.content.decode(UpdateDurationInput.self)
 
         guard let booking = try await Booking.query(on: req.db)
@@ -273,8 +291,35 @@ struct StudentBookingsController: RouteCollection {
             pickupLocation: booking.pickupLocation,
             pickupSource: booking.pickupSource,
             lessonStartsAt: lesson.startsAt,
-            lessonEndsAt: lesson.endsAt
+            lessonEndsAt: lesson.endsAt,
+            paymentStatus: booking.paymentStatus
         )
+    }
+
+    // MARK: MARK BOOKING AS PAID
+
+    func markPaid(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
+
+        // Decode body if present (we only care about it for future use / logging)
+        _ = try? req.content.decode(MarkPaidInput.self)
+
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$user.$id == user.requireID())
+            .filter(\.$deletedAt == nil)
+            .with(\.$lesson)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found for this user")
+        }
+
+        // Persist the payment flag on the booking.
+        booking.paymentStatus = "paid"
+        try await booking.save(on: req.db)
+
+        return .ok
     }
 
     // MARK: GET MY BOOKINGS
@@ -348,7 +393,8 @@ struct StudentBookingsController: RouteCollection {
                 pickupLocation: booking.pickupLocation,
                 pickupSource: booking.pickupSource,
                 lessonStartsAt: lesson?.startsAt,
-                lessonEndsAt: lesson?.endsAt
+                lessonEndsAt: lesson?.endsAt,
+                paymentStatus: booking.paymentStatus
             )
         }
     }
@@ -366,13 +412,14 @@ struct StudentBookingsController: RouteCollection {
         var pickupSource: String?
         var lessonStartsAt: Date?
         var lessonEndsAt: Date?
+        var paymentStatus: String?
     }
 
     // MARK: UPDATE PICKUP
 
     func updatePickup(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
         let input = try req.content.decode(UpdatePickupInput.self)
 
         guard var booking = try await Booking.find(bookingID, on: req.db) else {
