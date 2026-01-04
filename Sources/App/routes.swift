@@ -15,7 +15,7 @@ private struct SyncResult: Content {
 
 public func routes(_ app: Application) throws {
     // Parse ISO8601 date strings with or without fractional seconds.
-    func parseISO8601(_ s: String) -> Date? {
+    @Sendable func parseISO8601(_ s: String) -> Date? {
         let isoFrac = ISO8601DateFormatter()
         isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = isoFrac.date(from: s) { return d }
@@ -45,12 +45,11 @@ public func routes(_ app: Application) throws {
     // It simply checks for a Vapor session cookie or active session and closes if missing.
     let instructorWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
         // DEV: allow connection without session/JWT to enable Agent and wscat testing.
-        // TODO: re-enable auth when Agent supplies session cookie or Bearer JWT.
+        // TODO: re-enable auth when Instructor app supplies session cookie or Bearer JWT.
         req.logger.debug("WS auth: DEV MODE — allowing connection without session")
-        req.logger.info("WS connected (dev mode)")
+        req.logger.info("WS connected (instructor/dev mode)")
 
-        // Register socket in the availability hub so broadcasts reach the agent
-        app.availabilityHub.add(ws)
+        // Register socket ONLY in the instructor hub (avoid duplicates)
         app.instructorHub.add(ws)
 
         // Send a small hello so clients can confirm connection visually
@@ -58,7 +57,7 @@ public func routes(_ app: Application) throws {
 
         // Echo back any text (handy during early testing)
         ws.onText { ws, text in
-            req.logger.info("WS <- \(text)")
+            req.logger.info("WS(instructor) <- \(text)")
             ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
         }
 
@@ -71,17 +70,51 @@ public func routes(_ app: Application) throws {
         }
 
         ws.onClose.whenComplete { _ in
-            req.logger.info("WS closed (session ok)")
+            req.logger.info("WS closed (instructor)")
             app.instructorHub.remove(ws)
         }
     }
 
-    // Primary route used by MSM Agent
-    app.webSocket("ws", "instructor") { req, ws in instructorWSHandler(req, ws) }
+    let availabilityWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
+        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
+        // TODO: re-enable auth when Agent supplies session cookie or Bearer JWT.
+        req.logger.debug("WS auth (availability): DEV MODE — allowing connection without session")
+        req.logger.info("WS connected (availability/dev mode)")
 
-    // Restore legacy/availability endpoint using same handler
-    app.webSocket("ws", "availability") { req, ws in
+        // Register socket ONLY in the availability hub (avoid duplicates)
+        app.availabilityHub.add(ws)
+
+        // Send a small hello so clients can confirm connection visually
+        ws.send(#"{"type":"hello","message":"connected"}"#)
+
+        // Echo back any text (handy during early testing)
+        ws.onText { ws, text in
+            req.logger.info("WS(availability) <- \(text)")
+            ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+        }
+
+        ws.onPing { ws, data in
+            req.logger.debug("WS(availability) ping")
+        }
+
+        ws.onPong { ws, data in
+            req.logger.debug("WS(availability) pong")
+        }
+
+        ws.onClose.whenComplete { _ in
+            req.logger.info("WS closed (availability)")
+            app.availabilityHub.remove(ws)
+        }
+    }
+
+    // Instructor app WebSocket
+    app.webSocket("ws", "instructor") { req, ws in
         instructorWSHandler(req, ws)
+    }
+
+    // Agent / legacy availability WebSocket
+    app.webSocket("ws", "availability") { req, ws in
+        availabilityWSHandler(req, ws)
     }
     // Student WebSocket (Phase 2)
     app.webSocket("ws", "student") { req, ws in
@@ -112,7 +145,7 @@ public func routes(_ app: Application) throws {
     }
 
     // Helper: broadcast AvailabilityUpdate to all relevant hubs
-    let broadcastAvailability: (AvailabilityUpdate, Application) -> Void = { update, app in
+    let broadcastAvailability: @Sendable (AvailabilityUpdate, Application) -> Void = { update, app in
         // availabilityHub is typed to AvailabilityUpdate (agent / legacy clients)
         app.availabilityHub.broadcast(update)
         // instructorHub & studentHub expect String, so send JSON text
@@ -138,7 +171,7 @@ public func routes(_ app: Application) throws {
     app.post("availability", "test") { req async throws -> HTTPStatus in
         let now = Date()
         let msg = AvailabilityUpdate(
-            action: "slot.created",
+            action: AvailabilityAction.slotCreated,
             id: UUID(),
             title: "Demo Slot",
             startsAt: now,
@@ -151,7 +184,7 @@ public func routes(_ app: Application) throws {
     app.get("availability", "test") { req async throws -> String in
         let now = Date()
         let msg = AvailabilityUpdate(
-            action: "slot.created",
+            action: AvailabilityAction.slotCreated,
             id: UUID(),
             title: "Demo Slot (GET)",
             startsAt: now,
@@ -180,7 +213,7 @@ public func routes(_ app: Application) throws {
         let endsAt = p.end.flatMap { iso.date(from: $0) } ?? now.addingTimeInterval(3600)
 
         let msg = AvailabilityUpdate(
-            action: p.type ?? "slot.created",
+            action: p.type ?? AvailabilityAction.slotCreated,
             id: p.slotId ?? UUID(),
             title: p.title ?? "Demo Slot",
             startsAt: startsAt,
@@ -223,7 +256,7 @@ public func routes(_ app: Application) throws {
 
         // Broadcast to all clients so the slot appears in real time
         let update = AvailabilityUpdate(
-            action: "slot.available",
+            action: AvailabilityAction.slotAvailable,
             id: try lesson.requireID(),
             title: lesson.title ?? "Unassigned",
             startsAt: lesson.startsAt,
@@ -302,7 +335,7 @@ public func routes(_ app: Application) throws {
 
                 // Broadcast brand-new availability
                 let update = AvailabilityUpdate(
-                    action: "slot.available",
+                    action: AvailabilityAction.slotAvailable,
                     id: try lesson.requireID(),
                     title: lesson.title ?? "Unassigned",
                     startsAt: lesson.startsAt,
@@ -329,7 +362,7 @@ public func routes(_ app: Application) throws {
                 // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
                 let calendarName = lesson.calendarName ?? "Untitled"
                 let isStudentVisible = (calendarName == "Untitled")
-                let action = isStudentVisible ? "slot.available" : "slot.unavailable"
+                let action = isStudentVisible ? AvailabilityAction.slotAvailable : AvailabilityAction.slotUnavailable
 
                 let update = AvailabilityUpdate(
                     action: action,
@@ -358,7 +391,7 @@ public func routes(_ app: Application) throws {
                     prunedCount += 1
                     // Notify clients this slot is gone
                     let update = AvailabilityUpdate(
-                        action: "slot.unavailable", // treat as no longer available
+                        action: AvailabilityAction.slotUnavailable, // treat as no longer available
                         id: try l.requireID(),
                         title: l.title ?? "Unassigned",
                         startsAt: l.startsAt,

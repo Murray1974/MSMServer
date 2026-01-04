@@ -72,16 +72,7 @@ struct ConfirmedLessonController: RouteCollection {
 
             try await existing.save(on: req.db)
 
-            // Broadcast booking confirmation change to instructor clients
-            let updatePayload: [String: String] = [
-                "type": "booking_changed",
-                "eventID": lessonID.uuidString,
-                "status": existing.statusValue.rawValue
-            ]
-            if let data = try? JSONEncoder().encode(updatePayload),
-               let json = String(data: data, encoding: .utf8) {
-                req.application.instructorHub.broadcast(json)
-            }
+            // Note: confirming a lesson does not broadcast booking/slot changes.
 
             return try existing.asPublic()
         }
@@ -100,16 +91,7 @@ struct ConfirmedLessonController: RouteCollection {
 
         try await confirmation.save(on: req.db)
 
-        // Broadcast booking confirmation change to instructor clients
-        let createPayload: [String: String] = [
-            "type": "booking_changed",
-            "eventID": lessonID.uuidString,
-            "status": confirmation.statusValue.rawValue
-        ]
-        if let data = try? JSONEncoder().encode(createPayload),
-           let json = String(data: data, encoding: .utf8) {
-            req.application.instructorHub.broadcast(json)
-        }
+        // Note: confirming a lesson does not broadcast booking/slot changes.
 
         return try confirmation.asPublic()
     }

@@ -1,4 +1,6 @@
+
 import Vapor
+import NIOConcurrencyHelpers
 
 // Shape the agent understands
 struct BroadcastEvent: Codable {
@@ -33,6 +35,25 @@ struct BroadcastEvent: Codable {
     }
 }
 
+final class BroadcastDeduplicator: @unchecked Sendable {
+    private var recentKeys: [String: Date] = [:]
+    private let window: TimeInterval = 1.0   // seconds
+    private let lock = NIOLock()
+
+    func shouldBroadcast(key: String) -> Bool {
+        let now = Date()
+        return lock.withLock {
+            if let last = recentKeys[key], now.timeIntervalSince(last) < window {
+                return false
+            }
+            recentKeys[key] = now
+            // prune old entries
+            recentKeys = recentKeys.filter { now.timeIntervalSince($0.value) < window }
+            return true
+        }
+    }
+}
+
 extension Application {
     /// Audience for broadcasted events
     enum BroadcastAudience {
@@ -40,6 +61,8 @@ extension Application {
         case students
         case all
     }
+
+    private static let broadcastDeduplicator = BroadcastDeduplicator()
 
     /// Backwards-compatible convenience (defaults to instructors only)
     func broadcastEvent(type: String, title: String, message: String) {
@@ -76,6 +99,18 @@ extension Application {
                              status: String? = nil,
                              reason: String? = nil,
                              to audience: BroadcastAudience = .instructors) {
+        let dedupeKey = [
+            type,
+            lessonID?.uuidString ?? "nil",
+            bookingID?.uuidString ?? "nil",
+            status ?? "nil"
+        ].joined(separator: "|")
+
+        guard Application.broadcastDeduplicator.shouldBroadcast(key: dedupeKey) else {
+            self.logger.info("Broadcast deduped: \(dedupeKey)")
+            return
+        }
+
         let payload = BroadcastEvent(
             type: type,
             title: title,
@@ -102,6 +137,42 @@ extension Application {
             self.studentHub.broadcast(text)
         }
         self.logger.info("Broadcasted(\(audience)): \(text)")
+    }
+
+    /// Canonical booking-changed broadcast.
+    ///
+    /// Keep this payload shape stable (BroadcastEvent) so Instructor/Student apps and the Agent
+    /// can reliably react without duplicating incompatible JSON shapes elsewhere.
+    ///
+    /// - Parameters:
+    ///   - lessonID: The lesson identifier associated with the booking.
+    ///   - bookingID: The booking identifier (if available).
+    ///   - status: Booking status (e.g. "booked", "cancelled").
+    ///   - reason: Optional human-readable reason.
+    ///   - title: Optional override for banner title.
+    ///   - message: Optional override for banner message.
+    ///   - audience: Defaults to `.all` so both Instructor + Student hubs are kept in sync.
+    func broadcastBookingChanged(
+        lessonID: UUID,
+        bookingID: UUID? = nil,
+        status: String,
+        reason: String? = nil,
+        title: String? = nil,
+        message: String? = nil,
+        to audience: BroadcastAudience = .all
+    ) {
+        let bannerTitle = title ?? "Booking_Changed"
+        let bannerMessage = message ?? "booking_changed"
+        self.broadcastLessonEvent(
+            type: "booking_changed",
+            title: bannerTitle,
+            message: bannerMessage,
+            lessonID: lessonID,
+            bookingID: bookingID,
+            status: status,
+            reason: reason,
+            to: audience
+        )
     }
 }
 

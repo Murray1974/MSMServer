@@ -84,18 +84,8 @@ struct BookingsController: RouteCollection {
 
         let bookingID = try booking.requireID()
 
-        // 4) Broadcast booking change so Instructor app refreshes
-        let payload: [String: Any] = [
-            "type": "booking_changed",
-            "lessonID": lessonID.uuidString,
-            "bookingID": bookingID.uuidString,
-            "status": "booked"
-        ]
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-           let text = String(data: data, encoding: .utf8) {
-            req.application.instructorHub.broadcast(text)
-            req.application.studentHub.broadcast(text)
-        }
+        // 4) Broadcast booking change (single canonical path)
+        try req.broadcastBooked(for: lesson)
 
         // 5) Return minimal success payload
         struct Out: Content {
@@ -156,33 +146,20 @@ struct BookingsController: RouteCollection {
             let userID = try user.requireID()
 
             // 3) Upsert booking keyed by lessonID + userID
-            let booking: Booking
-            if let existing = try await Booking.query(on: req.db)
+            if let _ = try await Booking.query(on: req.db)
                 .filter(\.$lesson.$id == lessonID)
                 .filter(\.$user.$id == userID)
                 .first() {
-                booking = existing
+                // No-op: booking already exists; do NOT broadcast.
             } else {
                 let b = Booking()
                 b.$user.id = userID
                 b.$lesson.id = lessonID
                 try await b.save(on: req.db)
-                booking = b
                 upserted += 1
-            }
 
-            // 4) Broadcast booking change so apps refresh
-            let bookingID = (try? booking.requireID())
-            let payload: [String: Any] = [
-                "type": "booking_changed",
-                "lessonID": lessonID.uuidString,
-                "bookingID": bookingID?.uuidString ?? "",
-                "status": "booked"
-            ]
-            if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-               let text = String(data: data, encoding: .utf8) {
-                req.application.instructorHub.broadcast(text)
-                req.application.studentHub.broadcast(text)
+                // 4) Broadcast booking change only when something actually changed
+                try req.broadcastBooked(for: lesson)
             }
         }
 
@@ -225,6 +202,11 @@ extension Request {
             application.instructorHub.broadcast(text)
             application.studentHub.broadcast(text)
         }
+
+        // Canonical availability broadcast
+        if let lesson = try? Lesson.find(UUID(uuidString: lessonID), on: self.db).wait() {
+            try? broadcastBookingCleared(for: lesson)
+        }
     }
 
     /// Broadcast that a booking has been rescheduled to a new lesson.
@@ -242,5 +224,12 @@ extension Request {
             application.instructorHub.broadcast(text)
             application.studentHub.broadcast(text)
         }
+    }
+
+    /// Broadcast that a booking association has been cleared and the slot is available again.
+    func broadcastBookingCleared(for lesson: Lesson) throws {
+        let lessonID = try lesson.requireID()
+        let update = AvailabilityUpdate.bookingCleared(lessonID: lessonID)
+        try application.availabilityHub.broadcast(update)
     }
 }
