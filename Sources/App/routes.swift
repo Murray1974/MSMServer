@@ -440,15 +440,15 @@ public func routes(_ app: Application) throws {
     }
 
     // MARK: - Student: mark booking as paid
-    app.post("student", "bookings", ":bookingId", "payment") { req async throws -> HTTPStatus in
+    app.post("student", "bookings", ":bookingID", "payment") { req async throws -> HTTPStatus in
         struct PayIn: Content { let method: String }
         _ = try req.content.decode(PayIn.self)
-        guard let bookingId = req.parameters.get("bookingId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "bookingId missing or invalid")
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingID missing or invalid")
         }
 
         // TODO: Replace this placeholder with real DB update logic.
-        req.logger.info("(TEMP) Mark booking paid: \(bookingId)")
+        req.logger.info("(TEMP) Mark booking paid: \(bookingID)")
 
         return .ok
     }

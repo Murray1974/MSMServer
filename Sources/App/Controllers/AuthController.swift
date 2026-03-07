@@ -15,6 +15,13 @@ struct AuthController: RouteCollection {
         let password: String
     }
 
+    struct RegisterRequest: Content {
+        let username: String
+        let password: String
+        let firstName: String?
+        let lastName: String?
+    }
+
     struct LoginResponse: Content {
         let token: String
     }
@@ -24,7 +31,7 @@ struct AuthController: RouteCollection {
     /// POST /auth/register
     /// Creates a new user if the username is not taken.
     func register(_ req: Request) async throws -> HTTPStatus {
-        let input = try req.content.decode(Credentials.self)
+        let input = try req.content.decode(RegisterRequest.self)
 
         // Ensure username uniqueness
         if let _ = try await User.query(on: req.db)
@@ -35,7 +42,12 @@ struct AuthController: RouteCollection {
 
         // Create user with hashed password
         let hash = try Bcrypt.hash(input.password)
-        let user = User(username: input.username, passwordHash: hash)
+        let user = User(
+            username: input.username,
+            passwordHash: hash,
+            firstName: input.firstName,
+            lastName: input.lastName
+        )
         try await user.save(on: req.db)
 
         return .created

@@ -28,8 +28,8 @@ struct StudentBookingsController: RouteCollection {
         // GET /student/bookings
         bookings.get(use: myBookings)
 
-        // /student/bookings/:bookingId/*
-        let byID = bookings.grouped(":bookingId")
+        // /student/bookings/:bookingID/*
+        let byID = bookings.grouped(":bookingID")
 
         // DELETE /student/bookings/:bookingID
         byID.delete(use: cancelBooking)
@@ -159,7 +159,7 @@ struct StudentBookingsController: RouteCollection {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
 
-        guard let bookingID = req.parameters.get("bookingId", as: UUID.self) else {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Missing booking ID")
         }
 
@@ -182,7 +182,8 @@ struct StudentBookingsController: RouteCollection {
         try await evt.save(on: req.db)
 
         let freedLesson = try await booking.$lesson.get(on: req.db)
-        req.broadcastCancelled(for: freedLesson)
+        try req.broadcastCancelled(for: freedLesson)
+        req.broadcastBookingCleared(for: freedLesson)
         return .ok
     }
 
@@ -195,7 +196,7 @@ struct StudentBookingsController: RouteCollection {
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
 
-        guard let bookingID = req.parameters.get("bookingId", as: UUID.self) else {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Missing bookingID")
         }
 
@@ -236,7 +237,7 @@ struct StudentBookingsController: RouteCollection {
 
     func updateDuration(_ req: Request) async throws -> StudentBookingDTO {
         let user = try req.auth.require(User.self)
-        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
         let input = try req.content.decode(UpdateDurationInput.self)
 
         guard let booking = try await Booking.query(on: req.db)
@@ -300,7 +301,7 @@ struct StudentBookingsController: RouteCollection {
 
     func markPaid(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
 
         // Decode body if present (we only care about it for future use / logging)
         _ = try? req.content.decode(MarkPaidInput.self)
@@ -419,7 +420,7 @@ struct StudentBookingsController: RouteCollection {
 
     func updatePickup(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        let bookingID = try req.parameters.require("bookingId", as: UUID.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
         let input = try req.content.decode(UpdatePickupInput.self)
 
         guard var booking = try await Booking.find(bookingID, on: req.db) else {

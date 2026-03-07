@@ -13,6 +13,12 @@ final class User: Model, Content {
     @Field(key: "password_hash")
     var passwordHash: String
 
+    @OptionalField(key: "first_name")
+    var firstName: String?
+
+    @OptionalField(key: "last_name")
+    var lastName: String?
+
     // Simple role string: "student" | "instructor" | "admin"
     @Field(key: "role")
     var role: String
@@ -25,10 +31,12 @@ final class User: Model, Content {
 
     init() {}
 
-    init(id: UUID? = nil, username: String, passwordHash: String, role: String = "student") {
+    init(id: UUID? = nil, username: String, passwordHash: String, firstName: String? = nil, lastName: String? = nil, role: String = "student") {
         self.id = id
         self.username = username
         self.passwordHash = passwordHash
+        self.firstName = firstName
+        self.lastName = lastName
         self.role = role
     }
 }
@@ -41,10 +49,18 @@ extension User {
         let role: String
         let createdAt: Date?
         let updatedAt: Date?
+        let firstName: String?
+        let lastName: String?
+        let displayName: String
     }
 
     var asPublic: Public {
-        .init(id: id, username: username, role: role, createdAt: createdAt, updatedAt: updatedAt)
+        .init(id: id, username: username, role: role, createdAt: createdAt, updatedAt: updatedAt, firstName: firstName, lastName: lastName, displayName: displayName)
+    }
+
+    var displayName: String {
+        let name = "\(firstName ?? "") \(lastName ?? "")".trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? username : name
     }
 }
 

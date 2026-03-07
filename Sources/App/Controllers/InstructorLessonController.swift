@@ -14,10 +14,10 @@ struct InstructorLessonController: RouteCollection {
         instructor.get("bookings", "range", use: bookingsInRange)
 
         // Mark a lesson as personal/unavailable (moves it off the student-visible calendar)
-        instructor.post("lessons", ":lessonId", "personal", use: markLessonPersonal)
+        instructor.post("lessons", ":lessonID", "personal", use: markLessonPersonal)
 
         // Restore a lesson back to available (moves it back onto the student-visible calendar)
-        instructor.post("lessons", ":lessonId", "available", use: markLessonAvailable)
+        instructor.post("lessons", ":lessonID", "available", use: markLessonAvailable)
     }
 
     struct InstructorLessonRow: Content {
@@ -39,11 +39,26 @@ struct InstructorLessonController: RouteCollection {
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
-        let now = Date()
+        struct RangeQuery: Decodable {
+            var from: String?
+            var to: String?
+        }
 
-        // 1) Future lessons on the Untitled calendar only
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        iso.timeZone = TimeZone(secondsFromGMT: 0)
+
+        let q = (try? req.query.decode(RangeQuery.self)) ?? RangeQuery(from: nil, to: nil)
+
+        let fromDate = q.from.flatMap { iso.date(from: $0) } ?? now
+        let toDate = q.to.flatMap { iso.date(from: $0) }
+            ?? Calendar.current.date(byAdding: .day, value: 56, to: fromDate)!
+
+        // 1) Available lessons on the Untitled calendar within the requested window
         let candidates = try await Lesson.query(on: req.db)
-            .filter(\.$startsAt > now)
+            .filter(\.$startsAt >= fromDate)
+            .filter(\.$startsAt <= toDate)
             .filter(\.$calendarName == "Untitled")
             .all()
 
@@ -151,13 +166,13 @@ struct InstructorLessonController: RouteCollection {
             var title: String?
         }
 
-        guard let lessonId = req.parameters.get("lessonId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "lessonId missing or invalid")
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "lessonID missing or invalid")
         }
 
         let body = (try? req.content.decode(Body.self)) ?? Body(reason: nil, title: nil)
 
-        guard let lesson = try await Lesson.find(lessonId, on: req.db) else {
+        guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
@@ -180,7 +195,7 @@ struct InstructorLessonController: RouteCollection {
             type: "slot.unavailable",
             title: "Slot unavailable",
             message: "Lesson marked personal",
-            lessonID: lessonId,
+            lessonID: lessonID,
             bookingID: nil,
             status: "unavailable",
             reason: body.reason
@@ -196,13 +211,13 @@ struct InstructorLessonController: RouteCollection {
             var title: String?
         }
 
-        guard let lessonId = req.parameters.get("lessonId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "lessonId missing or invalid")
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "lessonID missing or invalid")
         }
 
         let body = (try? req.content.decode(Body.self)) ?? Body(title: nil)
 
-        guard let lesson = try await Lesson.find(lessonId, on: req.db) else {
+        guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
@@ -218,7 +233,7 @@ struct InstructorLessonController: RouteCollection {
             type: "slot.available",
             title: "Slot available",
             message: "Lesson restored to available",
-            lessonID: lessonId,
+            lessonID: lessonID,
             bookingID: nil,
             status: "available",
             reason: nil
