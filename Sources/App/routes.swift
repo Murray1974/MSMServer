@@ -24,6 +24,61 @@ public func routes(_ app: Application) throws {
         iso.formatOptions = [.withInternetDateTime]
         return iso.date(from: s)
     }
+
+    @Sendable func webSocketToken(from req: Request) -> String? {
+        if let bearer = req.headers.bearerAuthorization?.token, bearer.isEmpty == false {
+            return bearer
+        }
+        if let token = try? req.query.get(String.self, at: "token"), token.isEmpty == false {
+            return token
+        }
+        return nil
+    }
+
+    @Sendable func authenticateWebSocket(
+        _ req: Request,
+        _ ws: WebSocket,
+        label: String,
+        onAuthenticated: @escaping @Sendable (User) -> Void
+    ) {
+        guard let token = webSocketToken(from: req) else {
+            ws.eventLoop.execute {
+                req.logger.warning("WS auth (\(label)): missing token")
+                ws.close(promise: nil)
+            }
+            return
+        }
+
+        Task {
+            do {
+                let tokenHash = SessionToken.hash(token)
+
+                guard let sessionToken = try await SessionToken.query(on: req.db)
+                    .filter(\SessionToken.$tokenHash == tokenHash)
+                    .first()
+                else {
+                    ws.eventLoop.execute {
+                        req.logger.warning("WS auth (\(label)): invalid token")
+                        ws.close(promise: nil)
+                    }
+                    return
+                }
+
+                let user = try await sessionToken.$user.get(on: req.db)
+
+                ws.eventLoop.execute {
+                    req.auth.login(user)
+                    req.logger.info("WS authenticated (\(label)) user=\(user.username)")
+                    onAuthenticated(user)
+                }
+            } catch {
+                ws.eventLoop.execute {
+                    req.logger.error("WS auth (\(label)) failed: \(error.localizedDescription)")
+                    ws.close(promise: nil)
+                }
+            }
+        }
+    }
     // MARK: - Basic diagnostics
     // Used by mobile clients / Settings screens to verify the server is reachable.
     app.get("health") { req -> Response in
@@ -44,66 +99,60 @@ public func routes(_ app: Application) throws {
     // This version compiles without requiring User: SessionAuthenticatable.
     // It simply checks for a Vapor session cookie or active session and closes if missing.
     let instructorWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
-        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
-        // TODO: re-enable auth when Instructor app supplies session cookie or Bearer JWT.
-        req.logger.debug("WS auth: DEV MODE — allowing connection without session")
-        req.logger.info("WS connected (instructor/dev mode)")
+        authenticateWebSocket(req, ws, label: "instructor") { _ in
+            // Register socket ONLY in the instructor hub (avoid duplicates)
+            app.instructorHub.add(ws)
 
-        // Register socket ONLY in the instructor hub (avoid duplicates)
-        app.instructorHub.add(ws)
+            // Send a small hello so clients can confirm connection visually
+            ws.send(#"{"type":"hello","message":"connected"}"#)
 
-        // Send a small hello so clients can confirm connection visually
-        ws.send(#"{"type":"hello","message":"connected"}"#)
+            // Echo back any text (handy during early testing)
+            ws.onText { ws, text in
+                req.logger.info("WS(instructor) <- \(text)")
+                ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+            }
 
-        // Echo back any text (handy during early testing)
-        ws.onText { ws, text in
-            req.logger.info("WS(instructor) <- \(text)")
-            ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
-        }
+            ws.onPing { ws, data in
+                req.logger.debug("WS(instructor) ping")
+            }
 
-        ws.onPing { ws, data in
-            req.logger.debug("WS(instructor) ping")
-        }
+            ws.onPong { ws, data in
+                req.logger.debug("WS(instructor) pong")
+            }
 
-        ws.onPong { ws, data in
-            req.logger.debug("WS(instructor) pong")
-        }
-
-        ws.onClose.whenComplete { _ in
-            req.logger.info("WS closed (instructor)")
-            app.instructorHub.remove(ws)
+            ws.onClose.whenComplete { _ in
+                req.logger.info("WS closed (instructor)")
+                app.instructorHub.remove(ws)
+            }
         }
     }
 
     let availabilityWSHandler: @Sendable (Request, WebSocket) -> Void = { req, ws in
-        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
-        // TODO: re-enable auth when Agent supplies session cookie or Bearer JWT.
-        req.logger.debug("WS auth (availability): DEV MODE — allowing connection without session")
-        req.logger.info("WS connected (availability/dev mode)")
+        authenticateWebSocket(req, ws, label: "availability") { _ in
+            // Register socket ONLY in the availability hub (avoid duplicates)
+            app.availabilityHub.add(ws)
 
-        // Register socket ONLY in the availability hub (avoid duplicates)
-        app.availabilityHub.add(ws)
+            // Send a small hello so clients can confirm connection visually
+            ws.send(#"{"type":"hello","message":"connected"}"#)
 
-        // Send a small hello so clients can confirm connection visually
-        ws.send(#"{"type":"hello","message":"connected"}"#)
+            // Echo back any text (handy during early testing)
+            ws.onText { ws, text in
+                req.logger.info("WS(availability) <- \(text)")
+                ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+            }
 
-        // Echo back any text (handy during early testing)
-        ws.onText { ws, text in
-            req.logger.info("WS(availability) <- \(text)")
-            ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
-        }
+            ws.onPing { ws, data in
+                req.logger.debug("WS(availability) ping")
+            }
 
-        ws.onPing { ws, data in
-            req.logger.debug("WS(availability) ping")
-        }
+            ws.onPong { ws, data in
+                req.logger.debug("WS(availability) pong")
+            }
 
-        ws.onPong { ws, data in
-            req.logger.debug("WS(availability) pong")
-        }
-
-        ws.onClose.whenComplete { _ in
-            req.logger.info("WS closed (availability)")
-            app.availabilityHub.remove(ws)
+            ws.onClose.whenComplete { _ in
+                req.logger.info("WS closed (availability)")
+                app.availabilityHub.remove(ws)
+            }
         }
     }
 
@@ -123,24 +172,22 @@ public func routes(_ app: Application) throws {
     
     // Student hub handler: mirrors instructor but registers into studentHub
     @Sendable func studentWSHandler(_ req: Request, _ ws: WebSocket) {
-        // DEV: allow connection without session/JWT to enable Agent and wscat testing.
-        // TODO: re-enable auth when Student app supplies session cookie or Bearer JWT.
-        req.logger.debug("WS auth (student): DEV MODE — allowing connection without session")
-        req.logger.info("WS connected (student/dev mode)")
-        // Register this socket in the student hub so broadcasts reach student clients
-        req.application.studentHub.add(ws)
+        authenticateWebSocket(req, ws, label: "student") { _ in
+            // Register this socket in the student hub so broadcasts reach student clients
+            req.application.studentHub.add(ws)
 
-        // Send a hello so student clients can confirm connection
-        ws.send(#"{"type":"hello","message":"connected"}"#)
+            // Send a hello so student clients can confirm connection
+            ws.send(#"{"type":"hello","message":"connected"}"#)
 
-        ws.onText { ws, text in
-            req.logger.info("WS(student) <- \(text)")
-            ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
-        }
+            ws.onText { ws, text in
+                req.logger.info("WS(student) <- \(text)")
+                ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+            }
 
-        ws.onClose.whenComplete { _ in
-            req.logger.info("WS closed (student)")
-            req.application.studentHub.remove(ws)
+            ws.onClose.whenComplete { _ in
+                req.logger.info("WS closed (student)")
+                req.application.studentHub.remove(ws)
+            }
         }
     }
 
