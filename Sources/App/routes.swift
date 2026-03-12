@@ -161,6 +161,12 @@ public func routes(_ app: Application) throws {
         instructorWSHandler(req, ws)
     }
 
+    // Fallback for malformed absolute-form websocket paths
+    app.webSocket("ws:", "**") { req, ws in
+        req.logger.warning("WS fallback route hit: \(req.url.path)")
+        instructorWSHandler(req, ws)
+    }
+
     // Agent / legacy availability WebSocket
     app.webSocket("ws", "availability") { req, ws in
         availabilityWSHandler(req, ws)
@@ -193,15 +199,20 @@ public func routes(_ app: Application) throws {
 
     // Helper: broadcast AvailabilityUpdate to all relevant hubs
     let broadcastAvailability: @Sendable (AvailabilityUpdate, Application) -> Void = { update, app in
-        // availabilityHub is typed to AvailabilityUpdate (agent / legacy clients)
+        // Send typed update to availability hub (Agent / calendar bridge)
         app.availabilityHub.broadcast(update)
-        // instructorHub & studentHub expect String, so send JSON text
+
+        // Encode once for text hubs
         if let data = try? JSONEncoder().encode(update),
            let text = String(data: data, encoding: .utf8) {
+
+            // Instructor app gets full updates
             app.instructorHub.broadcast(text)
+
+            // Student app only needs slot updates
             app.studentHub.broadcast(text)
 
-            // Also send a lightweight poke so instructor apps know to refresh slots.
+            // Instructor UI refresh trigger only for instructor hub
             let slotsUpdatedJson = #"{"type":"slots_updated"}"#
             app.instructorHub.broadcast(slotsUpdatedJson)
         }
