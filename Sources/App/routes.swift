@@ -176,11 +176,19 @@ public func routes(_ app: Application) throws {
         studentWSHandler(req, ws)
     }
     
-    // Student hub handler: mirrors instructor but registers into studentHub
+    // Student hub handler: mirrors instructor but registers into studentHub and msmStudentSockets
     @Sendable func studentWSHandler(_ req: Request, _ ws: WebSocket) {
-        authenticateWebSocket(req, ws, label: "student") { _ in
+        authenticateWebSocket(req, ws, label: "student") { user in
             // Register this socket in the student hub so broadcasts reach student clients
             req.application.studentHub.add(ws)
+
+            // Also register the socket by authenticated studentID for future targeted delivery.
+            if let studentID = try? user.requireID() {
+                var sockets = req.application.msmStudentSockets
+                sockets[studentID] = ws
+                req.application.msmStudentSockets = sockets
+                req.logger.info("WS(student) mapped socket for user=\(user.username) id=\(studentID.uuidString)")
+            }
 
             // Send a hello so student clients can confirm connection
             ws.send(#"{"type":"hello","message":"connected"}"#)
@@ -193,8 +201,26 @@ public func routes(_ app: Application) throws {
             ws.onClose.whenComplete { _ in
                 req.logger.info("WS closed (student)")
                 req.application.studentHub.remove(ws)
+
+                if let studentID = try? user.requireID() {
+                    var sockets = req.application.msmStudentSockets
+                    if let mapped = sockets[studentID], mapped === ws {
+                        sockets.removeValue(forKey: studentID)
+                        req.application.msmStudentSockets = sockets
+                    }
+                }
             }
         }
+    }
+
+    // Helper: broadcast plain text to student clients.
+    // For now this still broadcasts to all student sockets, but it now accepts
+    // an optional studentID so we have a clean seam for per-student routing next.
+    let broadcastStudentText: @Sendable (String, Application, UUID?) -> Void = { text, app, studentID in
+        if let studentID {
+            app.logger.debug("Student broadcast prepared for targeted delivery: \(studentID.uuidString)")
+        }
+        app.studentHub.broadcast(text)
     }
 
     // Helper: broadcast AvailabilityUpdate to all relevant hubs
@@ -210,7 +236,7 @@ public func routes(_ app: Application) throws {
             app.instructorHub.broadcast(text)
 
             // Student app only needs slot updates
-            app.studentHub.broadcast(text)
+            broadcastStudentText(text, app, nil)
 
             // Instructor UI refresh trigger only for instructor hub
             let slotsUpdatedJson = #"{"type":"slots_updated"}"#

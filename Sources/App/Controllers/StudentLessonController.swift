@@ -1,12 +1,34 @@
 import Vapor
 import Fluent
 
+struct BearerTokenAuthenticator: AsyncBearerAuthenticator {
+    typealias User = App.User
+
+    func authenticate(bearer: BearerAuthorization, for req: Request) async throws {
+        let hashed = SessionToken.hash(bearer.token)
+
+        guard let sessionToken = try await SessionToken.query(on: req.db)
+            .filter(\SessionToken.$tokenHash == hashed)
+            .first()
+        else {
+            return
+        }
+
+        let user = try await sessionToken.$user.get(on: req.db)
+        req.auth.login(user)
+    }
+}
+
 struct StudentLessonController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
 
         let student = routes
             .grouped("student")
-            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+            .grouped(
+                SessionTokenAuthenticator(),
+                BearerTokenAuthenticator(),
+                User.guardMiddleware()
+            )
 
         student.get("lessons", "available", use: availableLessons)
     }
@@ -31,7 +53,7 @@ struct StudentLessonController: RouteCollection {
                 .filter(\.$deletedAt == nil)
                 .count()
 
-            let capacity = lesson.capacity ?? 1
+            let capacity = lesson.capacity
             if existingCount < capacity {
                 available.append(lesson)
             }

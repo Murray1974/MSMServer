@@ -59,9 +59,13 @@ struct UpdateProfileInput: Content {
 
 struct UserBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        // Protect with session-based auth: user must be logged in
+        // Protect with session-based and bearer auth: user must be logged in
         let me = routes
-            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+            .grouped(
+                SessionTokenAuthenticator(),
+                BearerTokenAuthenticator(),
+                User.guardMiddleware()
+            )
             .grouped("me")
 
         // GET /me/profile

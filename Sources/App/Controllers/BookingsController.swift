@@ -152,12 +152,17 @@ struct BookingsController: RouteCollection {
             let lessonID = try lesson.requireID()
             let userID = try user.requireID()
 
-            // 3) Upsert booking keyed by lessonID + userID
-            if let _ = try await Booking.query(on: req.db)
+            // 3) Upsert booking keyed by lessonID + userID,
+            // but do NOT recreate a booking if this lesson has any booking history.
+            let anyBookingEver = try await Booking.query(on: req.db)
+                .withDeleted()
                 .filter(\.$lesson.$id == lessonID)
-                .filter(\.$user.$id == userID)
-                .first() {
-                // No-op: booking already exists; do NOT broadcast.
+                .first()
+
+            if anyBookingEver != nil {
+                // Do not recreate bookings from work sync.
+                // Bookings must come from student / instructor booking flow only.
+                req.logger.info("work-bookings: skip recreate (lesson already has booking history) lessonID=\(lessonID)")
             } else {
                 let b = Booking()
                 b.$user.id = userID
@@ -195,13 +200,20 @@ struct BookingsController: RouteCollection {
             .all()
 
         var cancelledCount = 0
+        var cancelledStudentIDs: [UUID] = []
+
         for b in bookings {
+            cancelledStudentIDs.append(b.$user.id)
             try await b.delete(on: req.db) // soft delete
             cancelledCount += 1
         }
 
-        // Broadcast booking cancellation and canonical availability update.
-        try req.broadcastCancelled(for: lesson)
+        // Broadcast booking cancellation only to the affected student sockets,
+        // then publish one canonical availability update for the freed slot.
+        for sid in cancelledStudentIDs {
+            try req.broadcastCancelled(for: lesson, studentID: sid)
+            req.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
         req.broadcastBookingCleared(for: lesson)
 
         struct Out: Content {
@@ -223,6 +235,33 @@ struct BookingsController: RouteCollection {
     }
 }
 
+// Helper for broadcasting to studentHub.
+// For now this still broadcasts to all student sockets, but it now accepts
+// an optional studentID so we have a clean seam for per-student routing next.
+extension Application {
+    func broadcastStudent(_ text: String, studentID: UUID? = nil) {
+        if let studentID,
+           let socket = self.msmStudentSockets[studentID] {
+
+            self.logger.debug(
+                "Student targeted broadcast → \(studentID.uuidString)"
+            )
+
+            socket.send(text)
+
+        } else {
+
+            if let studentID {
+                self.logger.debug(
+                    "Student socket not found, falling back to broadcast → \(studentID.uuidString)"
+                )
+            }
+
+            self.studentHub.broadcast(text)
+        }
+    }
+}
+
 // MARK: - WebSocket broadcast helpers (used by StudentBookingsController)
 extension Request {
     /// Broadcast that a lesson has been booked.
@@ -234,18 +273,20 @@ extension Request {
             "status": "booked"
         ]
         if let user = self.auth.get(User.self) {
+            payload["studentID"] = (try? user.requireID().uuidString)
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
            let text = String(data: data, encoding: .utf8) {
             application.instructorHub.broadcast(text)
-            application.studentHub.broadcast(text)
+            let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+            application.broadcastStudent(text, studentID: sid)
         }
     }
 
     /// Broadcast that a booking has been cancelled / slot freed.
-    func broadcastCancelled(for lesson: Lesson) throws {
+    func broadcastCancelled(for lesson: Lesson, studentID: UUID? = nil) throws {
         let lessonID = try lesson.requireID().uuidString
         var payload: [String: Any] = [
             "type": "booking_changed",
@@ -253,13 +294,15 @@ extension Request {
             "status": "cancelled"
         ]
         if let user = self.auth.get(User.self) {
+            payload["studentID"] = (try? user.requireID().uuidString)
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
            let text = String(data: data, encoding: .utf8) {
             application.instructorHub.broadcast(text)
-            application.studentHub.broadcast(text)
+            let sid = studentID ?? self.auth.get(User.self).flatMap { try? $0.requireID() }
+            application.broadcastStudent(text, studentID: sid)
         }
     }
 
@@ -274,20 +317,30 @@ extension Request {
             "status": "rescheduled"
         ]
         if let user = self.auth.get(User.self) {
+            payload["studentID"] = (try? user.requireID().uuidString)
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
            let text = String(data: data, encoding: .utf8) {
             application.instructorHub.broadcast(text)
-            application.studentHub.broadcast(text)
+            let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+            application.broadcastStudent(text, studentID: sid)
         }
     }
 
     /// Broadcast that a booking association has been cleared and the slot is available again.
-    func broadcastBookingCleared(for lesson: Lesson) {
+    func broadcastBookingCleared(for lesson: Lesson, studentID: UUID? = nil) {
         guard let lessonID = try? lesson.requireID() else { return }
         let update = AvailabilityUpdate.bookingCleared(lessonID: lessonID)
         application.availabilityHub.broadcast(update)
+
+        // Mirror the availability change onto the student websocket channel so
+        // student clients connected on /ws/student can immediately repopulate
+        // the Book tab after a cancellation.
+        if let data = try? JSONEncoder().encode(update),
+           let text = String(data: data, encoding: .utf8) {
+            application.broadcastStudent(text, studentID: studentID)
+        }
     }
 }

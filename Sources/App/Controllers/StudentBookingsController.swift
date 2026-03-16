@@ -14,10 +14,14 @@ extension Booking {
 
 struct StudentBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        // student, session-protected
+        // student, session-protected or bearer-protected
         let student = routes
             .grouped("student")
-            .grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+            .grouped(
+                SessionTokenAuthenticator(),
+                BearerTokenAuthenticator(),
+                User.guardMiddleware()
+            )
 
         // /student/bookings
         let bookings = student.grouped("bookings")

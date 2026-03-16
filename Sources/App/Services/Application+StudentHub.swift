@@ -5,6 +5,11 @@ private struct MSMStudentHubKey: StorageKey {
     typealias Value = WebSocketHub
 }
 
+/// Storage key for student socket map (studentID → WebSocket)
+private struct MSMStudentSocketMapKey: StorageKey {
+    typealias Value = [UUID: WebSocket]
+}
+
 extension Application {
     /// Singleton hub for **student** websocket clients (future Student app)
     var msmStudentHub: WebSocketHub {
@@ -15,5 +20,11 @@ extension Application {
             return hub
         }
         set { storage[MSMStudentHubKey.self] = newValue }
+    }
+
+    /// Map of authenticated student sockets for future targeted delivery.
+    var msmStudentSockets: [UUID: WebSocket] {
+        get { storage[MSMStudentSocketMapKey.self] ?? [:] }
+        set { storage[MSMStudentSocketMapKey.self] = newValue }
     }
 }
