@@ -193,28 +193,7 @@ struct BookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
-        // Find ALL non-deleted bookings for this lesson and soft-delete them.
-        let bookings = try await Booking.query(on: req.db)
-            .filter(\.$lesson.$id == lessonID)
-            .filter(\.$deletedAt == nil)
-            .all()
-
-        var cancelledCount = 0
-        var cancelledStudentIDs: [UUID] = []
-
-        for b in bookings {
-            cancelledStudentIDs.append(b.$user.id)
-            try await b.delete(on: req.db) // soft delete
-            cancelledCount += 1
-        }
-
-        // Broadcast booking cancellation only to the affected student sockets,
-        // then publish one canonical availability update for the freed slot.
-        for sid in cancelledStudentIDs {
-            try req.broadcastCancelled(for: lesson, studentID: sid)
-            req.broadcastBookingCleared(for: lesson, studentID: sid)
-        }
-        req.broadcastBookingCleared(for: lesson)
+        let cancelledCount = try await req.cancelActiveBookings(for: lesson)
 
         struct Out: Content {
             let ok: Bool
@@ -264,69 +243,106 @@ extension Application {
 
 // MARK: - WebSocket broadcast helpers (used by StudentBookingsController)
 extension Request {
+    /// Soft-delete all active bookings for a lesson, notify affected student sockets,
+    /// and publish the canonical availability update once the slot is freed.
+    @discardableResult
+    func cancelActiveBookings(for lesson: Lesson) async throws -> Int {
+        let lessonID = try lesson.requireID()
+
+        let bookings = try await Booking.query(on: self.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        var cancelledStudentIDs: [UUID] = []
+        cancelledStudentIDs.reserveCapacity(bookings.count)
+
+        for booking in bookings {
+            cancelledStudentIDs.append(booking.$user.id)
+            try await booking.delete(on: self.db) // soft delete
+        }
+
+        for sid in cancelledStudentIDs {
+            try self.broadcastCancelled(for: lesson, studentID: sid)
+            self.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
+        self.broadcastBookingCleared(for: lesson)
+
+        return cancelledStudentIDs.count
+    }
+
+    private func sendBookingPayload(_ payload: [String: Any], studentID: UUID?) {
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+
+            application.instructorHub.broadcast(text)
+            application.broadcastStudent(text, studentID: studentID)
+        }
+    }
+
     /// Broadcast that a lesson has been booked.
     func broadcastBooked(for lesson: Lesson) throws {
         let lessonID = try lesson.requireID().uuidString
+
         var payload: [String: Any] = [
             "type": "booking_changed",
             "lessonID": lessonID,
             "status": "booked"
         ]
+
+        let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+
         if let user = self.auth.get(User.self) {
-            payload["studentID"] = (try? user.requireID().uuidString)
+            payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-           let text = String(data: data, encoding: .utf8) {
-            application.instructorHub.broadcast(text)
-            let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
-            application.broadcastStudent(text, studentID: sid)
-        }
+
+        sendBookingPayload(payload, studentID: sid)
     }
 
     /// Broadcast that a booking has been cancelled / slot freed.
     func broadcastCancelled(for lesson: Lesson, studentID: UUID? = nil) throws {
         let lessonID = try lesson.requireID().uuidString
+
         var payload: [String: Any] = [
             "type": "booking_changed",
             "lessonID": lessonID,
             "status": "cancelled"
         ]
+
+        let sid = studentID ?? self.auth.get(User.self).flatMap { try? $0.requireID() }
+
         if let user = self.auth.get(User.self) {
-            payload["studentID"] = (try? user.requireID().uuidString)
+            payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-           let text = String(data: data, encoding: .utf8) {
-            application.instructorHub.broadcast(text)
-            let sid = studentID ?? self.auth.get(User.self).flatMap { try? $0.requireID() }
-            application.broadcastStudent(text, studentID: sid)
-        }
+
+        sendBookingPayload(payload, studentID: sid)
     }
 
     /// Broadcast that a booking has been rescheduled to a new lesson.
     func broadcastRescheduled(old oldLesson: Lesson, new newLesson: Lesson) {
         let oldID = (try? oldLesson.requireID().uuidString) ?? ""
         let newID = (try? newLesson.requireID().uuidString) ?? ""
+
         var payload: [String: Any] = [
             "type": "booking_changed",
             "oldLessonID": oldID,
             "newLessonID": newID,
             "status": "rescheduled"
         ]
+
+        let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+
         if let user = self.auth.get(User.self) {
-            payload["studentID"] = (try? user.requireID().uuidString)
+            payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
         }
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-           let text = String(data: data, encoding: .utf8) {
-            application.instructorHub.broadcast(text)
-            let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
-            application.broadcastStudent(text, studentID: sid)
-        }
+
+        sendBookingPayload(payload, studentID: sid)
     }
 
     /// Broadcast that a booking association has been cleared and the slot is available again.
