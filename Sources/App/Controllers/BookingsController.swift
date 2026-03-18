@@ -106,9 +106,8 @@ struct BookingsController: RouteCollection {
 
         let res = Response(status: .ok)
         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
-        var mutable = res
-        mutable.body = .init(data: data)
-        return mutable
+        res.body = .init(data: data)
+        return res
     }
 
     func syncWorkBookings(req: Request) async throws -> Response {
@@ -177,7 +176,7 @@ struct BookingsController: RouteCollection {
 
         let out = WorkBookingsSyncOut(ok: true, upserted: upserted)
         let data = try JSONEncoder().encode(out)
-        var res = Response(status: .ok)
+        let res = Response(status: .ok)
         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
         res.body = .init(data: data)
         return res
@@ -207,7 +206,7 @@ struct BookingsController: RouteCollection {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(out)
 
-        var res = Response(status: .ok)
+        let res = Response(status: .ok)
         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
         res.body = .init(data: data)
         return res

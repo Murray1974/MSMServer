@@ -1,0 +1,360 @@
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version--58304C5D6DBC2206.txt
+[2/4] Emitting module App
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/BookingsController.swift:109:13: warning: variable 'mutable' was never mutated; consider changing to 'let' constant
+107 |         let res = Response(status: .ok)
+108 |         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+109 |         var mutable = res
+    |             `- warning: variable 'mutable' was never mutated; consider changing to 'let' constant
+110 |         mutable.body = .init(data: data)
+111 |         return mutable
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/BookingsController.swift:217:13: warning: variable 'res' was never mutated; consider changing to 'let' constant
+215 |         let data = try encoder.encode(out)
+216 | 
+217 |         var res = Response(status: .ok)
+    |             `- warning: variable 'res' was never mutated; consider changing to 'let' constant
+218 |         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+219 |         res.body = .init(data: data)
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/InstructorLessonController.swift:77:44: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+ 75 |                 .count()
+ 76 | 
+ 77 |             let capacity = lesson.capacity ?? 1
+    |                                            `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+ 78 |             let remaining = max(0, capacity - existingCount)
+ 79 | 
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/InstructorLessonController.swift:184:40: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+182 |         // Optional: prefix title to keep a visible clue in calendar UI.
+183 |         if let r = body.reason, r.isEmpty == false {
+184 |             let current = lesson.title ?? ""
+    |                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+185 |             let prefix = "Personal — \(r)"
+186 |             lesson.title = current.isEmpty ? prefix : prefix + " (" + current + ")"
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:261:33: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+259 |             action: AvailabilityAction.slotAvailable,
+260 |             id: try lesson.requireID(),
+261 |             title: lesson.title ?? "Unassigned",
+    |                                 `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+262 |             startsAt: lesson.startsAt,
+263 |             endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:264:39: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+262 |             startsAt: lesson.startsAt,
+263 |             endsAt: lesson.endsAt,
+264 |             capacity: lesson.capacity ?? 1
+    |                                       `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+265 |         )
+266 |         broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:340:41: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+338 |                     action: AvailabilityAction.slotAvailable,
+339 |                     id: try lesson.requireID(),
+340 |                     title: lesson.title ?? "Unassigned",
+    |                                         `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+341 |                     startsAt: lesson.startsAt,
+342 |                     endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:343:47: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+341 |                     startsAt: lesson.startsAt,
+342 |                     endsAt: lesson.endsAt,
+343 |                     capacity: lesson.capacity ?? 1
+    |                                               `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+344 |                 )
+345 |                 broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:363:56: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+361 |                 // "Untitled" is treated as the unallocated/available calendar; anything else
+362 |                 // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
+363 |                 let calendarName = lesson.calendarName ?? "Untitled"
+    |                                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+364 |                 let isStudentVisible = (calendarName == "Untitled")
+365 |                 let action = isStudentVisible ? AvailabilityAction.slotAvailable : AvailabilityAction.slotUnavailable
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:370:41: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+368 |                     action: action,
+369 |                     id: try lesson.requireID(),
+370 |                     title: lesson.title ?? "Unassigned",
+    |                                         `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+371 |                     startsAt: lesson.startsAt,
+372 |                     endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:373:47: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+371 |                     startsAt: lesson.startsAt,
+372 |                     endsAt: lesson.endsAt,
+373 |                     capacity: lesson.capacity ?? 1
+    |                                               `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+374 |                 )
+375 |                 broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:396:40: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+394 |                         action: AvailabilityAction.slotUnavailable, // treat as no longer available
+395 |                         id: try l.requireID(),
+396 |                         title: l.title ?? "Unassigned",
+    |                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+397 |                         startsAt: l.startsAt,
+398 |                         endsAt: l.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:399:46: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+397 |                         startsAt: l.startsAt,
+398 |                         endsAt: l.endsAt,
+399 |                         capacity: l.capacity ?? 1
+    |                                              `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+400 |                     )
+401 |                     broadcastAvailability(update, req.application)
+Build of product 'Run' complete! (10.08s)
+[ NOTICE ] Server started on http://0.0.0.0:8080
+[ INFO ] GET /ws/instructor [request-id: F0FC6422-C6BE-4DB8-AC9E-5F9B69411C19]
+[ INFO ] WS connected (instructor/dev mode) [request-id: F0FC6422-C6BE-4DB8-AC9E-5F9B69411C19]
+[ INFO ] GET /ws/instructor [request-id: 40319B71-C552-4902-83C1-14C93D68B393]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 40319B71-C552-4902-83C1-14C93D68B393]
+[ INFO ] WS closed (instructor) [request-id: F0FC6422-C6BE-4DB8-AC9E-5F9B69411C19]
+[ INFO ] GET /ws/instructor [request-id: 06B50579-BECE-4A64-A052-7710355FD915]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 06B50579-BECE-4A64-A052-7710355FD915]
+[ INFO ] GET /instructor/bookings/range [request-id: 25585521-A4D2-48C4-A086-A37E78970BC0]
+[ INFO ] GET /instructor/lessons/available [request-id: 1969CAA4-FEDB-4A1D-B0F6-368EC8729981]
+[ INFO ] GET /instructor/bookings/range [request-id: 72ECC0B9-7644-427C-8B11-E52E2BFB92A2]
+[ INFO ] GET /instructor/bookings/range [request-id: 792BBDA3-F3F3-4C85-8FCC-9669A4BC176A]
+[ INFO ] POST /instructor/sync/available [request-id: AF8BBF1A-3986-44D9-B063-961FA361C63D]
+[ INFO ] GET /instructor/bookings/range [request-id: A90C7460-1399-475A-AA2B-3224AB346611]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 8DD94F17-93BB-4CCA-BE19-0F3E6E793370]
+[ INFO ] GET /instructor/bookings/range [request-id: 187FEB73-02C6-4C19-B5C2-73C49140AED0]
+[ INFO ] GET /instructor/bookings/range [request-id: 3CB6B08F-B696-4CD6-BC1A-E0EC84DF8186]
+[ INFO ] GET /instructor/bookings/range [request-id: D4883EAF-A02A-4DEE-9F4B-7CE02025E623]
+[ INFO ] GET /instructor/bookings/range [request-id: 72E75EA4-C8E9-41B1-8E0A-35BE0BA9DBCE]
+[ INFO ] GET /instructor/lessons/available [request-id: D8CC866A-91C4-49C5-8AFA-7AA19DA99B33]
+[ INFO ] GET /instructor/bookings/range [request-id: 27594935-0214-4934-9064-BDDFF5593121]
+[ INFO ] GET /instructor/bookings/range [request-id: BEFE7B26-27D9-4374-A89F-950AEADD78CE]
+[ INFO ] POST /instructor/sync/available [request-id: E8B9EE15-AF25-4985-8BD0-EA6D36E6D256]
+[ INFO ] GET /instructor/bookings/range [request-id: EC8FF157-F7C8-4DC4-AF4C-37141754E973]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 1B5AEE9B-0B7B-4AD8-AD45-DEAA36C2E5AD]
+[ INFO ] GET /instructor/bookings/range [request-id: B1A1D9D1-135D-4B6A-88D1-D9B9FC8EB728]
+[ INFO ] GET /instructor/bookings/range [request-id: C066305B-24AA-47C2-A6B1-BAC51BDA870C]
+[ INFO ] GET /instructor/bookings/range [request-id: 0BA24745-4BFA-4A0C-97DC-D07F924E051C]
+[ INFO ] GET /instructor/bookings/range [request-id: 55339A6F-032B-4DE5-8A1E-038744BC6E41]
+[ INFO ] GET /instructor/bookings/range [request-id: EBA0707C-F383-4516-B92A-B8EF02C8EE26]
+[ INFO ] GET /instructor/bookings/range [request-id: 670418B9-B404-4353-BA1E-2C127AA4A7E0]
+[ INFO ] POST /instructor/sync/available [request-id: 86B0A734-61DF-41C3-8B85-2D1AAF37980A]
+[ INFO ] GET /instructor/bookings/range [request-id: 38FFEB7C-3B03-49B0-8856-2C21D88F4C13]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: B707AB6A-0175-4D1D-97E6-A84A598D5264]
+[ INFO ] GET /instructor/bookings/range [request-id: 50E18DE9-D1BB-4B3E-9A9B-B338ECBC5847]
+[ INFO ] GET /instructor/bookings/range [request-id: 889D8EC2-C6B7-4C29-AF89-CDA32D41B220]
+[ INFO ] GET /instructor/bookings/range [request-id: EF7BC8EE-9342-4356-83E0-6FB604920EF3]
+[ INFO ] GET /instructor/lessons/available [request-id: 31225432-740F-42CD-9CB5-66959302E288]
+[ INFO ] GET /instructor/bookings/range [request-id: D390A701-05DA-4DE7-B7E4-241BAACEE698]
+[ INFO ] GET /instructor/bookings/range [request-id: 127AD29E-60F9-49C9-BC58-EEA6BDEABA52]
+[ INFO ] POST /instructor/sync/available [request-id: FF887A02-C71D-4957-855E-2EEA136E6F89]
+[ INFO ] GET /instructor/bookings/range [request-id: 849AF212-494E-4CA4-9282-3C4BE6AD1A33]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: A8361B44-CDC4-4ACE-A2E8-220EA2CB2983]
+[ INFO ] GET /instructor/bookings/range [request-id: 235A65DC-D432-4C83-9C6A-85B23917484F]
+[ INFO ] GET /instructor/bookings/range [request-id: 9ED3C682-3057-4825-9940-03A4565A021B]
+[ INFO ] GET /instructor/bookings/range [request-id: 84E738E0-87BA-495E-A6E0-DEE312373B62]
+[ INFO ] WS closed (instructor) [request-id: 40319B71-C552-4902-83C1-14C93D68B393]
+zsh: command not found: MSMServer
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version--58304C5D6DBC2206.txt
+Build of product 'Run' complete! (4.13s)
+[ NOTICE ] Server started on http://0.0.0.0:8080
+[ INFO ] GET /ws/instructor [request-id: 1178FEDC-BA64-47A9-AE0C-3D9E1BC23354]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 1178FEDC-BA64-47A9-AE0C-3D9E1BC23354]
+[ INFO ] GET /instructor/lessons/available [request-id: E851BB78-9CF4-426E-809D-D903E5457AC8]
+[ INFO ] GET /instructor/bookings/range [request-id: EE7904EC-3E0F-456D-82E6-EC2B1CA336A9]
+[ INFO ] GET /instructor/lessons/available [request-id: A021C1A1-127C-4923-9B7E-A402FF8728B1]
+[ INFO ] GET /instructor/bookings/range [request-id: FA276F36-E796-4CA4-ADAA-4AD0F556A381]
+[ INFO ] GET /instructor/bookings/range [request-id: A87A259F-285E-4768-9B30-973EB03B83A3]
+[ INFO ] GET /instructor/lessons/available [request-id: 90202BE4-1C03-4619-97FE-6B1D80C2443B]
+[ INFO ] GET /instructor/bookings/range [request-id: 6DD7FFD3-21BE-4FB9-A499-1346ED3BF020]
+[ INFO ] GET /instructor/bookings/range [request-id: 8EF94AEC-5922-4589-8E68-CF446CE6E373]
+[ INFO ] GET /instructor/lessons/available [request-id: 729CF614-0B11-48A7-813A-87A7CC4F7EAA]
+[ INFO ] GET /instructor/bookings/range [request-id: D7519722-34A6-434D-A386-0D5969427071]
+[ INFO ] GET /instructor/bookings/range [request-id: 3FFCFDD6-6C4E-479E-A62F-E81F33C31532]
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version--58304C5D6DBC2206.txt
+Build of product 'Run' complete! (4.11s)
+[ NOTICE ] Server started on http://0.0.0.0:8080
+[ INFO ] GET /ws/instructor [request-id: 34FD5354-37D6-4F28-88A9-5B97BD60A3F1]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 34FD5354-37D6-4F28-88A9-5B97BD60A3F1]
+[ INFO ] GET /instructor/lessons/available [request-id: F74443DF-84E9-46AC-801A-730683AAF3C3]
+[ INFO ] GET /instructor/bookings/range [request-id: 2E638322-AECD-4C87-B71F-CDE20E8B19F2]
+[ INFO ] GET /instructor/lessons/available [request-id: C34801B9-4C13-4023-BECD-376D3038BBDE]
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version--58304C5D6DBC2206.txt
+[2/4] Emitting module App
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/BookingsController.swift:109:13: warning: variable 'mutable' was never mutated; consider changing to 'let' constant
+107 |         let res = Response(status: .ok)
+108 |         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+109 |         var mutable = res
+    |             `- warning: variable 'mutable' was never mutated; consider changing to 'let' constant
+110 |         mutable.body = .init(data: data)
+111 |         return mutable
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/BookingsController.swift:217:13: warning: variable 'res' was never mutated; consider changing to 'let' constant
+215 |         let data = try encoder.encode(out)
+216 | 
+217 |         var res = Response(status: .ok)
+    |             `- warning: variable 'res' was never mutated; consider changing to 'let' constant
+218 |         res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+219 |         res.body = .init(data: data)
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/InstructorLessonController.swift:77:44: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+ 75 |                 .count()
+ 76 | 
+ 77 |             let capacity = lesson.capacity ?? 1
+    |                                            `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+ 78 |             let remaining = max(0, capacity - existingCount)
+ 79 | 
+
+/Users/michaelmurray/MSMServer/Sources/App/Controllers/InstructorLessonController.swift:184:40: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+182 |         // Optional: prefix title to keep a visible clue in calendar UI.
+183 |         if let r = body.reason, r.isEmpty == false {
+184 |             let current = lesson.title ?? ""
+    |                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+185 |             let prefix = "Personal — \(r)"
+186 |             lesson.title = current.isEmpty ? prefix : prefix + " (" + current + ")"
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:261:33: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+259 |             action: AvailabilityAction.slotAvailable,
+260 |             id: try lesson.requireID(),
+261 |             title: lesson.title ?? "Unassigned",
+    |                                 `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+262 |             startsAt: lesson.startsAt,
+263 |             endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:264:39: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+262 |             startsAt: lesson.startsAt,
+263 |             endsAt: lesson.endsAt,
+264 |             capacity: lesson.capacity ?? 1
+    |                                       `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+265 |         )
+266 |         broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:340:41: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+338 |                     action: AvailabilityAction.slotAvailable,
+339 |                     id: try lesson.requireID(),
+340 |                     title: lesson.title ?? "Unassigned",
+    |                                         `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+341 |                     startsAt: lesson.startsAt,
+342 |                     endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:343:47: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+341 |                     startsAt: lesson.startsAt,
+342 |                     endsAt: lesson.endsAt,
+343 |                     capacity: lesson.capacity ?? 1
+    |                                               `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+344 |                 )
+345 |                 broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:363:56: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+361 |                 // "Untitled" is treated as the unallocated/available calendar; anything else
+362 |                 // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
+363 |                 let calendarName = lesson.calendarName ?? "Untitled"
+    |                                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+364 |                 let isStudentVisible = (calendarName == "Untitled")
+365 |                 let action = isStudentVisible ? AvailabilityAction.slotAvailable : AvailabilityAction.slotUnavailable
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:370:41: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+368 |                     action: action,
+369 |                     id: try lesson.requireID(),
+370 |                     title: lesson.title ?? "Unassigned",
+    |                                         `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+371 |                     startsAt: lesson.startsAt,
+372 |                     endsAt: lesson.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:373:47: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+371 |                     startsAt: lesson.startsAt,
+372 |                     endsAt: lesson.endsAt,
+373 |                     capacity: lesson.capacity ?? 1
+    |                                               `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+374 |                 )
+375 |                 broadcastAvailability(update, req.application)
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:396:40: warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+394 |                         action: AvailabilityAction.slotUnavailable, // treat as no longer available
+395 |                         id: try l.requireID(),
+396 |                         title: l.title ?? "Unassigned",
+    |                                        `- warning: left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+397 |                         startsAt: l.startsAt,
+398 |                         endsAt: l.endsAt,
+
+/Users/michaelmurray/MSMServer/Sources/App/routes.swift:399:46: warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+397 |                         startsAt: l.startsAt,
+398 |                         endsAt: l.endsAt,
+399 |                         capacity: l.capacity ?? 1
+    |                                              `- warning: left side of nil coalescing operator '??' has non-optional type 'Int', so the right side is never used
+400 |                     )
+401 |                     broadcastAvailability(update, req.application)
+Build of product 'Run' complete! (8.98s)
+[ NOTICE ] Server started on http://0.0.0.0:8080
+[ INFO ] GET /ws/instructor [request-id: F92F4CA2-1B40-4F73-BE12-02E6D575263D]
+[ INFO ] WS connected (instructor/dev mode) [request-id: F92F4CA2-1B40-4F73-BE12-02E6D575263D]
+[ INFO ] POST /instructor/lessons/325CE1A8-E7B2-4A9C-817C-D8C721C1E1CD/cancel-bookings [request-id: 68117DCA-EC73-4830-9DDD-F4978811233C]
+[ INFO ] GET /instructor/bookings/range [request-id: F49DC75C-9642-4319-958C-31909E62CC2B]
+[ INFO ] GET /instructor/lessons/available [request-id: A8F4807F-4DA3-46A3-BE77-D638E0C198A4]
+[ INFO ] GET /instructor/bookings/range [request-id: C83E96E7-2EB6-4FD2-9DE7-4043C756FEC8]
+[ INFO ] GET /instructor/bookings/range [request-id: 3FE9E120-7C6B-4395-BC67-7E9D95D00FEF]
+[ INFO ] GET /instructor/bookings/range [request-id: 82601A55-F286-4C58-8241-6A819ACA71C7]
+[ INFO ] GET /instructor/bookings/range [request-id: BF181E87-A320-4EF6-BF08-78C3AC73EABA]
+[ INFO ] GET /ws/instructor [request-id: 7502E628-C4E0-402B-99C0-F9837B66C0A0]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 7502E628-C4E0-402B-99C0-F9837B66C0A0]
+[ INFO ] GET /instructor/bookings/range [request-id: 8EF84110-BA45-4A9F-A887-408972D6BB2D]
+[ INFO ] GET /instructor/bookings/range [request-id: 510502BA-4EE1-41E5-AF68-C47A5E9F774F]
+[ INFO ] GET /instructor/bookings/range [request-id: 372EBBE8-8D63-4DFF-932B-9A77F28A899C]
+[ INFO ] GET /instructor/bookings/range [request-id: 0EFE8858-9045-4AB8-B70E-E8F3BB5E46E4]
+[ INFO ] GET /instructor/lessons/available [request-id: 47B2798E-1DD1-4691-8205-88A64332445D]
+[ INFO ] GET /instructor/bookings/range [request-id: 64912E25-B049-4ECF-A992-D2ACED3F271E]
+[ INFO ] GET /instructor/bookings/range [request-id: CA1DC482-168F-4FAC-B497-DFCB96849A20]
+[ INFO ] GET /ws/instructor [request-id: F20DE17D-3F72-4794-B50F-30C5EECC517D]
+[ INFO ] WS connected (instructor/dev mode) [request-id: F20DE17D-3F72-4794-B50F-30C5EECC517D]
+[ INFO ] GET /instructor/bookings/range [request-id: 38D618BB-413E-465C-BA2F-70BF23A6FF69]
+[ INFO ] WS closed (instructor) [request-id: 7502E628-C4E0-402B-99C0-F9837B66C0A0]
+[ INFO ] GET /ws/instructor [request-id: 643DC025-7A78-4050-ADE9-E3F75F9F50AE]
+[ INFO ] WS connected (instructor/dev mode) [request-id: 643DC025-7A78-4050-ADE9-E3F75F9F50AE]
+[ INFO ] GET /instructor/bookings/range [request-id: BDC62E7F-3653-4DF5-B199-1600FF34392B]
+[ INFO ] GET /instructor/bookings/range [request-id: 1CE9A00A-03D0-4DDC-A892-10CD2A865D97]
+[ INFO ] GET /instructor/bookings/range [request-id: 007D6FA7-2C36-4693-9E02-034AC198EAC2]
+[ INFO ] GET /instructor/bookings/range [request-id: 325A552E-7607-4FA6-B134-73098808106B]
+[ INFO ] GET /instructor/bookings/range [request-id: 398B55F5-EA5D-493D-8B3E-0F708AC2E7BB]
+[ INFO ] GET /instructor/lessons/available [request-id: 9E682354-B8B0-45A5-BB48-84D20A173F5A]
+[ INFO ] GET /instructor/bookings/range [request-id: 73BE2A23-E97A-487D-80CB-685DDD3283DB]
+[ INFO ] GET /instructor/bookings/range [request-id: 925926D8-2BC3-44DF-8D9C-A2D2CB787F47]
+[ INFO ] GET /instructor/bookings/range [request-id: B4E57A80-2C24-4BE2-AB22-740F0BEBA45F]
+[ INFO ] WS closed (instructor) [request-id: 643DC025-7A78-4050-ADE9-E3F75F9F50AE]
+[ INFO ] POST /instructor/sync/available [request-id: B83B27F1-BA55-410E-B501-8817DC98CC14]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 7A4983D0-4103-4AAA-AFA4-35A6FEC72CCF]
+[ INFO ] POST /instructor/sync/available [request-id: 24232B78-0A53-4B93-A31B-420ED157579C]
+[ INFO ] WS closed (instructor) [request-id: F92F4CA2-1B40-4F73-BE12-02E6D575263D]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 3559994D-D66C-4BD7-AA2A-0E617D3A9F8E]
+[ INFO ] POST /instructor/sync/available [request-id: AF01F943-BB71-40DE-9CFA-89642BA1F27D]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 12064508-82E8-413C-9742-082C4EB13CB0]
+[ INFO ] POST /instructor/sync/available [request-id: EDD32877-A1E7-4A3A-982A-39AB7865F7EC]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 08313C3C-FAF3-44F2-89E3-890C7E3F0D2A]
+[ INFO ] GET /ws/instructor [request-id: DF1D6DD7-942C-4481-8EFE-73E3470BDCE5]
+[ INFO ] WS connected (instructor/dev mode) [request-id: DF1D6DD7-942C-4481-8EFE-73E3470BDCE5]
+[ INFO ] GET /instructor/bookings/range [request-id: 75AAD5BF-CCC2-4C35-9437-E63312329540]
+[ INFO ] GET /instructor/bookings/range [request-id: 9847C00A-7990-4780-9FF9-2C577B2695BC]
+[ INFO ] GET /instructor/bookings/range [request-id: 0A04469C-B3D4-4E58-AD31-62999D9F4350]
+[ INFO ] POST /instructor/sync/available [request-id: EA6441AA-6C23-4A93-B7B9-D90B4AC04A12]
+[ INFO ] GET /instructor/bookings/range [request-id: 7E093061-5287-496F-8A22-5B931A47B6F8]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: C93516C5-C99C-4BF5-ADFA-D5549618CC91]
+[ INFO ] GET /instructor/bookings/range [request-id: 113D9072-B0A0-43C6-A5C6-CD40BB9B6AAC]
+[ INFO ] GET /instructor/bookings/range [request-id: 69AF7915-35D8-49D9-B01D-9EAF8D337D3A]
+[ INFO ] GET /instructor/bookings/range [request-id: F51A44FF-04FF-4FB7-BF68-7BB3D7756CD9]
+[ INFO ] GET /instructor/lessons/available [request-id: 2C32C6EF-EABE-42CA-BBEE-527BBF8544E5]
+[ INFO ] GET /instructor/lessons/available [request-id: 194F121D-8F0D-47B3-A6A3-F867BE3BA730]
+[ INFO ] GET /instructor/bookings/range [request-id: E6E22808-EA57-466E-AA33-FDDD33F1B80E]
+[ INFO ] GET /instructor/bookings/range [request-id: 52499042-6DEB-46BF-BB90-FD796F69D3F1]
+[ INFO ] GET /instructor/bookings/range [request-id: 05E350DE-FD7B-4333-877A-CFF505AB8F1E]
+[ INFO ] POST /instructor/sync/available [request-id: 4C4975A8-F3F4-4CC9-9F52-62ED3FF7473E]
+[ INFO ] GET /instructor/bookings/range [request-id: E44BF031-8C46-4E5F-B6A2-1FA344500216]
+[ INFO ] POST /instructor/sync/work-bookings [request-id: 27C278CB-BFA8-4659-A0B6-035EA7B7C11C]
+[ INFO ] GET /instructor/bookings/range [request-id: 3898B843-7AA0-4096-8651-903B65B79FF3]
+[ INFO ] GET /instructor/bookings/range [request-id: A8808D51-71A8-4D3A-A1EA-A7A0974F5AA9]
+[ INFO ] GET /instructor/bookings/range [request-id: 44FA9E98-C09B-4500-8713-3505AAC65468]
+[ INFO ] GET /instructor/bookings/range [request-id: 76CB12D8-3CCD-4E37-B46B-7CA2D83E8D00]
+[ INFO ] GET /instructor/bookings/range [request-id: 12168E9B-5E5C-478F-BD79-0C3FC9CE09B8]

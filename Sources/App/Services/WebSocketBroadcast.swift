@@ -1,4 +1,3 @@
-
 import Vapor
 import NIOConcurrencyHelpers
 
@@ -87,7 +86,7 @@ extension Application {
             self.instructorHub.broadcast(text)
             self.studentHub.broadcast(text)
         }
-        self.logger.info("Broadcasted(\(audience)): \(text)")
+        self.logger.debug("Broadcasted(\(audience))")
     }
 
     /// Rich broadcast used when agents/apps need identifiers to mutate local state (e.g. moving EventKit events).
@@ -107,7 +106,7 @@ extension Application {
         ].joined(separator: "|")
 
         guard Application.broadcastDeduplicator.shouldBroadcast(key: dedupeKey) else {
-            self.logger.info("Broadcast deduped: \(dedupeKey)")
+            self.logger.debug("Broadcast deduped")
             return
         }
 
@@ -136,7 +135,7 @@ extension Application {
             self.instructorHub.broadcast(text)
             self.studentHub.broadcast(text)
         }
-        self.logger.info("Broadcasted(\(audience)): \(text)")
+        self.logger.debug("Broadcasted(\(audience))")
     }
 
     /// Canonical booking-changed broadcast.

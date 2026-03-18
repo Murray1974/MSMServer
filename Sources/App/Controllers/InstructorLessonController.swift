@@ -74,7 +74,7 @@ struct InstructorLessonController: RouteCollection {
                 .filter(\.$deletedAt == nil)
                 .count()
 
-            let capacity = lesson.capacity ?? 1
+            let capacity = lesson.capacity
             let remaining = max(0, capacity - existingCount)
 
             // Skip full lessons
@@ -181,7 +181,7 @@ struct InstructorLessonController: RouteCollection {
 
         // Optional: prefix title to keep a visible clue in calendar UI.
         if let r = body.reason, r.isEmpty == false {
-            let current = lesson.title ?? ""
+            let current = lesson.title
             let prefix = "Personal — \(r)"
             lesson.title = current.isEmpty ? prefix : prefix + " (" + current + ")"
         } else if let t = body.title {

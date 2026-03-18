@@ -63,7 +63,7 @@ final class CalendarSyncService {
     func syncAndLog(_ req: Request) async throws -> [CalendarSlot] {
         let slots = try await fetchSlots(req)
 
-        req.logger.info("ICS sync found \(slots.count) slot(s)")
+        req.logger.debug("ICS sync found \(slots.count) slot(s)")
 
         var upserted = 0
         var cleared = 0
@@ -91,6 +91,24 @@ final class CalendarSyncService {
                 lesson.endsAt = s.end
                 lesson.calendarName = newCalendarName
                 oldCalendarName = nil
+            }
+
+            // If this lesson already has booking history, do NOT let an ICS "Untitled/Unassigned"
+            // overwrite push it back to Available. Booking/manual state must win over raw ICS sync.
+            if let existingID = try? lesson.requireID(),
+               let oldName = oldCalendarName,
+               isUnassignedCalendarName(newCalendarName),
+               !isUnassignedCalendarName(oldName) {
+
+                let bookingHistoryCount = try await Booking.query(on: req.db)
+                    .withDeleted()
+                    .filter(\.$lesson.$id == existingID)
+                    .count()
+
+                if bookingHistoryCount > 0 {
+                    req.logger.info("ICS sync: preserving lesson \(existingID) as [\(oldName)] — ignoring unassigned overwrite because booking history exists")
+                    continue
+                }
             }
 
             // Update calendarName.
@@ -126,12 +144,7 @@ final class CalendarSyncService {
             }
         }
 
-        req.logger.info("ICS sync upserted \(upserted) lesson(s); cleared \(cleared) booking(s)")
-
-        // Log the first few for visibility
-        for s in slots.prefix(20) {
-            req.logger.info("  • \(s.start) → \(s.end) [\(s.summary)]")
-        }
+        req.logger.info("ICS sync: upserted \(upserted), cleared \(cleared)")
 
         return slots
     }

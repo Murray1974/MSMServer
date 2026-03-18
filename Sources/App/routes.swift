@@ -342,10 +342,10 @@ public func routes(_ app: Application) throws {
         let update = AvailabilityUpdate(
             action: AvailabilityAction.slotAvailable,
             id: try lesson.requireID(),
-            title: lesson.title ?? "Unassigned",
+            title: lesson.title,
             startsAt: lesson.startsAt,
             endsAt: lesson.endsAt,
-            capacity: lesson.capacity ?? 1
+            capacity: lesson.capacity
         )
         broadcastAvailability(update, req.application)
         return update
@@ -392,6 +392,13 @@ public func routes(_ app: Application) throws {
         var links: [SlotLink] = []
 
         for s in input.slots {
+
+            // Only accept MSM calendars (strict)
+            guard let cal = s.calendarName,
+                  cal == "Untitled" || cal == "Mikes work"
+            else {
+                continue
+            }
             guard let start = parseISO8601(s.startsAt),
                   let end = parseISO8601(s.endsAt) else {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
@@ -421,10 +428,10 @@ public func routes(_ app: Application) throws {
                 let update = AvailabilityUpdate(
                     action: AvailabilityAction.slotAvailable,
                     id: try lesson.requireID(),
-                    title: lesson.title ?? "Unassigned",
+                    title: lesson.title,
                     startsAt: lesson.startsAt,
                     endsAt: lesson.endsAt,
-                    capacity: lesson.capacity ?? 1
+                    capacity: lesson.capacity
                 )
                 broadcastAvailability(update, req.application)
                 upsertedCount += 1
@@ -444,17 +451,17 @@ public func routes(_ app: Application) throws {
                 // Decide whether this slot should be visible to students based on calendarName.
                 // "Untitled" is treated as the unallocated/available calendar; anything else
                 // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
-                let calendarName = lesson.calendarName ?? "Untitled"
+                let calendarName = lesson.calendarName
                 let isStudentVisible = (calendarName == "Untitled")
                 let action = isStudentVisible ? AvailabilityAction.slotAvailable : AvailabilityAction.slotUnavailable
 
                 let update = AvailabilityUpdate(
                     action: action,
                     id: try lesson.requireID(),
-                    title: lesson.title ?? "Unassigned",
+                    title: lesson.title,
                     startsAt: lesson.startsAt,
                     endsAt: lesson.endsAt,
-                    capacity: lesson.capacity ?? 1
+                    capacity: lesson.capacity
                 )
                 broadcastAvailability(update, req.application)
             }
@@ -477,10 +484,10 @@ public func routes(_ app: Application) throws {
                     let update = AvailabilityUpdate(
                         action: AvailabilityAction.slotUnavailable, // treat as no longer available
                         id: try l.requireID(),
-                        title: l.title ?? "Unassigned",
+                        title: l.title,
                         startsAt: l.startsAt,
                         endsAt: l.endsAt,
-                        capacity: l.capacity ?? 1
+                        capacity: l.capacity
                     )
                     broadcastAvailability(update, req.application)
                 }
