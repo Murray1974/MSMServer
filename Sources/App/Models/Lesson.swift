@@ -22,6 +22,9 @@ final class Lesson: Model, Content {
     @Field(key: "calendar_name")
     var calendarName: String
 
+    @Field(key: "state")
+    var state: String
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -36,7 +39,8 @@ final class Lesson: Model, Content {
         startsAt: Date,
         endsAt: Date,
         capacity: Int,
-        calendarName: String = "Untitled"
+        calendarName: String = "Untitled",
+        state: String = "available"
     ) {
         self.id = id
         self.title = title
@@ -44,6 +48,7 @@ final class Lesson: Model, Content {
         self.endsAt = endsAt
         self.capacity = capacity
         self.calendarName = calendarName
+        self.state = state
     }
 }
 
@@ -56,10 +61,11 @@ extension Lesson {
         let endsAt: Date
         let capacity: Int
         let available: Int
+        let state: String
     }
 
     func asPublic(available: Int) -> Public {
-        .init(id: id, title: title, startsAt: startsAt, endsAt: endsAt, capacity: capacity, available: available)
+        .init(id: id, title: title, startsAt: startsAt, endsAt: endsAt, capacity: capacity, available: available, state: state)
     }
 }
 

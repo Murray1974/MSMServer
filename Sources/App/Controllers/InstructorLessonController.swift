@@ -178,6 +178,7 @@ struct InstructorLessonController: RouteCollection {
 
         // Mark as non-student-visible by moving off the Untitled calendar.
         lesson.calendarName = "Mike personal"
+        lesson.state = "personal"
 
         // Optional: prefix title to keep a visible clue in calendar UI.
         if let r = body.reason, r.isEmpty == false {
@@ -223,6 +224,7 @@ struct InstructorLessonController: RouteCollection {
 
         // Student-visible calendar
         lesson.calendarName = "Untitled"
+        lesson.state = "available"
         if let t = body.title {
             lesson.title = t
         }

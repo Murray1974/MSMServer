@@ -399,6 +399,8 @@ public func routes(_ app: Application) throws {
             else {
                 continue
             }
+
+            let syncedState = (cal == "Untitled") ? "available" : "booked"
             guard let start = parseISO8601(s.startsAt),
                   let end = parseISO8601(s.endsAt) else {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
@@ -420,7 +422,8 @@ public func routes(_ app: Application) throws {
                 l.endsAt = end
                 l.title = s.title ?? "Unassigned"
                 l.capacity = s.capacity ?? 1
-                l.calendarName = s.calendarName ?? "Untitled"
+                l.calendarName = cal
+                l.state = syncedState
                 try await l.save(on: req.db)
                 lesson = l
 
@@ -441,18 +444,19 @@ public func routes(_ app: Application) throws {
             var changed = false
             if let t = s.title, t != lesson.title { lesson.title = t; changed = true }
             if let c = s.capacity, c != lesson.capacity { lesson.capacity = c; changed = true }
-            if let calName = s.calendarName, calName != lesson.calendarName {
-                lesson.calendarName = calName
+            if cal != lesson.calendarName {
+                lesson.calendarName = cal
+                changed = true
+            }
+            if lesson.state != syncedState {
+                lesson.state = syncedState
                 changed = true
             }
             if changed {
                 try await lesson.save(on: req.db)
 
-                // Decide whether this slot should be visible to students based on calendarName.
-                // "Untitled" is treated as the unallocated/available calendar; anything else
-                // (e.g. "Mikes work") is treated as personal/allocated and thus unavailable.
-                let calendarName = lesson.calendarName
-                let isStudentVisible = (calendarName == "Untitled")
+                // Decide whether this slot should be visible to students based on state.
+                let isStudentVisible = (lesson.state == "available")
                 let action = isStudentVisible ? AvailabilityAction.slotAvailable : AvailabilityAction.slotUnavailable
 
                 let update = AvailabilityUpdate(
