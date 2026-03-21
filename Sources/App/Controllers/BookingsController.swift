@@ -47,6 +47,7 @@ struct BookingsController: RouteCollection {
 
         let rawStudentName = input.studentName.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = slug(rawStudentName)
+        req.logger.info("manual-booking: incoming studentName=\(rawStudentName) slug=\(username) startsAt=\(input.startsAt) endsAt=\(input.endsAt)")
 
         // Never create bookings from placeholder/blank titles.
         if username.isEmpty || username == "slot" {
@@ -57,6 +58,7 @@ struct BookingsController: RouteCollection {
             .filter(\.$username == username)
             .first()
         else {
+            req.logger.warning("manual-booking: user not found for studentName=\(rawStudentName) slug=\(username)")
             throw Abort(.badRequest, reason: "Student user not found: \(username)")
         }
 
@@ -71,6 +73,7 @@ struct BookingsController: RouteCollection {
         // 3) Create booking if it doesn't already exist
         let lessonID = try lesson.requireID()
         let userID = try user.requireID()
+        req.logger.info("manual-booking: resolved user id=\(userID) username=\(user.username) displayName=\(user.displayName)")
 
         let booking: Booking
         if let existing = try await Booking.query(on: req.db)
@@ -78,18 +81,28 @@ struct BookingsController: RouteCollection {
             .filter(\.$user.$id == userID)
             .first() {
             booking = existing
+            req.logger.info("manual-booking: reusing existing booking for lessonID=\(lessonID) userID=\(userID)")
         } else {
             let b = Booking()
             b.$user.id = userID
             b.$lesson.id = lessonID
             try await b.save(on: req.db)
             booking = b
+            req.logger.info("manual-booking: created booking for lessonID=\(lessonID) userID=\(userID)")
+        }
+
+        // Ensure the lesson reflects that it is now booked.
+        if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+            lesson.state = "booked"
+            lesson.calendarName = "Mike work"
+            try await lesson.save(on: req.db)
         }
 
         let bookingID = try booking.requireID()
+        req.logger.info("manual-booking: broadcasting booked for lessonID=\(lessonID) bookingID=\(bookingID) userID=\(userID)")
 
         // 4) Broadcast booking change (single canonical path)
-        try req.broadcastBooked(for: lesson)
+        try req.broadcastBooked(for: lesson, student: user)
 
         // 5) Return minimal success payload
         struct Out: Content {
@@ -129,10 +142,12 @@ struct BookingsController: RouteCollection {
                 req.logger.warning("work-bookings: lesson not found: \(item.lessonID)")
                 continue
             }
+            req.logger.info("work-bookings: incoming lessonID=\(item.lessonID) studentName=\(item.studentName)")
 
             // 2) Resolve or create a student user for this calendar title
             let rawStudentName = item.studentName.trimmingCharacters(in: .whitespacesAndNewlines)
             let username = slug(rawStudentName)
+            req.logger.info("work-bookings: normalized title=\(rawStudentName) slug=\(username) lessonID=\(item.lessonID)")
 
             // Skip placeholder/blank titles so we never create bookings owned by `slot`.
             if username.isEmpty || username == "slot" {
@@ -150,27 +165,41 @@ struct BookingsController: RouteCollection {
 
             let lessonID = try lesson.requireID()
             let userID = try user.requireID()
+            req.logger.info("work-bookings: resolved user id=\(userID) username=\(user.username) displayName=\(user.displayName) lessonID=\(lessonID)")
 
-            // 3) Upsert booking keyed by lessonID + userID,
-            // but do NOT recreate a booking if this lesson has any booking history.
-            let anyBookingEver = try await Booking.query(on: req.db)
-                .withDeleted()
+            // Check for an active booking for this lesson+user instead of any history
+            let existingActive = try await Booking.query(on: req.db)
                 .filter(\.$lesson.$id == lessonID)
+                .filter(\.$user.$id == userID)
+                .filter(\.$deletedAt == nil)
                 .first()
 
-            if anyBookingEver != nil {
-                // Do not recreate bookings from work sync.
-                // Bookings must come from student / instructor booking flow only.
-                req.logger.info("work-bookings: skip recreate (lesson already has booking history) lessonID=\(lessonID)")
+            if existingActive != nil {
+                req.logger.info("work-bookings: active booking already exists lessonID=\(lessonID) userID=\(userID)")
+
+                if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+                    lesson.state = "booked"
+                    lesson.calendarName = "Mike work"
+                    try await lesson.save(on: req.db)
+                }
             } else {
                 let b = Booking()
                 b.$user.id = userID
                 b.$lesson.id = lessonID
                 try await b.save(on: req.db)
+                req.logger.info("work-bookings: created booking for lessonID=\(lessonID) userID=\(userID)")
+
+                if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+                    lesson.state = "booked"
+                    lesson.calendarName = "Mike work"
+                    try await lesson.save(on: req.db)
+                }
+
                 upserted += 1
 
+                req.logger.info("work-bookings: broadcasting booked for lessonID=\(lessonID) userID=\(userID)")
                 // 4) Broadcast booking change only when something actually changed
-                try req.broadcastBooked(for: lesson)
+                try req.broadcastBooked(for: lesson, student: user)
             }
         }
 
@@ -280,7 +309,7 @@ extension Request {
     }
 
     /// Broadcast that a lesson has been booked.
-    func broadcastBooked(for lesson: Lesson) throws {
+    func broadcastBooked(for lesson: Lesson, student: User? = nil) throws {
         let lessonID = try lesson.requireID().uuidString
 
         var payload: [String: Any] = [
@@ -289,9 +318,10 @@ extension Request {
             "status": "booked"
         ]
 
-        let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+        let resolvedUser = student ?? self.auth.get(User.self)
+        let sid = resolvedUser.flatMap { try? $0.requireID() }
 
-        if let user = self.auth.get(User.self) {
+        if let user = resolvedUser {
             payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName

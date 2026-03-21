@@ -23,7 +23,7 @@ private func inferredCalendarName(from summary: String) -> String {
     if l.contains("personal") { return "Personal" }
 
     // Default: treat as work/booked calendar
-    return "Mikes work"
+    return "Mike work"
 }
 
 final class CalendarSyncService {

@@ -395,7 +395,7 @@ public func routes(_ app: Application) throws {
 
             // Only accept MSM calendars (strict)
             guard let cal = s.calendarName,
-                  cal == "Untitled" || cal == "Mikes work"
+                  cal == "Untitled" || cal == "Mike work"
             else {
                 continue
             }

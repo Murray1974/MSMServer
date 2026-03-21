@@ -36,10 +36,10 @@ struct StudentLessonController: RouteCollection {
     func availableLessons(_ req: Request) async throws -> [Lesson] {
         let now = Date()
 
-        // 1) Start with all future lessons on the "Untitled" calendar.
+        // 1) Start with all future lessons that are explicitly available.
         let candidates = try await Lesson.query(on: req.db)
             .filter(\.$startsAt > now)
-            .filter(\.$calendarName == "Untitled")
+            .filter(\.$state == "available")
             .all()
 
         // 2) For each lesson, check how many active bookings it already has and only
