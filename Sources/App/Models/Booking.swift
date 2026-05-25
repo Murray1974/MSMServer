@@ -42,6 +42,20 @@ final class Booking: Model, Content, @unchecked Sendable {
     @OptionalField(key: "pickup_source")
     var pickupSource: String?
 
+    /// Optional alternate drop-off address for this booking, if different from pickup.
+    @OptionalField(key: "dropoff_location")
+    var dropoffLocation: String?
+
+    /// Payment lifecycle status. Set to "pending" on creation, "confirmed"
+    /// after a successful payment flow, or "paid" when manually marked by student.
+    @OptionalField(key: "payment_status")
+    var paymentStatus: String?
+
+    /// Set to "late_cancellation" when the booking is cancelled within 48 hours
+    /// of the lesson start time. Nil for normal (on-time) cancellations.
+    @OptionalField(key: "cancellation_type")
+    var cancellationType: String?
+
     init() { }
 
     init(
@@ -51,7 +65,8 @@ final class Booking: Model, Content, @unchecked Sendable {
         durationMinutes: Int? = nil,
         actualEndsAt: Date? = nil,
         pickupLocation: String? = nil,
-        pickupSource: String? = nil
+        pickupSource: String? = nil,
+        paymentStatus: String? = nil
     ) {
         self.id = id
         self.$user.id = userID
@@ -60,5 +75,6 @@ final class Booking: Model, Content, @unchecked Sendable {
         self.actualEndsAt = actualEndsAt
         self.pickupLocation = pickupLocation
         self.pickupSource = pickupSource
+        self.paymentStatus = paymentStatus
     }
 }

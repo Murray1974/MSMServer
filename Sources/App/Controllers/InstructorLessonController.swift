@@ -18,6 +18,15 @@ struct InstructorLessonController: RouteCollection {
 
         // Restore a lesson back to available (moves it back onto the student-visible calendar)
         instructor.post("lessons", ":lessonID", "available", use: markLessonAvailable)
+
+        // Instructor-side reschedule: moves a booking to a different lesson (no ownership/48h checks)
+        instructor.post("bookings", ":bookingID", "reschedule", use: instructorReschedule)
+
+        // Instructor-side swap: exchanges lesson slots between two bookings, notifying both students
+        instructor.post("bookings", ":bookingID", "swap", use: instructorSwap)
+
+        // Set or clear an alternate drop-off location on a booking
+        instructor.patch("bookings", ":bookingID", "dropoff", use: setDropoffLocation)
     }
 
     struct InstructorLessonRow: Content {
@@ -28,14 +37,22 @@ struct InstructorLessonController: RouteCollection {
         var capacity: Int
         var booked: Int
         var available: Int
+        var state: String
     }
 
     struct BookingRangeRow: Content {
         var id: UUID
+        var lessonID: UUID
+        var userID: UUID
         var studentName: String
+        var studentDisplayName: String?
         var title: String?
         var startsAt: Date
         var endsAt: Date
+        var financeStatus: String?
+        var status: String?           // "active" | "late_cancelled"
+        var cancellationType: String? // "late_cancellation" | nil
+        var dropoffLocation: String?
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -55,11 +72,11 @@ struct InstructorLessonController: RouteCollection {
         let toDate = q.to.flatMap { iso.date(from: $0) }
             ?? Calendar.current.date(byAdding: .day, value: 56, to: fromDate)!
 
-        // 1) Available lessons on the Untitled calendar within the requested window
+        // 1) Available lessons on the MSM Available calendar within the requested window
         let candidates = try await Lesson.query(on: req.db)
             .filter(\.$startsAt >= fromDate)
             .filter(\.$startsAt <= toDate)
-            .filter(\.$calendarName == "Untitled")
+            .filter(\.$calendarName == "MSM Available")
             .all()
 
         // 2) For each lesson, count active bookings and only return those
@@ -88,7 +105,8 @@ struct InstructorLessonController: RouteCollection {
                     endsAt: lesson.endsAt,
                     capacity: capacity,
                     booked: existingCount,
-                    available: remaining
+                    available: remaining,
+                    state: lesson.state
                 )
             )
         }
@@ -125,14 +143,20 @@ struct InstructorLessonController: RouteCollection {
 
         var rows: [BookingRangeRow] = []
 
-        // 2) For each lesson, fetch its active (non-deleted) bookings and
-        //    emit a summary row per booking.
+        // 2) For each lesson, fetch active bookings AND late-cancelled bookings
+        //    (late cancellations are soft-deleted but the instructor still owes the fee).
         for lesson in lessonsInRange {
             guard let lessonID = lesson.id else { continue }
 
+            // .withDeleted() bypasses Fluent's automatic deleted_at IS NULL filter so we
+            // can then manually select active + late-cancelled rows together.
             let bookings = try await Booking.query(on: req.db)
+                .withDeleted()
                 .filter(\.$lesson.$id == lessonID)
-                .filter(\.$deletedAt == nil)
+                .group(.or) { g in
+                    g.filter(\.$deletedAt == nil)
+                    g.filter(\.$cancellationType == "late_cancellation")
+                }
                 .all()
 
             for booking in bookings {
@@ -141,13 +165,28 @@ struct InstructorLessonController: RouteCollection {
                 let student = try await booking.$user.get(on: req.db)
                 let studentName = student.username
 
+                let isLate = booking.cancellationType == "late_cancellation"
+
+                var financeStatus: String? = nil
+                if let lessonFinance = try await LessonFinance.find(lessonID, on: req.db) {
+                    try await FinanceController().evaluateCoverage(for: lessonFinance, on: req.db)
+                    financeStatus = lessonFinance.financeStatus
+                }
+
                 rows.append(
                     BookingRangeRow(
                         id: bookingID,
+                        lessonID: lessonID,
+                        userID: booking.$user.id,
                         studentName: studentName,
+                        studentDisplayName: student.displayName,
                         title: lesson.title,
                         startsAt: lesson.startsAt,
-                        endsAt: lesson.endsAt
+                        endsAt: lesson.endsAt,
+                        financeStatus: financeStatus,
+                        status: isLate ? "late_cancelled" : "active",
+                        cancellationType: booking.cancellationType,
+                        dropoffLocation: booking.dropoffLocation
                     )
                 )
             }
@@ -176,7 +215,9 @@ struct InstructorLessonController: RouteCollection {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
-        // Mark as non-student-visible by moving off the Untitled calendar.
+        // Mark as non-student-visible. Save BEFORE cancelling bookings so
+        // that any student HTTP refresh triggered by the cancellation broadcast
+        // already finds this lesson as "personal" (excluded from available list).
         lesson.calendarName = "Mike personal"
         lesson.state = "personal"
 
@@ -190,6 +231,21 @@ struct InstructorLessonController: RouteCollection {
         }
 
         try await lesson.save(on: req.db)
+
+        // Cancel any active student bookings now that the lesson is personal.
+        // The instructor is reclaiming this slot — the student is not at fault,
+        // so no late cancellation charge applies regardless of timing.
+        let activeBookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        for booking in activeBookings {
+            try await booking.delete(on: req.db)
+            let sid = booking.$user.id
+            try req.broadcastCancelled(for: lesson, studentID: sid)
+            req.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
 
         // Broadcast rich event so agent can move the EKEvent (by stamped MSM_LESSON_ID).
         req.application.broadcastLessonEvent(
@@ -222,8 +278,12 @@ struct InstructorLessonController: RouteCollection {
             throw Abort(.notFound, reason: "Lesson not found")
         }
 
+        // Cancel any active bookings before freeing the slot so a subsequent
+        // syncWorkBookings call sees no zombie booking and can re-broadcast.
+        _ = try await req.cancelActiveBookings(for: lesson)
+
         // Student-visible calendar
-        lesson.calendarName = "Untitled"
+        lesson.calendarName = "MSM Available"
         lesson.state = "available"
         if let t = body.title {
             lesson.title = t
@@ -241,6 +301,142 @@ struct InstructorLessonController: RouteCollection {
             reason: nil
         )
 
+        return .ok
+    }
+
+    // MARK: - POST /instructor/bookings/:bookingID/swap
+    //
+    // Exchanges the lesson slots of two active bookings. Both students are
+    // notified via the existing "booking_changed / rescheduled" WebSocket broadcast.
+    // No ownership or 48-hour checks — instructor-only operation.
+
+    func instructorSwap(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        struct SwapInput: Content { let targetBookingID: UUID }
+        let body = try req.content.decode(SwapInput.self)
+
+        guard bookingID != body.targetBookingID else {
+            throw Abort(.badRequest, reason: "Cannot swap a booking with itself")
+        }
+
+        guard let bookingA = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$deletedAt == nil)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Source booking not found")
+        }
+
+        guard let bookingB = try await Booking.query(on: req.db)
+            .filter(\.$id == body.targetBookingID)
+            .filter(\.$deletedAt == nil)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Target booking not found")
+        }
+
+        let lessonA  = try await bookingA.$lesson.get(on: req.db)
+        let lessonB  = try await bookingB.$lesson.get(on: req.db)
+        let studentA = try await bookingA.$user.get(on: req.db)
+        let studentB = try await bookingB.$user.get(on: req.db)
+
+        guard lessonA.startsAt > Date(), lessonB.startsAt > Date() else {
+            throw Abort(.unprocessableEntity, reason: "Cannot swap a lesson that has already started")
+        }
+
+        let lessonAID = try lessonA.requireID()
+        let lessonBID = try lessonB.requireID()
+
+        // Swap lesson assignments
+        bookingA.$lesson.id = lessonBID
+        bookingB.$lesson.id = lessonAID
+
+        // Carry each booking's duration to the new slot's start time
+        if let mins = bookingA.durationMinutes {
+            bookingA.actualEndsAt = lessonB.startsAt.addingTimeInterval(Double(mins) * 60)
+        } else {
+            bookingA.actualEndsAt = nil
+        }
+        if let mins = bookingB.durationMinutes {
+            bookingB.actualEndsAt = lessonA.startsAt.addingTimeInterval(Double(mins) * 60)
+        } else {
+            bookingB.actualEndsAt = nil
+        }
+
+        try await bookingA.save(on: req.db)
+        try await bookingB.save(on: req.db)
+
+        // Broadcast to both students — each sees their own slot move as a reschedule
+        req.broadcastRescheduled(old: lessonA, new: lessonB, explicitStudent: studentA)
+        req.broadcastRescheduled(old: lessonB, new: lessonA, explicitStudent: studentB)
+
+        return .ok
+    }
+
+    // MARK: - POST /instructor/bookings/:bookingID/reschedule
+
+    func instructorReschedule(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        struct RescheduleInput: Content { let newLessonID: UUID }
+        let body = try req.content.decode(RescheduleInput.self)
+
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$deletedAt == nil)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+
+        guard let newLesson = try await Lesson.find(body.newLessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Lesson not found")
+        }
+
+        guard newLesson.startsAt > Date() else {
+            throw Abort(.unprocessableEntity, reason: "Cannot reschedule to a lesson that has already started")
+        }
+
+        let oldLesson = try await booking.$lesson.get(on: req.db)
+        let student   = try await booking.$user.get(on: req.db)
+
+        booking.$lesson.id = try newLesson.requireID()
+
+        if let mins = booking.durationMinutes {
+            booking.actualEndsAt = newLesson.startsAt.addingTimeInterval(Double(mins) * 60)
+        } else {
+            booking.actualEndsAt = nil
+        }
+
+        try await booking.save(on: req.db)
+        req.broadcastRescheduled(old: oldLesson, new: newLesson, explicitStudent: student)
+
+        return .ok
+    }
+
+    // MARK: - PATCH /instructor/bookings/:bookingID/dropoff
+    func setDropoffLocation(_ req: Request) async throws -> HTTPStatus {
+        struct Body: Content {
+            var dropoffLocation: String?
+        }
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingID missing or invalid")
+        }
+
+        guard let booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+
+        let body = (try? req.content.decode(Body.self)) ?? Body(dropoffLocation: nil)
+        let raw = body.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        booking.dropoffLocation = raw.isEmpty ? nil : raw
+        try await booking.save(on: req.db)
         return .ok
     }
 }
