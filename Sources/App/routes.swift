@@ -13,6 +13,34 @@ private struct SyncResult: Content {
     let links: [SlotLink]
 }
 
+private struct RecoveryNotificationRequest: Content {
+    let clients: [String]
+    let message: String
+    let lessonID: UUID?
+    let stage: String?
+}
+
+private struct RecoveryNotificationView: Content {
+    let id: UUID?
+    let clients: [String]
+    let message: String
+    let createdAt: Date?
+    let seenAt: Date?
+}
+
+private struct MarkRecoveryNotificationsSeenRequest: Content {
+    let ids: [UUID]
+}
+
+private struct RecoveryEventView: Content {
+    let id: UUID?
+    let lessonID: UUID
+    let stage: String
+    let result: String
+    let clientCount: Int
+    let createdAt: Date?
+}
+
 public func routes(_ app: Application) throws {
     // Parse ISO8601 date strings with or without fractional seconds.
     @Sendable func parseISO8601(_ s: String) -> Date? {
@@ -35,6 +63,16 @@ public func routes(_ app: Application) throws {
         return nil
     }
 
+    @Sendable func normalizedStudentUsername(from raw: String) -> String {
+        raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "&", with: "and")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.isEmpty == false }
+            .joined(separator: "-")
+    }
+
     @Sendable func authenticateWebSocket(
         _ req: Request,
         _ ws: WebSocket,
@@ -55,10 +93,23 @@ public func routes(_ app: Application) throws {
 
                 guard let sessionToken = try await SessionToken.query(on: req.db)
                     .filter(\SessionToken.$tokenHash == tokenHash)
+                    .filter(\SessionToken.$revoked == false)
                     .first()
                 else {
                     ws.eventLoop.execute {
-                        req.logger.warning("WS auth (\(label)): invalid token")
+                        req.logger.warning("WS auth (\(label)): invalid or revoked token")
+                        ws.send(#"{"type":"auth_error","reason":"invalid_token"}"#)
+                        ws.close(promise: nil)
+                    }
+                    return
+                }
+
+                if let exp = sessionToken.expiresAt, exp < Date() {
+                    sessionToken.revoked = true
+                    try await sessionToken.update(on: req.db)
+                    ws.eventLoop.execute {
+                        req.logger.warning("WS auth (\(label)): expired token")
+                        ws.send(#"{"type":"auth_error","reason":"expired_token"}"#)
                         ws.close(promise: nil)
                     }
                     return
@@ -88,6 +139,14 @@ public func routes(_ app: Application) throws {
         return res
     }
 
+    // POST /stripe/webhook — unauthenticated (Stripe uses HMAC-SHA256 signatures, not Bearer tokens).
+    // body: .collect ensures the raw bytes are buffered before the handler runs; required for
+    // signature verification, which must see the exact bytes Stripe sent.
+    let webhookController = PaymentController()
+    app.on(.POST, "stripe", "webhook", body: .collect(maxSize: "256kb")) { req async throws -> HTTPStatus in
+        try await webhookController.handleWebhook(req)
+    }
+
     // Convenience root route so hitting http://HOST:PORT/ in a browser isn't a 404.
     app.get { req -> Response in
         let res = Response(status: .ok)
@@ -102,6 +161,7 @@ public func routes(_ app: Application) throws {
         authenticateWebSocket(req, ws, label: "instructor") { _ in
             // Register socket ONLY in the instructor hub (avoid duplicates)
             app.instructorHub.add(ws)
+            app.studentHub.broadcast(#"{"type":"instructor_presence","isOnline":true}"#)
 
             // Send a small hello so clients can confirm connection visually
             ws.send(#"{"type":"hello","message":"connected"}"#)
@@ -123,6 +183,10 @@ public func routes(_ app: Application) throws {
             ws.onClose.whenComplete { _ in
                 req.logger.info("WS closed (instructor)")
                 app.instructorHub.remove(ws)
+                if !app.instructorHub.hasClients {
+                    app.instructorLastSeenAt = Date()
+                    app.studentHub.broadcast(#"{"type":"instructor_presence","isOnline":false}"#)
+                }
             }
         }
     }
@@ -158,12 +222,13 @@ public func routes(_ app: Application) throws {
 
     // Instructor app WebSocket
     app.webSocket("ws", "instructor") { req, ws in
+        req.logger.info("WS route hit: /ws/instructor authHeaderPresent=\(!req.headers[.authorization].isEmpty)")
         instructorWSHandler(req, ws)
     }
 
     // Fallback for malformed absolute-form websocket paths
     app.webSocket("ws:", "**") { req, ws in
-        req.logger.warning("WS fallback route hit: \(req.url.path)")
+        req.logger.warning("WS fallback route hit: \(req.url.path) authHeaderPresent=\(!req.headers[.authorization].isEmpty)")
         instructorWSHandler(req, ws)
     }
 
@@ -182,12 +247,14 @@ public func routes(_ app: Application) throws {
             // Register this socket in the student hub so broadcasts reach student clients
             req.application.studentHub.add(ws)
 
-            // Also register the socket by authenticated studentID for future targeted delivery.
+            // Register socket for targeted delivery — append so multiple tabs don't evict each other.
             if let studentID = try? user.requireID() {
                 var sockets = req.application.msmStudentSockets
-                sockets[studentID] = ws
+                var list = sockets[studentID] ?? []
+                list.append(ws)
+                sockets[studentID] = list
                 req.application.msmStudentSockets = sockets
-                req.logger.info("WS(student) mapped socket for user=\(user.username) id=\(studentID.uuidString)")
+                req.logger.info("WS(student) mapped socket for user=\(user.username) id=\(studentID.uuidString) total=\(list.count)")
             }
 
             // Send a hello so student clients can confirm connection
@@ -204,23 +271,41 @@ public func routes(_ app: Application) throws {
 
                 if let studentID = try? user.requireID() {
                     var sockets = req.application.msmStudentSockets
-                    if let mapped = sockets[studentID], mapped === ws {
-                        sockets.removeValue(forKey: studentID)
-                        req.application.msmStudentSockets = sockets
+                    sockets[studentID]?.removeAll(where: { $0 === ws })
+                    if sockets[studentID]?.isEmpty == true { sockets.removeValue(forKey: studentID) }
+                    req.application.msmStudentSockets = sockets
+                    if (req.application.msmStudentSockets[studentID] ?? []).isEmpty {
+                        var lastSeen = req.application.studentLastSeen
+                        lastSeen[studentID] = Date()
+                        req.application.studentLastSeen = lastSeen
                     }
                 }
             }
         }
     }
 
-    // Helper: broadcast plain text to student clients.
-    // For now this still broadcasts to all student sockets, but it now accepts
-    // an optional studentID so we have a clean seam for per-student routing next.
-    let broadcastStudentText: @Sendable (String, Application, UUID?) -> Void = { text, app, studentID in
+    // Helper: send plain text to student clients.
+    // If a studentID is provided, send only to that mapped student socket and
+    // return whether a live socket existed. Otherwise broadcast to all student sockets.
+    let broadcastStudentText: @Sendable (String, Application, UUID?) -> Bool = { text, app, studentID in
         if let studentID {
-            app.logger.debug("Student broadcast prepared for targeted delivery: \(studentID.uuidString)")
+            let all = app.msmStudentSockets[studentID] ?? []
+            let live = all.filter { !$0.isClosed }
+            if live.count != all.count {
+                var mutable = app.msmStudentSockets
+                if live.isEmpty { mutable.removeValue(forKey: studentID) } else { mutable[studentID] = live }
+                app.msmStudentSockets = mutable
+            }
+            guard !live.isEmpty else {
+                app.logger.debug("Student targeted send skipped: no socket for \(studentID.uuidString)")
+                return false
+            }
+            for ws in live { ws.send(text) }
+            return true
+        } else {
+            app.studentHub.broadcast(text)
+            return true
         }
-        app.studentHub.broadcast(text)
     }
 
     // Helper: broadcast AvailabilityUpdate to all relevant hubs
@@ -236,7 +321,7 @@ public func routes(_ app: Application) throws {
             app.instructorHub.broadcast(text)
 
             // Student app only needs slot updates
-            broadcastStudentText(text, app, nil)
+            _ = broadcastStudentText(text, app, nil)
 
             // Instructor UI refresh trigger only for instructor hub
             let slotsUpdatedJson = #"{"type":"slots_updated"}"#
@@ -395,12 +480,13 @@ public func routes(_ app: Application) throws {
 
             // Only accept MSM calendars (strict)
             guard let cal = s.calendarName,
+                  cal == "MSM Available" || cal == "MSM Lessons" ||
                   cal == "Untitled" || cal == "Mike work"
             else {
                 continue
             }
 
-            let syncedState = (cal == "Untitled") ? "available" : "booked"
+            let syncedState = (cal == "MSM Available" || cal == "Untitled") ? "available" : "booked"
             guard let start = parseISO8601(s.startsAt),
                   let end = parseISO8601(s.endsAt) else {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
@@ -502,9 +588,10 @@ public func routes(_ app: Application) throws {
     }
 
     let admin = app.grouped("admin")
+    let adminProtected = admin.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
 
     // GET /admin/booking-events?type=admin.cancelled&bookingID=...&userID=...
-    admin.get("booking-events") { req async throws -> [BookingEvent] in
+    adminProtected.get("booking-events") { req async throws -> [BookingEvent] in
         struct Filter: Decodable {
             var type: String?
             var bookingID: UUID?
@@ -534,6 +621,37 @@ public func routes(_ app: Application) throws {
         return try await query.all()
     }
 
+    // GET /admin/recovery-events?lessonID=...&limit=50
+    adminProtected.get("recovery-events") { req async throws -> [RecoveryEventView] in
+        struct Filter: Decodable {
+            var lessonID: UUID?
+            var limit: Int?
+        }
+
+        let f = try req.query.decode(Filter.self)
+
+        var query = RecoveryEvent.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .limit(min(max(f.limit ?? 50, 1), 200))
+
+        if let lessonID = f.lessonID {
+            query = query.filter(\.$lessonID == lessonID)
+        }
+
+        let events = try await query.all()
+
+        return events.map {
+            RecoveryEventView(
+                id: $0.id,
+                lessonID: $0.lessonID,
+                stage: $0.stage,
+                result: $0.result,
+                clientCount: $0.clientCount,
+                createdAt: $0.createdAt
+            )
+        }
+    }
+
     // MARK: - Student: mark booking as paid
     app.post("student", "bookings", ":bookingID", "payment") { req async throws -> HTTPStatus in
         struct PayIn: Content { let method: String }
@@ -548,6 +666,313 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    let studentProtected = app.grouped(SessionTokenAuthenticator(), BearerTokenAuthenticator(), User.guardMiddleware()).grouped("student")
+
+    // GET /student/balance — student's own balance, late-cancel fees, and transaction history
+    studentProtected.get("balance") { req async throws -> StudentSelfBalanceView in
+        let userID = try req.auth.require(User.self).requireID()
+
+        let entries = try await LedgerEntry.query(on: req.db)
+            .filter(\.$student.$id == userID)
+            .sort(\.$effectiveDate, .descending)
+            .all()
+
+        let activeEntries = entries.filter { $0.voidedAt == nil }
+        let balance = activeEntries.reduce(Decimal.zero) { $0 + $1.amount }
+        let lateCancelEntries = activeEntries.filter { $0.type == "late_cancellation_charge" }
+        let lateCancelFeesCount = lateCancelEntries.count
+        let lateCancelFeesTotal = lateCancelEntries.reduce(Decimal.zero) { $0 + abs($1.amount) }
+
+        let transactions = activeEntries.compactMap { entry -> StudentTransactionView? in
+            guard let id = entry.id else { return nil }
+            return StudentTransactionView(
+                id: id,
+                lessonID: entry.$lesson.id,
+                type: entry.type,
+                amount: entry.amount,
+                paymentMethod: entry.paymentMethod,
+                note: entry.note,
+                effectiveDate: entry.effectiveDate,
+                createdAt: entry.createdAt,
+                voidedAt: nil,
+                voidReason: nil
+            )
+        }
+
+        return StudentSelfBalanceView(
+            currentBalance: balance,
+            lateCancelFeesCount: lateCancelFeesCount,
+            lateCancelFeesTotal: lateCancelFeesTotal,
+            transactions: transactions
+        )
+    }
+
+    // POST /student/payment-intent  (+ /create-payment-intent alias)
+    let paymentController = PaymentController()
+    studentProtected.post("payment-intent",        use: paymentController.createPaymentIntent)
+    studentProtected.post("create-payment-intent", use: paymentController.createPaymentIntent)
+
+    // GET /student/progress
+    let progressController = ProgressController()
+    studentProtected.get("progress", use: progressController.studentProgress)
+
+    // GET /student/safety-questions
+    let safetyController = SafetyQuestionsController()
+    studentProtected.get("safety-questions", use: safetyController.studentGetQuestions)
+
+    // GET /student/notes
+    let noteController = LessonNoteController()
+    studentProtected.get("notes", use: noteController.studentNotes)
+
+    // PATCH /student/documents            — update theory test fields
+    // POST  /student/documents/photo      — upload licence photo (multipart)
+    // GET   /student/documents/photo      — view own licence photo
+    let documentController = DocumentController()
+    studentProtected.patch("documents", use: documentController.updateDocuments)
+    studentProtected.on(.POST, "documents", "photo", body: .collect(maxSize: "10mb"), use: documentController.uploadPhoto)
+    studentProtected.get("documents", "photo", use: documentController.getOwnPhoto)
+
+    // POST /student/register-fcm-token — stores the device push token for later use
+    studentProtected.post("register-fcm-token") { req async throws -> HTTPStatus in
+        struct FCMTokenBody: Content { let fcmToken: String }
+        let student = try req.auth.require(User.self)
+        let body    = try req.content.decode(FCMTokenBody.self)
+        student.fcmToken = body.fcmToken
+        try await student.save(on: req.db)
+        return .ok
+    }
+
+    studentProtected.get("recovery-notifications") { req async throws -> [RecoveryNotificationView] in
+        let user = try req.auth.require(User.self)
+        let username = user.username
+
+        let all = try await RecoveryNotification.query(on: req.db)
+            .filter(\.$seenAt == nil)
+            .sort(\.$createdAt, .descending)
+            .limit(50)
+            .all()
+
+        return all
+            .filter { notification in
+                notification.clients.contains { normalizedStudentUsername(from: $0) == username }
+            }
+            .map {
+                RecoveryNotificationView(
+                    id: $0.id,
+                    clients: $0.clients,
+                    message: $0.message,
+                    createdAt: $0.createdAt,
+                    seenAt: $0.seenAt
+                )
+            }
+    }
+
+    studentProtected.post("recovery-notifications", "seen") { req async throws -> HTTPStatus in
+        let user = try req.auth.require(User.self)
+        let username = user.username
+        let payload = try req.content.decode(MarkRecoveryNotificationsSeenRequest.self)
+
+        guard payload.ids.isEmpty == false else { return .ok }
+
+        let notifications = try await RecoveryNotification.query(on: req.db)
+            .filter(\.$id ~~ payload.ids)
+            .filter(\.$seenAt == nil)
+            .all()
+
+        for notification in notifications {
+            let matchesUser = notification.clients.contains {
+                normalizedStudentUsername(from: $0) == username
+            }
+            guard matchesUser else { continue }
+
+            notification.seenAt = Date()
+            try await notification.update(on: req.db)
+        }
+
+        return .ok
+    }
+
+    let finance = FinanceController()
+    let financeProtected = app.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+
+    // POST /instructor/register-fcm-token — stores the instructor's FCM device token
+    financeProtected.post("instructor", "register-fcm-token") { req async throws -> HTTPStatus in
+        struct FCMTokenBody: Content { let fcmToken: String }
+        let instructor = try req.auth.require(User.self)
+        let body       = try req.content.decode(FCMTokenBody.self)
+        instructor.fcmToken = body.fcmToken
+        try await instructor.save(on: req.db)
+        return .ok
+    }
+
+    financeProtected.post("notifications", "recovery") { req async throws -> [String: Int] in
+        let payload = try req.content.decode(RecoveryNotificationRequest.self)
+
+        let record = RecoveryNotification(
+            clients: payload.clients,
+            message: payload.message
+        )
+        try await record.save(on: req.db)
+
+        let lessonLabel = payload.lessonID?.uuidString ?? "none"
+        let stageLabel = payload.stage ?? "unknown"
+        req.logger.info("Recovery notification request lesson=\(lessonLabel) stage=\(stageLabel) requested=\(payload.clients.count) clients=\(payload.clients.joined(separator: ", "))")
+
+        var body: [String: Any] = [
+            "id": record.id?.uuidString as Any,
+            "type": "recovery_notification",
+            "message": payload.message,
+            "clients": payload.clients,
+            "stage": stageLabel
+        ]
+
+        if let lessonID = payload.lessonID {
+            body["lessonID"] = lessonID.uuidString
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: body)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw Abort(.internalServerError, reason: "Failed to encode recovery notification payload")
+        }
+
+        let requestedUsernames = payload.clients.map(normalizedStudentUsername(from:))
+        var delivered = 0
+        let requested = requestedUsernames.count
+
+        for username in requestedUsernames {
+            if let user = try await User.query(on: req.db)
+                .filter(\User.$username == username)
+                .first(),
+               let studentID = try? user.requireID() {
+                if broadcastStudentText(text, req.application, studentID) {
+                    delivered += 1
+                }
+            } else {
+                req.logger.warning("Recovery notification target not found for normalized username: \(username)")
+            }
+        }
+
+        req.logger.info("Recovery notification delivered lesson=\(lessonLabel) stage=\(stageLabel) requested=\(requested) delivered=\(delivered)")
+
+        if let lessonID = payload.lessonID {
+            let event = RecoveryEvent(
+                lessonID: lessonID,
+                stage: payload.stage ?? "unknown",
+                result: delivered > 0 ? "live_delivered" : "queued_no_live_delivery",
+                clientCount: requested
+            )
+            try? await event.save(on: req.db)
+        }
+
+        return [
+            "requested": requested,
+            "delivered": delivered
+        ]
+    }
+
+    financeProtected.post("finance", "payments", use: finance.addPayment)
+    financeProtected.post("finance", "expenses", use: finance.addExpense)
+    financeProtected.post("finance", "expenses", ":expenseID", "update", use: finance.updateExpense)
+    financeProtected.delete("finance", "expenses", ":expenseID", use: finance.deleteExpense)
+    financeProtected.get("finance", "expenses", "export", use: finance.exportExpensesCSV)
+    financeProtected.get("finance", "ledger", "export", use: finance.exportLedgerCSV)
+    financeProtected.post("finance", "lessons", ":lessonID", "charge", use: finance.chargeLesson)
+    financeProtected.get("finance", "students", use: finance.studentBalances)
+    financeProtected.get("finance", "students", ":studentID", "transactions", use: finance.studentTransactions)
+    financeProtected.get("finance", "business-summary", use: finance.businessSummary)
+    financeProtected.get("instructor", "finance", "week-total", use: finance.weekTotal)
+    financeProtected.post("instructor", "ledger", ":entryID", "waive",   use: finance.waiveFee)
+    financeProtected.post("instructor", "finance", "ledger", ":entryID", "void",   use: finance.voidEntry)
+    financeProtected.post("instructor", "finance", "ledger", ":entryID", "refund", use: finance.refundEntry)
+
+    // GET  /instructor/student/:studentID/progress
+    // PATCH /instructor/student/:studentID/progress
+    financeProtected.get("instructor",   "student", ":studentID", "progress", use: progressController.instructorGetProgress)
+    financeProtected.patch("instructor", "student", ":studentID", "progress", use: progressController.updateProgress)
+
+    // GET   /instructor/student/:studentID/safety-questions
+    // PATCH /instructor/student/:studentID/safety-questions/:questionID
+    financeProtected.get("instructor",   "student", ":studentID", "safety-questions",              use: safetyController.instructorGetQuestions)
+    financeProtected.patch("instructor", "student", ":studentID", "safety-questions", ":questionID", use: safetyController.instructorSetMastered)
+
+    // POST /instructor/student/:studentID/notes
+    // GET  /instructor/student/:studentID/notes
+    // Public lesson notes (student can see these via GET /student/notes)
+    financeProtected.post("instructor",  "student", ":studentID", "notes", use: noteController.createNote)
+    financeProtected.get("instructor",   "student", ":studentID", "notes", use: noteController.instructorGetNotes)
+    financeProtected.patch("instructor", "notes", ":noteID",      use: noteController.updateNote)
+    financeProtected.delete("instructor","notes", ":noteID",      use: noteController.deleteNote)
+
+    // GET  /instructor/student/:studentID/documents       — document status
+    // GET  /instructor/student/:studentID/license-photo  — view licence photo
+    // POST /instructor/student/:studentID/documents/verify
+    financeProtected.get("instructor",  "student", ":studentID", "documents",        use: documentController.instructorGetDocuments)
+    financeProtected.get("instructor",  "student", ":studentID", "license-photo",    use: documentController.instructorGetLicencePhoto)
+    financeProtected.get("instructor",  "student", ":studentID", "licence-image",    use: documentController.instructorGetLicencePhoto)
+    financeProtected.post("instructor", "student", ":studentID", "documents", "verify", use: documentController.verifyLicence)
+    financeProtected.post("instructor", "student", ":studentID", "documents", "revoke", use: documentController.revokeLicence)
+
+    // Vehicle management
+    // POST /instructor/vehicle/log
+    // GET  /instructor/vehicle/latest-log
+    // GET  /instructor/vehicle/logs
+    // POST /instructor/vehicle/expenses       (multipart)
+    // GET  /instructor/vehicle/expenses       (?year=)
+    // GET  /instructor/vehicle/expenses/summary (?year=)
+    // GET  /instructor/vehicle/expenses/:expenseID/receipt
+    let vehicleController = VehicleController()
+    financeProtected.post("instructor", "vehicle", "log",                use: vehicleController.logVehicleStatus)
+    financeProtected.get("instructor",  "vehicle", "latest-log",         use: vehicleController.getVehicleStatus)
+    financeProtected.get("instructor",  "vehicle", "alerts",             use: vehicleController.getAlerts)
+    financeProtected.get("instructor",  "vehicle", "logs",               use: vehicleController.getVehicleLogs)
+    financeProtected.on(.POST, "instructor", "vehicle", "expenses",
+                        body: .collect(maxSize: "10mb"),                 use: vehicleController.createExpense)
+    financeProtected.get("instructor",  "vehicle", "expenses",           use: vehicleController.listExpenses)
+    financeProtected.get("instructor",  "vehicle", "expenses", "summary",use: vehicleController.expenseSummary)
+    financeProtected.get("instructor",  "vehicle", "expenses", ":expenseID", "receipt", use: vehicleController.getReceipt)
+
+    // Mileage log
+    // GET    /instructor/mileage          — summary + all entries
+    // POST   /instructor/mileage          — add entry
+    // DELETE /instructor/mileage/:entryID — remove entry
+    let mileageController = MileageController()
+    financeProtected.get("instructor",    "mileage",            use: mileageController.list)
+    financeProtected.post("instructor",   "mileage",            use: mileageController.create)
+    financeProtected.delete("instructor", "mileage", ":entryID", use: mileageController.delete)
+
+    // Chat
+    // GET    /student/chat/messages
+    // POST   /student/chat/messages
+    // PATCH  /student/chat/messages/read
+    // GET    /instructor/chat/students
+    // GET    /instructor/chat/student/:studentID/messages
+    // POST   /instructor/chat/student/:studentID/messages
+    // PATCH  /instructor/chat/student/:studentID/read
+    let chatController = ChatController()
+    studentProtected.get("chat", "messages",                          use: chatController.studentGetMessages)
+    studentProtected.post("chat", "messages",                         use: chatController.studentSendMessage)
+    studentProtected.patch("chat", "messages", "read",                use: chatController.studentMarkRead)
+    studentProtected.patch("chat", "messages", ":messageID", "read",  use: chatController.studentMarkMessageRead)
+    studentProtected.post("chat", "typing",                           use: chatController.studentTyping)
+    studentProtected.get("instructor", "presence",                    use: chatController.instructorPresence)
+    studentProtected.on(.POST, "chat", "upload-attachment", body: .collect(maxSize: "10mb"), use: chatController.uploadAttachment)
+    studentProtected.get("chat", "attachments", ":attachmentID",      use: chatController.serveAttachment)
+    financeProtected.get("instructor",   "chat", "students",                                           use: chatController.instructorInbox)
+    financeProtected.get("instructor",   "chat", "student", ":studentID", "messages",                  use: chatController.instructorGetMessages)
+    financeProtected.post("instructor",  "chat", "student", ":studentID", "messages",                  use: chatController.instructorSendMessage)
+    financeProtected.patch("instructor", "chat", "student", ":studentID", "read",                      use: chatController.instructorMarkRead)
+    financeProtected.patch("instructor", "chat", "student", ":studentID", "messages", ":messageID", "read", use: chatController.instructorMarkMessageRead)
+    financeProtected.post("instructor",  "chat", "student", ":studentID", "typing",                    use: chatController.instructorTyping)
+    financeProtected.get("instructor",   "student", ":studentID", "presence",                          use: chatController.studentPresence)
+    financeProtected.on(.POST, "instructor", "chat", "upload-attachment", body: .collect(maxSize: "10mb"), use: chatController.uploadAttachment)
+    financeProtected.get("instructor",   "chat", "attachments", ":attachmentID",                       use: chatController.serveAttachment)
+
+    // Private instructor-only notes (no student endpoint — inaccessible to student auth)
+    let privateNoteController = PrivateNoteController()
+    financeProtected.get("instructor",    "student", ":studentID", "private-notes", use: privateNoteController.getPrivateNotes)
+    financeProtected.post("instructor",   "student", ":studentID", "private-notes", use: privateNoteController.createPrivateNote)
+    financeProtected.patch("instructor",  "private-notes", ":noteID", use: privateNoteController.updatePrivateNote)
+    financeProtected.delete("instructor", "private-notes", ":noteID", use: privateNoteController.deletePrivateNote)
     // controllers
     try app.register(collection: AuthController())
     try app.register(collection: LessonsController())
