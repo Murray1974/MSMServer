@@ -24,14 +24,12 @@ struct WorkBookingsSyncOut: Content {
 
 struct BookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        // DEV unblock: manual booking creation is called from the Instructor app
-        routes.grouped("bookings").post("manual", use: createManualBooking)
-        // Agent: import/upsert bookings from the instructor's "work" calendar.
-        routes.grouped("instructor", "sync").post("work-bookings", use: syncWorkBookings)
-        // Instructor app: cancel all bookings for a lesson (free the slot)
+        let protected = routes.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+        protected.grouped("bookings").post("manual", use: createManualBooking)
+        protected.grouped("instructor", "sync").post("work-bookings", use: syncWorkBookings)
         // NOTE: Do not register another wildcard under /instructor/bookings with a different param name,
         // because RoutingKit disallows colliding wildcards. Use /instructor/lessons/:lessonID/... instead.
-        routes.grouped("instructor", "lessons").post(":lessonID", "cancel-bookings", use: cancelLessonBookings)
+        protected.grouped("instructor", "lessons").post(":lessonID", "cancel-bookings", use: cancelLessonBookings)
     }
 
     func createManualBooking(req: Request) async throws -> Response {
@@ -54,18 +52,49 @@ struct BookingsController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid student name")
         }
 
-        guard let user = try await User.query(on: req.db)
+        var foundUser = try await User.query(on: req.db)
             .filter(\.$username == username)
             .first()
-        else {
+
+        if foundUser == nil {
+            let parts = rawStudentName.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: " ")
+            let first = parts.first ?? ""
+            let last = parts.dropFirst().joined(separator: " ")
+            if !first.isEmpty && !last.isEmpty {
+                foundUser = try await User.query(on: req.db)
+                    .filter(\.$firstName == first)
+                    .filter(\.$lastName == last)
+                    .filter(\.$role == "student")
+                    .first()
+                if foundUser != nil {
+                    req.logger.info("manual-booking: matched by name firstName=\(first) lastName=\(last)")
+                }
+            }
+        }
+
+        guard let user = foundUser else {
             req.logger.warning("manual-booking: user not found for studentName=\(rawStudentName) slug=\(username)")
             throw Abort(.badRequest, reason: "Student user not found: \(username)")
         }
 
-        // 2) Resolve the Lesson slot (calendar-synced)
+        if user.role == "instructor" {
+            req.logger.info("manual-booking: refusing to book instructor account userID=\((try? user.requireID())?.uuidString ?? "unknown")")
+            throw Abort(.badRequest, reason: "Cannot create a booking for an instructor account")
+        }
+
+        // 2) Resolve the Lesson slot (calendar-synced).
+        // Use a ±30 s window to tolerate sub-second rounding in calendar timestamps.
+        let tolerance: TimeInterval = 30
+        let startsFrom = input.startsAt.addingTimeInterval(-tolerance)
+        let startsTo   = input.startsAt.addingTimeInterval(tolerance)
+        let endsFrom   = input.endsAt.addingTimeInterval(-tolerance)
+        let endsTo     = input.endsAt.addingTimeInterval(tolerance)
+
         guard let lesson = try await Lesson.query(on: req.db)
-            .filter(\.$startsAt == input.startsAt)
-            .filter(\.$endsAt == input.endsAt)
+            .filter(\.$startsAt >= startsFrom)
+            .filter(\.$startsAt <= startsTo)
+            .filter(\.$endsAt >= endsFrom)
+            .filter(\.$endsAt <= endsTo)
             .first() else {
             throw Abort(.notFound, reason: "No lesson slot exists for this time window")
         }
@@ -92,11 +121,56 @@ struct BookingsController: RouteCollection {
         }
 
         // Ensure the lesson reflects that it is now booked.
-        if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+        if lesson.state != "booked" || lesson.calendarName != "MSM Lessons" {
             lesson.state = "booked"
-            lesson.calendarName = "Mike work"
+            lesson.calendarName = "MSM Lessons"
             try await lesson.save(on: req.db)
         }
+
+        // Ensure lesson finance exists and evaluate coverage.
+        let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
+        let lessonFinance: LessonFinance
+
+        if let existingLessonFinance {
+            // If this slot was previously booked by a different student, reassign
+            // the finance record so reevaluateCoverageForStudent finds it.
+            if existingLessonFinance.$student.id != userID {
+                existingLessonFinance.$student.id = userID
+                existingLessonFinance.financeStatus = "not_covered"
+                existingLessonFinance.reservedAmount = nil
+                existingLessonFinance.coveredAt = nil
+                try await existingLessonFinance.save(on: req.db)
+            }
+            lessonFinance = existingLessonFinance
+        } else {
+            let durationMinutes = max(0, Int(input.endsAt.timeIntervalSince(input.startsAt) / 60))
+            let defaultHourlyRate = Decimal(45)
+            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+
+            let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
+
+            let newLessonFinance = LessonFinance(
+                lessonID: lessonID,
+                studentID: userID,
+                instructorID: resolvedInstructorID,
+                durationMinutes: durationMinutes,
+                hourlyRateSnapshot: defaultHourlyRate,
+                priceSnapshot: priceSnapshot,
+                chargeStatus: "not_charged",
+                chargedLedgerEntryID: nil,
+                financeStatus: "not_covered",
+                coveredAt: nil,
+                reservedAmount: nil
+            )
+            try await newLessonFinance.save(on: req.db)
+            lessonFinance = newLessonFinance
+        }
+
+        try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
+
+        // Cancel any pending recovery jobs for this slot — it's now filled.
+        let recovery = RecoverySequenceService(app: req.application)
+        await recovery.cancelPendingJobs(for: lessonID, on: req.db)
 
         let bookingID = try booking.requireID()
         req.logger.info("manual-booking: broadcasting booked for lessonID=\(lessonID) bookingID=\(bookingID) userID=\(userID)")
@@ -133,6 +207,20 @@ struct BookingsController: RouteCollection {
                 .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         }
 
+        func splitHumanName(_ fullName: String) -> (firstName: String, lastName: String?) {
+            let trimmed = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parts = trimmed
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+
+            guard let first = parts.first, !first.isEmpty else {
+                return (trimmed, nil)
+            }
+
+            let last = parts.dropFirst().joined(separator: " ")
+            return (first, last.isEmpty ? nil : last)
+        }
+
         var upserted = 0
 
         for item in input.bookings {
@@ -149,18 +237,56 @@ struct BookingsController: RouteCollection {
             let username = slug(rawStudentName)
             req.logger.info("work-bookings: normalized title=\(rawStudentName) slug=\(username) lessonID=\(item.lessonID)")
 
-            // Skip placeholder/blank titles so we never create bookings owned by `slot`.
+            // Skip placeholder/blank titles.
             if username.isEmpty || username == "slot" {
-                req.logger.info("work-bookings: skipping placeholder title for lessonID=\(item.lessonID)")
+                req.logger.info("work-bookings: skipping invalid title=\(rawStudentName) lessonID=\(item.lessonID)")
                 continue
             }
 
-            guard let user = try await User.query(on: req.db)
+            var foundUser = try await User.query(on: req.db)
                 .filter(\.$username == username)
                 .first()
-            else {
+
+            if foundUser == nil {
+                let parts = rawStudentName.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: " ")
+                let first = parts.first ?? ""
+                let last = parts.dropFirst().joined(separator: " ")
+                if !first.isEmpty && !last.isEmpty {
+                    foundUser = try await User.query(on: req.db)
+                        .filter(\.$firstName == first)
+                        .filter(\.$lastName == last)
+                        .filter(\.$role == "student")
+                        .first()
+                    if foundUser != nil {
+                        req.logger.info("work-bookings: matched by name firstName=\(first) lastName=\(last)")
+                    }
+                }
+            }
+
+            guard let user = foundUser else {
                 req.logger.warning("work-bookings: user not found for title=\(rawStudentName) (slug=\(username)); skipping lessonID=\(item.lessonID)")
                 continue
+            }
+
+            if user.role == "instructor" {
+                req.logger.info("work-bookings: skipping instructor account userID=\((try? user.requireID())?.uuidString ?? "unknown") lessonID=\(item.lessonID)")
+                continue
+            }
+
+            let storedFirst = user.firstName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let storedLast = user.lastName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if storedFirst.isEmpty && storedLast.isEmpty {
+                let parsed = splitHumanName(rawStudentName)
+                let parsedFirst = parsed.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let parsedLast = parsed.lastName?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !parsedFirst.isEmpty {
+                    user.firstName = parsedFirst
+                    user.lastName = (parsedLast?.isEmpty == false) ? parsedLast : nil
+                    try await user.save(on: req.db)
+                    req.logger.info("work-bookings: backfilled user name from calendar title userID=\((try? user.requireID())?.uuidString ?? "unknown") firstName=\(user.firstName ?? "") lastName=\(user.lastName ?? "")")
+                }
             }
 
             let lessonID = try lesson.requireID()
@@ -177,11 +303,42 @@ struct BookingsController: RouteCollection {
             if existingActive != nil {
                 req.logger.info("work-bookings: active booking already exists lessonID=\(lessonID) userID=\(userID)")
 
-                if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+                if lesson.state != "booked" || lesson.calendarName != "MSM Lessons" {
                     lesson.state = "booked"
-                    lesson.calendarName = "Mike work"
+                    lesson.calendarName = "MSM Lessons"
                     try await lesson.save(on: req.db)
                 }
+
+                // Ensure lesson finance exists and evaluate coverage even when the booking already exists.
+                let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
+                let lessonFinance: LessonFinance
+
+                if let existingLessonFinance {
+                    lessonFinance = existingLessonFinance
+                } else {
+                    let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+                    let defaultHourlyRate = Decimal(45)
+                    let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+                    let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
+
+                    let newLessonFinance = LessonFinance(
+                        lessonID: lessonID,
+                        studentID: userID,
+                        instructorID: resolvedInstructorID,
+                        durationMinutes: durationMinutes,
+                        hourlyRateSnapshot: defaultHourlyRate,
+                        priceSnapshot: priceSnapshot,
+                        chargeStatus: "not_charged",
+                        chargedLedgerEntryID: nil,
+                        financeStatus: "not_covered",
+                        coveredAt: nil,
+                        reservedAmount: nil
+                    )
+                    try await newLessonFinance.save(on: req.db)
+                    lessonFinance = newLessonFinance
+                }
+
+                try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
             } else {
                 let b = Booking()
                 b.$user.id = userID
@@ -189,11 +346,42 @@ struct BookingsController: RouteCollection {
                 try await b.save(on: req.db)
                 req.logger.info("work-bookings: created booking for lessonID=\(lessonID) userID=\(userID)")
 
-                if lesson.state != "booked" || lesson.calendarName != "Mike work" {
+                if lesson.state != "booked" || lesson.calendarName != "MSM Lessons" {
                     lesson.state = "booked"
-                    lesson.calendarName = "Mike work"
+                    lesson.calendarName = "MSM Lessons"
                     try await lesson.save(on: req.db)
                 }
+
+                // Ensure lesson finance exists and evaluate coverage.
+                let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
+                let lessonFinance: LessonFinance
+
+                if let existingLessonFinance {
+                    lessonFinance = existingLessonFinance
+                } else {
+                    let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+                    let defaultHourlyRate = Decimal(45)
+                    let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+                    let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
+
+                    let newLessonFinance = LessonFinance(
+                        lessonID: lessonID,
+                        studentID: userID,
+                        instructorID: resolvedInstructorID,
+                        durationMinutes: durationMinutes,
+                        hourlyRateSnapshot: defaultHourlyRate,
+                        priceSnapshot: priceSnapshot,
+                        chargeStatus: "not_charged",
+                        chargedLedgerEntryID: nil,
+                        financeStatus: "not_covered",
+                        coveredAt: nil,
+                        reservedAmount: nil
+                    )
+                    try await newLessonFinance.save(on: req.db)
+                    lessonFinance = newLessonFinance
+                }
+
+                try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
 
                 upserted += 1
 
@@ -202,6 +390,18 @@ struct BookingsController: RouteCollection {
                 try req.broadcastBooked(for: lesson, student: user)
             }
         }
+
+        // Coverage sweep after sync
+        let allFinance = try await LessonFinance.query(on: req.db)
+            .with(\.$student)
+            .all()
+
+        let financeController = FinanceController()
+
+        for lf in allFinance {
+            try await financeController.evaluateCoverage(for: lf, on: req.db)
+        }
+
 
         let out = WorkBookingsSyncOut(ok: true, upserted: upserted)
         let data = try JSONEncoder().encode(out)
@@ -217,11 +417,49 @@ struct BookingsController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid lessonID")
         }
 
+        // If the lesson no longer exists there are no active bookings to cancel — return a no-op 200
+        // so the caller (instructor app) can safely proceed with its EventKit mutation.
         guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
-            throw Abort(.notFound, reason: "Lesson not found")
+            struct Out: Content { let ok: Bool; let lessonID: UUID; let cancelled: Int }
+            let out = Out(ok: true, lessonID: lessonID, cancelled: 0)
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(out)
+            let res = Response(status: .ok)
+            res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+            res.body = .init(data: data)
+            return res
         }
 
-        let cancelledCount = try await req.cancelActiveBookings(for: lesson)
+        // Instructor-initiated cancellation: never apply late-cancel charges regardless of timing.
+        // Late charges are only appropriate for student-initiated cancellations (StudentBookingsController).
+        // Using the charge-free path prevents accidental charges if the calendar app calls this
+        // endpoint on a stale event that has already been rebooked by a different student.
+        let cancelledStudentIDs = try await req.cancelActiveBookings(for: lesson)
+
+        if !cancelledStudentIDs.isEmpty {
+            req.application.broadcastRecoveryCandidate(for: lesson)
+            let recovery = RecoverySequenceService(app: req.application)
+            Task { await recovery.triggerSequence(for: lesson, on: req.db) }
+        }
+
+        // Reset finance status unless already charged.
+        if let lessonFinance = try await LessonFinance.find(lessonID, on: req.db) {
+            if lessonFinance.chargeStatus != "charged" && lessonFinance.financeStatus != "charged" {
+                lessonFinance.financeStatus = "not_covered"
+                lessonFinance.coveredAt = nil
+                lessonFinance.reservedAmount = nil
+                try await lessonFinance.save(on: req.db)
+            }
+        }
+
+        // Re-evaluate credit coverage chronologically for each affected student.
+        let financeController = FinanceController()
+        var reevaluated = Set<UUID>()
+        for sid in cancelledStudentIDs {
+            if reevaluated.insert(sid).inserted {
+                try await financeController.reevaluateCoverageForStudent(sid, on: req.db)
+            }
+        }
 
         struct Out: Content {
             let ok: Bool
@@ -229,7 +467,7 @@ struct BookingsController: RouteCollection {
             let cancelled: Int
         }
 
-        let out = Out(ok: true, lessonID: lessonID, cancelled: cancelledCount)
+        let out = Out(ok: true, lessonID: lessonID, cancelled: cancelledStudentIDs.count)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -247,24 +485,43 @@ struct BookingsController: RouteCollection {
 // an optional studentID so we have a clean seam for per-student routing next.
 extension Application {
     func broadcastStudent(_ text: String, studentID: UUID? = nil) {
-        if let studentID,
-           let socket = self.msmStudentSockets[studentID] {
-
-            self.logger.debug(
-                "Student targeted broadcast → \(studentID.uuidString)"
-            )
-
-            socket.send(text)
-
-        } else {
-
-            if let studentID {
-                self.logger.debug(
-                    "Student socket not found, falling back to broadcast → \(studentID.uuidString)"
-                )
+        if let studentID {
+            let all = self.msmStudentSockets[studentID] ?? []
+            let live = all.filter { !$0.isClosed }
+            if live.count != all.count {
+                var mutable = self.msmStudentSockets
+                if live.isEmpty { mutable.removeValue(forKey: studentID) } else { mutable[studentID] = live }
+                self.msmStudentSockets = mutable
             }
-
+            if !live.isEmpty {
+                self.logger.debug("Student targeted broadcast → \(studentID.uuidString) (\(live.count) socket(s))")
+                for ws in live { ws.send(text) }
+            } else {
+                self.logger.debug("Student socket not found, falling back to broadcast → \(studentID.uuidString)")
+                self.studentHub.broadcast(text)
+            }
+        } else {
             self.studentHub.broadcast(text)
+        }
+    }
+
+    func broadcastRecoveryCandidate(for lesson: Lesson) {
+        guard let lessonID = try? lesson.requireID().uuidString else { return }
+
+        let formatter = ISO8601DateFormatter()
+        let payload: [String: Any] = [
+            "type": "recovery_candidate",
+            "lessonID": lessonID,
+            "startsAt": formatter.string(from: lesson.startsAt),
+            "endsAt": formatter.string(from: lesson.endsAt),
+            "calendarName": lesson.calendarName,
+            "state": lesson.state
+        ]
+
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let text = String(data: data, encoding: .utf8) {
+            self.instructorHub.broadcast(text)
+            self.logger.info("Broadcast recovery_candidate for lessonID=\(lessonID)")
         }
     }
 }
@@ -274,7 +531,7 @@ extension Request {
     /// Soft-delete all active bookings for a lesson, notify affected student sockets,
     /// and publish the canonical availability update once the slot is freed.
     @discardableResult
-    func cancelActiveBookings(for lesson: Lesson) async throws -> Int {
+    func cancelActiveBookings(for lesson: Lesson) async throws -> [UUID] {
         let lessonID = try lesson.requireID()
 
         let bookings = try await Booking.query(on: self.db)
@@ -290,13 +547,131 @@ extension Request {
             try await booking.delete(on: self.db) // soft delete
         }
 
+        // Canonical slot release: persist the freed lesson state before any broadcasts.
+        if lesson.state != "available" || lesson.calendarName != "MSM Available" {
+            lesson.state = "available"
+            lesson.calendarName = "MSM Available"
+            try await lesson.save(on: self.db)
+        }
+
         for sid in cancelledStudentIDs {
             try self.broadcastCancelled(for: lesson, studentID: sid)
             self.broadcastBookingCleared(for: lesson, studentID: sid)
         }
         self.broadcastBookingCleared(for: lesson)
 
-        return cancelledStudentIDs.count
+        return cancelledStudentIDs
+    }
+
+    /// Like `cancelActiveBookings` but also applies late-cancellation charges when
+    /// the lesson starts within 48 hours — used for instructor-initiated cancellations
+    /// made on behalf of a student. Returns the cancelled student IDs so the caller
+    /// can run `reevaluateCoverageForStudent` after resetting finance records.
+    func cancelActiveBookingsApplyingLateCharges(for lesson: Lesson) async throws -> [UUID] {
+        let lessonID = try lesson.requireID()
+        let hoursUntilLesson = lesson.startsAt.timeIntervalSinceNow / 3600
+        let isLate = hoursUntilLesson >= 0 && hoursUntilLesson < 48
+
+        let bookings = try await Booking.query(on: self.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        guard !bookings.isEmpty else {
+            if lesson.state != "available" || lesson.calendarName != "MSM Available" {
+                lesson.state = "available"
+                lesson.calendarName = "MSM Available"
+                try await lesson.save(on: self.db)
+            }
+            return []
+        }
+
+        // Load finance and resolve instructor ID once — shared across all bookings.
+        let lessonFinance = try await LessonFinance.find(lessonID, on: self.db)
+        let instructorID: UUID?
+        if let iid = lessonFinance?.$instructor.id {
+            instructorID = iid
+        } else {
+            instructorID = try? await User.query(on: self.db)
+                .filter(\.$role == "instructor")
+                .first()?
+                .requireID()
+        }
+
+        var cancelledStudentIDs: [UUID] = []
+        cancelledStudentIDs.reserveCapacity(bookings.count)
+
+        for booking in bookings {
+            let studentID = booking.$user.id
+            cancelledStudentIDs.append(studentID)
+
+            if isLate {
+                booking.cancellationType = "late_cancellation"
+                try await booking.save(on: self.db)
+
+                if let finance = lessonFinance {
+                    finance.fullChargeApplied = true
+                    try await finance.save(on: self.db)
+                }
+
+                let chargeAmount: Decimal
+                if let snapshot = lessonFinance?.priceSnapshot {
+                    chargeAmount = snapshot
+                } else {
+                    let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+                    chargeAmount = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                }
+
+                if let iid = instructorID {
+                    let chargeEntry = LedgerEntry(
+                        studentID: studentID,
+                        instructorID: iid,
+                        lessonID: lessonID,
+                        type: "late_cancellation_charge",
+                        amount: -chargeAmount,
+                        note: "Late cancellation — full charge applies",
+                        effectiveDate: Date(),
+                        createdByUserID: nil
+                    )
+                    try await chargeEntry.save(on: self.db)
+
+                    if let student = try? await User.find(studentID, on: self.db),
+                       let fcmToken = student.fcmToken,
+                       let fcm = FCMNotificationService(req: self) {
+                        try? await fcm.send(
+                            to: fcmToken,
+                            title: "Lesson Update",
+                            body: "A late cancellation fee has been applied to your account per our 48h policy."
+                        )
+                    }
+                }
+            }
+
+            try await booking.delete(on: self.db)
+
+            let evt = BookingEvent(
+                type: isLate ? "instructor.late_cancelled" : "instructor.cancelled",
+                userID: studentID,
+                lessonID: lessonID,
+                bookingID: try booking.requireID()
+            )
+            try await evt.save(on: self.db)
+        }
+
+        // Free the lesson slot.
+        if lesson.state != "available" || lesson.calendarName != "MSM Available" {
+            lesson.state = "available"
+            lesson.calendarName = "MSM Available"
+            try await lesson.save(on: self.db)
+        }
+
+        for sid in cancelledStudentIDs {
+            try self.broadcastCancelled(for: lesson, studentID: sid)
+            self.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
+        self.broadcastBookingCleared(for: lesson)
+
+        return cancelledStudentIDs
     }
 
     private func sendBookingPayload(_ payload: [String: Any], studentID: UUID?) {
@@ -352,7 +727,9 @@ extension Request {
     }
 
     /// Broadcast that a booking has been rescheduled to a new lesson.
-    func broadcastRescheduled(old oldLesson: Lesson, new newLesson: Lesson) {
+    /// `explicitStudent` is used when the caller (e.g. instructor reschedule) already
+    /// has the student loaded and there is no authenticated student on the request.
+    func broadcastRescheduled(old oldLesson: Lesson, new newLesson: Lesson, explicitStudent: User? = nil) {
         let oldID = (try? oldLesson.requireID().uuidString) ?? ""
         let newID = (try? newLesson.requireID().uuidString) ?? ""
 
@@ -363,9 +740,10 @@ extension Request {
             "status": "rescheduled"
         ]
 
-        let sid = self.auth.get(User.self).flatMap { try? $0.requireID() }
+        let user = explicitStudent ?? self.auth.get(User.self)
+        let sid = user.flatMap { try? $0.requireID() }
 
-        if let user = self.auth.get(User.self) {
+        if let user = user {
             payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
