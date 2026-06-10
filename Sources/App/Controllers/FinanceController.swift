@@ -395,7 +395,7 @@ struct FinanceController {
         let entry = LedgerEntry(
             studentID: input.studentID,
             instructorID: instructorID,
-            lessonID: nil,
+            lessonID: input.lessonID,
             type: "payment",
             amount: input.amount,
             paymentMethod: input.paymentMethod,
@@ -405,8 +405,53 @@ struct FinanceController {
         )
 
         try await entry.save(on: req.db)
+
+        // If the instructor explicitly allocated this payment to a past lesson, mark it covered now.
+        if let lessonID = input.lessonID,
+           let lf = try await LessonFinance.find(lessonID, on: req.db),
+           lf.financeStatus != "charged" {
+            lf.financeStatus = "covered"
+            lf.coveredAt = Date()
+            try await lf.save(on: req.db)
+        }
+
         try await reevaluateCoverageForStudent(input.studentID, on: req.db)
         return entry
+    }
+
+    func outstandingLessons(req: Request) async throws -> [OutstandingLessonDTO] {
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing studentID")
+        }
+
+        let now = Date()
+        let finances = try await LessonFinance.query(on: req.db)
+            .filter(\.$student.$id == studentID)
+            .filter(\.$financeStatus ~~ ["not_covered", "charge_pending"])
+            .all()
+
+        var results: [OutstandingLessonDTO] = []
+        for lf in finances {
+            guard let lessonID = lf.id,
+                  let lesson = try await Lesson.find(lessonID, on: req.db),
+                  lesson.startsAt < now else { continue }
+            results.append(OutstandingLessonDTO(
+                lessonID: lessonID,
+                startsAt: lesson.startsAt,
+                endsAt: lesson.endsAt,
+                amountDue: lf.priceSnapshot,
+                financeStatus: lf.financeStatus
+            ))
+        }
+        return results.sorted { $0.startsAt < $1.startsAt }
+    }
+
+    struct OutstandingLessonDTO: Content {
+        let lessonID: UUID
+        let startsAt: Date
+        let endsAt: Date
+        let amountDue: Decimal
+        let financeStatus: String
     }
 
     func addExpense(req: Request) async throws -> LedgerEntry {

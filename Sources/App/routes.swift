@@ -879,6 +879,7 @@ public func routes(_ app: Application) throws {
     financeProtected.post("finance", "lessons", ":lessonID", "charge", use: finance.chargeLesson)
     financeProtected.get("finance", "students", use: finance.studentBalances)
     financeProtected.get("finance", "students", ":studentID", "transactions", use: finance.studentTransactions)
+    financeProtected.get("finance", "students", ":studentID", "outstanding-lessons", use: finance.outstandingLessons)
     financeProtected.get("finance", "business-summary", use: finance.businessSummary)
     financeProtected.get("instructor", "finance", "week-total", use: finance.weekTotal)
     financeProtected.post("instructor", "ledger", ":entryID", "waive",   use: finance.waiveFee)
@@ -982,6 +983,7 @@ public func routes(_ app: Application) throws {
     try app.register(collection: StudentBookingsController())
     try app.register(collection: StudentLessonController())
     try app.register(collection: InstructorLessonController())
+    try app.register(collection: TestAppointmentController())
     try app.register(collection: ConfirmedLessonController())
     
     // GET /me/booking-events (session cookie presence required)
