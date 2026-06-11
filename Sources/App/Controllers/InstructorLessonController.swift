@@ -5,7 +5,7 @@ import Foundation
 struct InstructorLessonController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
 
-        let instructor = routes.grouped("instructor")
+        let instructor = routes.grouped(SessionTokenAuthenticator(), User.guardMiddleware()).grouped("instructor")
 
         // Mirrors /student/lessons/available but for instructors
         instructor.get("lessons", "available", use: availableLessons)
@@ -27,6 +27,9 @@ struct InstructorLessonController: RouteCollection {
 
         // Set or clear an alternate drop-off location on a booking
         instructor.patch("bookings", ":bookingID", "dropoff", use: setDropoffLocation)
+
+        // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
+        instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
     }
 
     struct InstructorLessonRow: Content {
@@ -53,6 +56,7 @@ struct InstructorLessonController: RouteCollection {
         var status: String?           // "active" | "late_cancelled"
         var cancellationType: String? // "late_cancellation" | nil
         var dropoffLocation: String?
+        var rescheduled: Bool?
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -135,61 +139,78 @@ struct InstructorLessonController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid or missing from/to query parameters")
         }
 
-        // 1) Find lessons within the requested date range
+        // 1) Fetch all lessons in range — one query.
         let lessonsInRange = try await Lesson.query(on: req.db)
             .filter(\.$startsAt >= fromDate)
             .filter(\.$startsAt <= toDate)
             .all()
 
-        var rows: [BookingRangeRow] = []
+        guard !lessonsInRange.isEmpty else { return [] }
 
-        // 2) For each lesson, fetch active bookings AND late-cancelled bookings
-        //    (late cancellations are soft-deleted but the instructor still owes the fee).
-        for lesson in lessonsInRange {
-            guard let lessonID = lesson.id else { continue }
+        let lessonIDs = lessonsInRange.compactMap(\.id)
+        let lessonByID = Dictionary(uniqueKeysWithValues: lessonsInRange.compactMap { l -> (UUID, Lesson)? in
+            guard let id = l.id else { return nil }
+            return (id, l)
+        })
 
-            // .withDeleted() bypasses Fluent's automatic deleted_at IS NULL filter so we
-            // can then manually select active + late-cancelled rows together.
-            let bookings = try await Booking.query(on: req.db)
-                .withDeleted()
-                .filter(\.$lesson.$id == lessonID)
-                .group(.or) { g in
-                    g.filter(\.$deletedAt == nil)
-                    g.filter(\.$cancellationType == "late_cancellation")
-                }
-                .all()
-
-            for booking in bookings {
-                guard let bookingID = booking.id else { continue }
-
-                let student = try await booking.$user.get(on: req.db)
-                let studentName = student.username
-
-                let isLate = booking.cancellationType == "late_cancellation"
-
-                var financeStatus: String? = nil
-                if let lessonFinance = try await LessonFinance.find(lessonID, on: req.db) {
-                    try await FinanceController().evaluateCoverage(for: lessonFinance, on: req.db)
-                    financeStatus = lessonFinance.financeStatus
-                }
-
-                rows.append(
-                    BookingRangeRow(
-                        id: bookingID,
-                        lessonID: lessonID,
-                        userID: booking.$user.id,
-                        studentName: studentName,
-                        studentDisplayName: student.displayName,
-                        title: lesson.title,
-                        startsAt: lesson.startsAt,
-                        endsAt: lesson.endsAt,
-                        financeStatus: financeStatus,
-                        status: isLate ? "late_cancelled" : "active",
-                        cancellationType: booking.cancellationType,
-                        dropoffLocation: booking.dropoffLocation
-                    )
-                )
+        // 2) Batch fetch active + late-cancelled bookings for all lessons — one query.
+        let allBookings = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$lesson.$id ~~ lessonIDs)
+            .group(.or) { g in
+                g.filter(\.$deletedAt == nil)
+                g.filter(\.$cancellationType == "late_cancellation")
             }
+            .all()
+
+        // 3) Batch fetch all referenced students — one query.
+        let studentIDs = Array(Set(allBookings.map { $0.$user.id }))
+        let students = try await User.query(on: req.db)
+            .filter(\.$id ~~ studentIDs)
+            .all()
+        let studentByID = Dictionary(uniqueKeysWithValues: students.compactMap { u -> (UUID, User)? in
+            guard let id = u.id else { return nil }
+            return (id, u)
+        })
+
+        // 4) Batch fetch lesson finance records — one query. Read-only; no side-effect mutation.
+        // LessonFinance uses the lesson UUID as its own @ID, so filter by id directly.
+        let finances = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ lessonIDs)
+            .all()
+        let financeByLessonID = Dictionary(uniqueKeysWithValues: finances.compactMap { f -> (UUID, LessonFinance)? in
+            guard let lid = f.id else { return nil }
+            return (lid, f)
+        })
+
+        var rows: [BookingRangeRow] = []
+        rows.reserveCapacity(allBookings.count)
+
+        for booking in allBookings {
+            guard let bookingID = booking.id,
+                  let lesson = lessonByID[booking.$lesson.id],
+                  let student = studentByID[booking.$user.id] else { continue }
+
+            let isLate = booking.cancellationType == "late_cancellation"
+            let financeStatus = financeByLessonID[booking.$lesson.id]?.financeStatus
+
+            rows.append(
+                BookingRangeRow(
+                    id: bookingID,
+                    lessonID: booking.$lesson.id,
+                    userID: booking.$user.id,
+                    studentName: student.username,
+                    studentDisplayName: student.displayName,
+                    title: lesson.title,
+                    startsAt: lesson.startsAt,
+                    endsAt: lesson.endsAt,
+                    financeStatus: financeStatus,
+                    status: isLate ? "late_cancelled" : "active",
+                    cancellationType: booking.cancellationType,
+                    dropoffLocation: booking.dropoffLocation,
+                    rescheduled: booking.rescheduled
+                )
+            )
         }
 
         // Sort by start time ascending
@@ -438,5 +459,62 @@ struct InstructorLessonController: RouteCollection {
         booking.dropoffLocation = raw.isEmpty ? nil : raw
         try await booking.save(on: req.db)
         return .ok
+    }
+
+    // MARK: - POST /instructor/students/:studentID/bookings
+
+    struct InstructorCreateBookingInput: Content {
+        let lessonID: UUID
+        let pickupLocation: String?
+    }
+
+    struct InstructorCreateBookingResponse: Content {
+        let bookingID: UUID
+    }
+
+    func createBookingForStudent(_ req: Request) async throws -> InstructorCreateBookingResponse {
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "studentID missing or invalid")
+        }
+        guard let student = try await User.find(studentID, on: req.db) else {
+            throw Abort(.notFound, reason: "Student not found")
+        }
+        guard student.role == "student" else {
+            throw Abort(.badRequest, reason: "User is not a student")
+        }
+
+        let input = try req.content.decode(InstructorCreateBookingInput.self)
+
+        guard let lesson = try await Lesson.find(input.lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Lesson not found")
+        }
+
+        // Prevent duplicate active booking for the same student+lesson
+        let existing = try await Booking.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .filter(\.$lesson.$id == input.lessonID)
+            .filter(\.$deletedAt == nil)
+            .first()
+
+        if existing != nil {
+            // Idempotent: return the existing booking ID rather than erroring
+            return InstructorCreateBookingResponse(bookingID: try existing!.requireID())
+        }
+
+        let booking = Booking(
+            userID: studentID,
+            lessonID: input.lessonID,
+            durationMinutes: nil,
+            actualEndsAt: nil,
+            paymentStatus: "pending"
+        )
+        booking.pickupLocation = input.pickupLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        booking.pickupSource = booking.pickupLocation != nil ? "instructor" : nil
+        try await booking.save(on: req.db)
+
+        let bookingID = try booking.requireID()
+        req.logger.info("instructor.createBookingForStudent: created bookingID=\(bookingID) for studentID=\(studentID) lessonID=\(lesson.id?.uuidString ?? "?")")
+
+        return InstructorCreateBookingResponse(bookingID: bookingID)
     }
 }
