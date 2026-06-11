@@ -985,6 +985,7 @@ public func routes(_ app: Application) throws {
     try app.register(collection: InstructorLessonController())
     try app.register(collection: TestAppointmentController())
     try app.register(collection: ConfirmedLessonController())
+    try app.register(collection: AdminCalendarController())
     
     // GET /me/booking-events (session cookie presence required)
     app.get("me", "booking-events") { req async throws -> [BookingEvent] in

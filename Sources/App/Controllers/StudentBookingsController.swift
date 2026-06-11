@@ -1,17 +1,6 @@
 import Vapor
 import Fluent
 
-extension Booking {
-    /// Temporary shim so StudentBookingsController can compile while
-    /// we wire up a real paymentStatus field on the Booking model.
-    /// This does *not* persist anything to the database yet – it always
-    /// reads as nil and ignores writes.
-    var paymentStatus: String? {
-        get { nil }
-        set { /* no-op for now */ }
-    }
-}
-
 struct StudentBookingsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // student, session-protected or bearer-protected
@@ -52,6 +41,9 @@ struct StudentBookingsController: RouteCollection {
 
         // POST /student/bookings/:bookingID/paid
         byID.post("paid", use: markPaid)
+
+        // POST /student/bookings/:bookingID/pay  (mock payment gateway)
+        byID.post("pay", use: simulatePay)
     }
 
     // MARK: INPUT STRUCTS
@@ -76,12 +68,18 @@ struct StudentBookingsController: RouteCollection {
     func createBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
+        req.logger.info("student.createBooking: userID=\(userID) username=\(user.username) displayName=\(user.displayName) lessonID_param=pending")
 
         let input = try req.content.decode(CreateBookingInput.self)
+        req.logger.info("student.createBooking: requested lessonID=\(input.lessonID.uuidString) offset=\(input.startOffsetMinutes ?? 0) duration=\(input.durationMinutes ?? -1)")
         let offsetMinutes = input.startOffsetMinutes ?? 0
 
         guard let lesson = try await Lesson.find(input.lessonID, on: req.db) else {
             throw Abort(.notFound, reason: "Lesson not found")
+        }
+
+        guard lesson.startsAt > Date() else {
+            throw Abort(.unprocessableEntity, reason: "This lesson has already started and can no longer be booked")
         }
 
         // Prevent duplicates
@@ -144,14 +142,20 @@ struct StudentBookingsController: RouteCollection {
             userID: userID,
             lessonID: input.lessonID,
             durationMinutes: input.durationMinutes,
-            actualEndsAt: actualEndsAt
+            actualEndsAt: actualEndsAt,
+            paymentStatus: "pending"
         )
         booking.pickupSource = defaultPickupSource
         booking.pickupLocation = defaultPickupLocation
 
         try await booking.save(on: req.db)
 
+        lesson.state = "booked"
+        lesson.calendarName = "MSM Lessons"
+        try await lesson.save(on: req.db)
+
         let bookedLesson = try await booking.$lesson.get(on: req.db)
+        req.logger.info("student.createBooking: broadcasting booked lessonID=\((try? bookedLesson.requireID())?.uuidString ?? input.lessonID.uuidString) userID=\(userID) username=\(user.username) displayName=\(user.displayName)")
         try req.broadcastBooked(for: bookedLesson)
 
         return .created
@@ -168,6 +172,7 @@ struct StudentBookingsController: RouteCollection {
         }
 
         guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
             .filter(\.$id == bookingID)
             .filter(\.$user.$id == userID)
             .first()
@@ -175,10 +180,94 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Booking not found for this user")
         }
 
+        // Idempotent: already cancelled — return success without repeating side-effects.
+        if booking.deletedAt != nil {
+            return .ok
+        }
+
+        let cancelLesson = try await booking.$lesson.get(on: req.db)
+        let hoursUntilLesson = cancelLesson.startsAt.timeIntervalSinceNow / 3600
+        let isLate = hoursUntilLesson >= 0 && hoursUntilLesson < 48
+
+        if isLate {
+            booking.cancellationType = "late_cancellation"
+            // Persist cancellationType before soft-delete: Fluent's delete() only writes
+            // deleted_at, so we must save() any extra field changes first.
+            try await booking.save(on: req.db)
+
+            // Load (or nil) the lesson finance record for this lesson.
+            let lessonID = cancelLesson.id
+            var lessonFinance: LessonFinance? = nil
+            if let lid = lessonID {
+                lessonFinance = try await LessonFinance.find(lid, on: req.db)
+            }
+
+            // Flag the finance record as fully billable.
+            if let finance = lessonFinance {
+                finance.fullChargeApplied = true
+                try await finance.save(on: req.db)
+            }
+
+            // Auto-debit the student's ledger balance so the outstanding fee is immediately
+            // visible in the Finance tab without the instructor needing to manually charge.
+            let chargeAmount: Decimal
+            if let snapshot = lessonFinance?.priceSnapshot {
+                chargeAmount = snapshot
+            } else {
+                // No LessonFinance yet: estimate from lesson duration at default hourly rate.
+                let mins = max(0, Int(cancelLesson.endsAt.timeIntervalSince(cancelLesson.startsAt) / 60))
+                chargeAmount = (Decimal(45) * Decimal(mins)) / Decimal(60)
+            }
+
+            // Resolve the instructor ID: prefer from the existing finance record, then role lookup.
+            let instructorIDFromFinance: UUID? = lessonFinance?.$instructor.id
+            let instructorID: UUID?
+            if let iid = instructorIDFromFinance {
+                instructorID = iid
+            } else {
+                do {
+                    instructorID = try await User.query(on: req.db)
+                        .filter(\.$role == "instructor")
+                        .first()?
+                        .requireID()
+                } catch {
+                    req.logger.error("Failed to resolve instructorID for late cancellation charge: \(error)")
+                    instructorID = nil
+                }
+            }
+
+            if instructorID == nil {
+                req.logger.warning("No instructor found — late cancellation LedgerEntry will have nil createdByUserID for studentID=\(userID)")
+            }
+
+            if let lid = lessonID, let instructorID {
+                let chargeEntry = LedgerEntry(
+                    studentID: userID,
+                    instructorID: instructorID,
+                    lessonID: lid,
+                    type: "late_cancellation_charge",
+                    amount: -chargeAmount,
+                    note: "Late cancellation — full charge applies",
+                    effectiveDate: Date(),
+                    createdByUserID: instructorID
+                )
+                try await chargeEntry.save(on: req.db)
+
+                // Best-effort push notification — never fails the cancellation.
+                if let fcmToken = user.fcmToken, let fcm = FCMNotificationService(req: req) {
+                    try? await fcm.send(
+                        to: fcmToken,
+                        title: "Lesson Update",
+                        body: "A late cancellation fee has been applied to your account per our 48h policy."
+                    )
+                }
+            }
+        }
+
         try await booking.delete(on: req.db)
 
         let evt = BookingEvent(
-            type: "student.cancelled",
+            type: isLate ? "student.late_cancelled" : "student.cancelled",
             userID: try user.requireID(),
             lessonID: booking.$lesson.id,
             bookingID: try booking.requireID()
@@ -186,8 +275,20 @@ struct StudentBookingsController: RouteCollection {
         try await evt.save(on: req.db)
 
         let freedLesson = try await booking.$lesson.get(on: req.db)
+        freedLesson.state = "available"
+        freedLesson.calendarName = "MSM Available"
+        try await freedLesson.save(on: req.db)
+
+        // Release the reserved credit so it can cover other lessons.
+        let studentID = try user.requireID()
+        do {
+            try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
+        } catch {
+            req.logger.error("reevaluateCoverage failed: \(error)")
+        }
+
         try req.broadcastCancelled(for: freedLesson)
-        req.broadcastBookingCleared(for: freedLesson)
+        req.application.broadcastRecoveryCandidate(for: freedLesson)
         return .ok
     }
 
@@ -220,9 +321,19 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.notFound, reason: "Lesson to move to not found")
         }
 
+        guard newLesson.startsAt > Date() else {
+            throw Abort(.unprocessableEntity, reason: "Cannot reschedule to a lesson that has already started")
+        }
+
         let oldLesson = try await booking.$lesson.get(on: req.db)
 
+        let hoursUntilOldLesson = oldLesson.startsAt.timeIntervalSinceNow / 3600
+        if hoursUntilOldLesson < 48 {
+            throw Abort(.forbidden, reason: "Cancellations must be made at least 48 hours in advance.")
+        }
+
         booking.$lesson.id = try newLesson.requireID()
+        booking.rescheduled = true
 
         if let mins = booking.durationMinutes {
             let newStart = newLesson.startsAt
@@ -293,11 +404,13 @@ struct StudentBookingsController: RouteCollection {
             startsAt: effectiveStart,
             endsAt: newEndsAt,
             status: "active",
+            deletedAt: nil,
             pickupLocation: booking.pickupLocation,
             pickupSource: booking.pickupSource,
             lessonStartsAt: lesson.startsAt,
             lessonEndsAt: lesson.endsAt,
-            paymentStatus: booking.paymentStatus
+            paymentStatus: booking.paymentStatus,
+            fullChargeApplied: nil
         )
     }
 
@@ -325,6 +438,45 @@ struct StudentBookingsController: RouteCollection {
         try await booking.save(on: req.db)
 
         return .ok
+    }
+
+    // MARK: SIMULATE PAYMENT
+
+    struct SimulatePayResponse: Content {
+        var bookingID: UUID
+        var paymentStatus: String
+        var transactionID: String
+        var message: String
+    }
+
+    func simulatePay(_ req: Request) async throws -> SimulatePayResponse {
+        let user = try req.auth.require(User.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$user.$id == user.requireID())
+            .filter(\.$deletedAt == nil)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found for this user")
+        }
+
+        guard booking.paymentStatus != "confirmed" else {
+            throw Abort(.conflict, reason: "Payment has already been confirmed for this booking")
+        }
+
+        let result = try await MockPaymentService.process(bookingID: bookingID)
+
+        booking.paymentStatus = "confirmed"
+        try await booking.save(on: req.db)
+
+        return SimulatePayResponse(
+            bookingID: bookingID,
+            paymentStatus: "confirmed",
+            transactionID: result.transactionID,
+            message: result.message
+        )
     }
 
     // MARK: GET MY BOOKINGS
@@ -388,18 +540,29 @@ struct StudentBookingsController: RouteCollection {
                 effectiveStart = lesson?.startsAt
             }
 
+            let derivedStatus: String
+            if booking.deletedAt == nil {
+                derivedStatus = "active"
+            } else if booking.cancellationType == "late_cancellation" {
+                derivedStatus = "late_cancelled"
+            } else {
+                derivedStatus = "cancelled"
+            }
+
             return StudentBookingDTO(
                 id: booking.id,
                 lessonID: booking.$lesson.id,
                 lessonTitle: lesson?.title,
                 startsAt: effectiveStart,
                 endsAt: baseEndsAt,
-                status: booking.deletedAt == nil ? "active" : "cancelled",
+                status: derivedStatus,
+                deletedAt: booking.deletedAt,
                 pickupLocation: booking.pickupLocation,
                 pickupSource: booking.pickupSource,
                 lessonStartsAt: lesson?.startsAt,
                 lessonEndsAt: lesson?.endsAt,
-                paymentStatus: booking.paymentStatus
+                paymentStatus: booking.paymentStatus,
+                fullChargeApplied: booking.cancellationType == "late_cancellation" ? true : nil
             )
         }
     }
@@ -413,11 +576,13 @@ struct StudentBookingsController: RouteCollection {
         var startsAt: Date?
         var endsAt: Date?
         var status: String
+        var deletedAt: Date?
         var pickupLocation: String?
         var pickupSource: String?
         var lessonStartsAt: Date?
         var lessonEndsAt: Date?
         var paymentStatus: String?
+        var fullChargeApplied: Bool?
     }
 
     // MARK: UPDATE PICKUP

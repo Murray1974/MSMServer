@@ -1106,9 +1106,15 @@ struct FinanceController {
         // Only count lessons that have at least one active (non-deleted) booking.
         // Cancelled lessons leave their LessonFinance record behind, so without
         // this filter they'd inflate the expected total.
-        // Fluent's soft-delete filter is automatic — .all() already excludes deleted bookings.
+        // Restrict to bookings within a 90-day look-back window to avoid loading
+        // the entire bookings table on every request.
+        let ninetyDaysAgo = fromDate.addingTimeInterval(-90 * 24 * 60 * 60)
         let activeBookingLessonIDs: Set<UUID> = try await {
-            let bookings = try await Booking.query(on: req.db).all()
+            let bookings = try await Booking.query(on: req.db)
+                .filter(\.$deletedAt == nil)
+                .join(parent: \Booking.$lesson)
+                .filter(Lesson.self, \.$startsAt >= ninetyDaysAgo)
+                .all()
             return Set(bookings.map { $0.$lesson.id })
         }()
 

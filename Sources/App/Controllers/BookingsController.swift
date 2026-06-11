@@ -631,7 +631,7 @@ extension Request {
                         amount: -chargeAmount,
                         note: "Late cancellation — full charge applies",
                         effectiveDate: Date(),
-                        createdByUserID: nil
+                        createdByUserID: iid
                     )
                     try await chargeEntry.save(on: self.db)
 
