@@ -958,6 +958,8 @@ public func routes(_ app: Application) throws {
     studentProtected.get("instructor", "presence",                    use: chatController.instructorPresence)
     studentProtected.on(.POST, "chat", "upload-attachment", body: .collect(maxSize: "10mb"), use: chatController.uploadAttachment)
     studentProtected.get("chat", "attachments", ":attachmentID",      use: chatController.serveAttachment)
+
+    // GET /student/tests and POST /student/test-requests are handled by TestAppointmentController
     financeProtected.get("instructor",   "chat", "students",                                           use: chatController.instructorInbox)
     financeProtected.get("instructor",   "chat", "student", ":studentID", "messages",                  use: chatController.instructorGetMessages)
     financeProtected.post("instructor",  "chat", "student", ":studentID", "messages",                  use: chatController.instructorSendMessage)
@@ -984,6 +986,7 @@ public func routes(_ app: Application) throws {
     try app.register(collection: StudentLessonController())
     try app.register(collection: InstructorLessonController())
     try app.register(collection: TestAppointmentController())
+    try app.register(collection: TestCentreController())
     try app.register(collection: ConfirmedLessonController())
     try app.register(collection: AdminCalendarController())
     

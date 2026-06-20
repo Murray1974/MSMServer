@@ -18,6 +18,7 @@ public func configure(_ app: Application) throws {
 
     // migrations
     app.migrations.add(CreateUser())
+    app.migrations.add(AddUniqueUsername())
     app.migrations.add(CreateSessionToken())
     app.migrations.add(CreateLesson())
     app.migrations.add(CreateBooking())
@@ -68,6 +69,11 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateRecoveryJob())
     app.migrations.add(AddVoidFieldsToLedgerEntry())
     app.migrations.add(AddDropoffLocationToBooking())
+    app.migrations.add(AddRescheduledToBooking())
+    app.migrations.add(CreateTestAppointment())
+    app.migrations.add(AddTestRequestFields())
+    app.migrations.add(AddCancellationSourceToBooking())
+    app.migrations.add(CreateTestCentre())
 
     try app.autoMigrate().wait()
 
