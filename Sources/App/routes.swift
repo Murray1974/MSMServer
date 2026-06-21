@@ -805,6 +805,36 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // GET  /instructor/settings/test-rules
+    // PATCH /instructor/settings/test-rules
+    struct TestRulesDTO: Content {
+        var autoRejectClash: Bool
+        var minWeeksEnabled: Bool
+        var minWeeks: Int
+    }
+    financeProtected.get("instructor", "settings", "test-rules") { req async throws -> TestRulesDTO in
+        let instructor = try req.auth.require(User.self)
+        return TestRulesDTO(
+            autoRejectClash: instructor.testAutoRejectClash,
+            minWeeksEnabled: instructor.testMinWeeksEnabled,
+            minWeeks:        instructor.testMinWeeks
+        )
+    }
+    financeProtected.patch("instructor", "settings", "test-rules") { req async throws -> TestRulesDTO in
+        struct Input: Content { var autoRejectClash: Bool?; var minWeeksEnabled: Bool?; var minWeeks: Int? }
+        let instructor = try req.auth.require(User.self)
+        let body = try req.content.decode(Input.self)
+        if let v = body.autoRejectClash { instructor.testAutoRejectClash = v }
+        if let v = body.minWeeksEnabled { instructor.testMinWeeksEnabled = v }
+        if let v = body.minWeeks, v >= 1  { instructor.testMinWeeks = v }
+        try await instructor.save(on: req.db)
+        return TestRulesDTO(
+            autoRejectClash: instructor.testAutoRejectClash,
+            minWeeksEnabled: instructor.testMinWeeksEnabled,
+            minWeeks:        instructor.testMinWeeks
+        )
+    }
+
     financeProtected.post("notifications", "recovery") { req async throws -> [String: Int] in
         let payload = try req.content.decode(RecoveryNotificationRequest.self)
 
@@ -835,20 +865,27 @@ public func routes(_ app: Application) throws {
             throw Abort(.internalServerError, reason: "Failed to encode recovery notification payload")
         }
 
-        let requestedUsernames = payload.clients.map(normalizedStudentUsername(from:))
         var delivered = 0
-        let requested = requestedUsernames.count
+        let requested = payload.clients.count
 
-        for username in requestedUsernames {
-            if let user = try await User.query(on: req.db)
-                .filter(\User.$username == username)
-                .first(),
-               let studentID = try? user.requireID() {
+        for raw in payload.clients {
+            let normalized = normalizedStudentUsername(from: raw)
+            var user = try await User.query(on: req.db)
+                .filter(\.$username == normalized)
+                .first()
+            if user == nil {
+                // Fall back to exact email match (for dev/test use)
+                let email = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                user = try await User.query(on: req.db)
+                    .filter(\.$username == email)
+                    .first()
+            }
+            if let user, let studentID = try? user.requireID() {
                 if broadcastStudentText(text, req.application, studentID) {
                     delivered += 1
                 }
             } else {
-                req.logger.warning("Recovery notification target not found for normalized username: \(username)")
+                req.logger.warning("Recovery notification target not found for: \(raw) (normalized: \(normalized))")
             }
         }
 

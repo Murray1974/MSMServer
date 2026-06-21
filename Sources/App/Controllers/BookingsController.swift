@@ -540,11 +540,26 @@ extension Request {
             .all()
 
         var cancelledStudentIDs: [UUID] = []
+        var cancelledStudents: [UUID: User] = [:]
         cancelledStudentIDs.reserveCapacity(bookings.count)
 
         for booking in bookings {
-            cancelledStudentIDs.append(booking.$user.id)
-            try await booking.delete(on: self.db) // soft delete
+            let sid = booking.$user.id
+            cancelledStudentIDs.append(sid)
+            if let student = try? await User.find(sid, on: self.db) {
+                cancelledStudents[sid] = student
+            }
+            booking.cancellationSource = "instructor_cancel"
+            try await booking.save(on: self.db)
+            try await booking.delete(on: self.db)
+
+            let evt = BookingEvent(
+                type: "instructor.cancelled",
+                userID: sid,
+                lessonID: lessonID,
+                bookingID: try? booking.requireID()
+            )
+            try? await evt.save(on: self.db)
         }
 
         // Canonical slot release: persist the freed lesson state before any broadcasts.
@@ -555,7 +570,7 @@ extension Request {
         }
 
         for sid in cancelledStudentIDs {
-            try self.broadcastCancelled(for: lesson, studentID: sid)
+            try self.broadcastCancelled(for: lesson, student: cancelledStudents[sid], studentID: sid, cancellationSource: "instructor_cancel")
             self.broadcastBookingCleared(for: lesson, studentID: sid)
         }
         self.broadcastBookingCleared(for: lesson)
@@ -599,12 +614,17 @@ extension Request {
         }
 
         var cancelledStudentIDs: [UUID] = []
+        var cancelledStudents: [UUID: User] = [:]
         cancelledStudentIDs.reserveCapacity(bookings.count)
 
         for booking in bookings {
             let studentID = booking.$user.id
             cancelledStudentIDs.append(studentID)
+            if let student = try? await User.find(studentID, on: self.db) {
+                cancelledStudents[studentID] = student
+            }
 
+            booking.cancellationSource = "instructor_cancel"
             if isLate {
                 booking.cancellationType = "late_cancellation"
                 try await booking.save(on: self.db)
@@ -645,6 +665,8 @@ extension Request {
                         )
                     }
                 }
+            } else {
+                try await booking.save(on: self.db)
             }
 
             try await booking.delete(on: self.db)
@@ -666,7 +688,7 @@ extension Request {
         }
 
         for sid in cancelledStudentIDs {
-            try self.broadcastCancelled(for: lesson, studentID: sid)
+            try self.broadcastCancelled(for: lesson, student: cancelledStudents[sid], studentID: sid, cancellationSource: "instructor_cancel")
             self.broadcastBookingCleared(for: lesson, studentID: sid)
         }
         self.broadcastBookingCleared(for: lesson)
@@ -706,21 +728,35 @@ extension Request {
     }
 
     /// Broadcast that a booking has been cancelled / slot freed.
-    func broadcastCancelled(for lesson: Lesson, studentID: UUID? = nil) throws {
+    /// Pass `student` when the caller already has the student User loaded (e.g. instructor-initiated
+    /// cancels) so the broadcast names the student, not the authenticated instructor.
+    func broadcastCancelled(for lesson: Lesson, student: User? = nil, studentID: UUID? = nil, cancellationSource: String? = nil) throws {
         let lessonID = try lesson.requireID().uuidString
 
+        let formatter = ISO8601DateFormatter()
         var payload: [String: Any] = [
             "type": "booking_changed",
             "lessonID": lessonID,
-            "status": "cancelled"
+            "status": "cancelled",
+            "startsAt": formatter.string(from: lesson.startsAt),
+            "endsAt": formatter.string(from: lesson.endsAt),
         ]
 
-        let sid = studentID ?? self.auth.get(User.self).flatMap { try? $0.requireID() }
+        if let src = cancellationSource {
+            payload["cancellationSource"] = src
+        }
 
-        if let user = self.auth.get(User.self) {
+        // Prefer an explicitly supplied student model; fall back to the authenticated user
+        // (which is correct for student-self-cancel but wrong for instructor-initiated cancels).
+        let resolvedUser = student ?? self.auth.get(User.self)
+        let sid = studentID ?? resolvedUser.flatMap { try? $0.requireID() }
+
+        if let user = resolvedUser {
             payload["studentID"] = sid?.uuidString
             payload["studentName"] = user.username
             payload["studentDisplayName"] = user.displayName
+        } else if let sid {
+            payload["studentID"] = sid.uuidString
         }
 
         sendBookingPayload(payload, studentID: sid)
