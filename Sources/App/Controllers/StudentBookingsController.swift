@@ -39,6 +39,9 @@ struct StudentBookingsController: RouteCollection {
         // PATCH /student/bookings/:bookingID/pickup
         byID.patch("pickup", use: updatePickup)
 
+        // PATCH /student/bookings/:bookingID/dropoff
+        byID.patch("dropoff", use: updateDropoff)
+
         // POST /student/bookings/:bookingID/paid
         byID.post("paid", use: markPaid)
 
@@ -52,6 +55,8 @@ struct StudentBookingsController: RouteCollection {
         let lessonID: UUID
         let durationMinutes: Int?
         let startOffsetMinutes: Int?
+        let pickupLocation: String?
+        let dropoffLocation: String?
     }
 
     struct UpdateDurationInput: Content {
@@ -145,14 +150,58 @@ struct StudentBookingsController: RouteCollection {
             actualEndsAt: actualEndsAt,
             paymentStatus: "pending"
         )
-        booking.pickupSource = defaultPickupSource
-        booking.pickupLocation = defaultPickupLocation
+        // Explicit pickup from client overrides the profile default
+        if let explicit = input.pickupLocation, !explicit.isEmpty {
+            booking.pickupSource = "student_selected"
+            booking.pickupLocation = explicit
+        } else {
+            booking.pickupSource = defaultPickupSource
+            booking.pickupLocation = defaultPickupLocation
+        }
+        booking.dropoffLocation = input.dropoffLocation
 
         try await booking.save(on: req.db)
 
         lesson.state = "booked"
         lesson.calendarName = "MSM Lessons"
         try await lesson.save(on: req.db)
+
+        // Ensure a LessonFinance record exists for this student.
+        // If one exists from a previous booking (different student), reassign it.
+        let lessonID = input.lessonID
+        if let existingFinance = try await LessonFinance.find(lessonID, on: req.db) {
+            if existingFinance.$student.id != userID {
+                existingFinance.$student.id = userID
+                existingFinance.financeStatus = "not_covered"
+                existingFinance.reservedAmount = nil
+                existingFinance.coveredAt = nil
+                try await existingFinance.save(on: req.db)
+            }
+        } else {
+            let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            let defaultHourlyRate = Decimal(45)
+            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let instructorID = try await User.query(on: req.db)
+                .filter(\.$role == "instructor")
+                .first()?.requireID()
+            if let instructorID {
+                let newFinance = LessonFinance(
+                    lessonID: lessonID,
+                    studentID: userID,
+                    instructorID: instructorID,
+                    durationMinutes: durationMinutes,
+                    hourlyRateSnapshot: defaultHourlyRate,
+                    priceSnapshot: priceSnapshot,
+                    chargeStatus: "not_charged",
+                    chargedLedgerEntryID: nil,
+                    financeStatus: "not_covered",
+                    coveredAt: nil,
+                    reservedAmount: nil
+                )
+                try await newFinance.save(on: req.db)
+            }
+        }
+        try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
 
         let bookedLesson = try await booking.$lesson.get(on: req.db)
         req.logger.info("student.createBooking: broadcasting booked lessonID=\((try? bookedLesson.requireID())?.uuidString ?? input.lessonID.uuidString) userID=\(userID) username=\(user.username) displayName=\(user.displayName)")
@@ -189,10 +238,11 @@ struct StudentBookingsController: RouteCollection {
         let hoursUntilLesson = cancelLesson.startsAt.timeIntervalSinceNow / 3600
         let isLate = hoursUntilLesson >= 0 && hoursUntilLesson < 48
 
+        booking.cancellationSource = "student_app"
         if isLate {
             booking.cancellationType = "late_cancellation"
-            // Persist cancellationType before soft-delete: Fluent's delete() only writes
-            // deleted_at, so we must save() any extra field changes first.
+            // Persist cancellationType + cancellationSource before soft-delete: Fluent's
+            // delete() only writes deleted_at, so we must save() any extra field changes first.
             try await booking.save(on: req.db)
 
             // Load (or nil) the lesson finance record for this lesson.
@@ -262,6 +312,9 @@ struct StudentBookingsController: RouteCollection {
                     )
                 }
             }
+        } else {
+            // Non-late path: no save() has been called yet, so persist cancellationSource now.
+            try await booking.save(on: req.db)
         }
 
         try await booking.delete(on: req.db)
@@ -332,7 +385,21 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.forbidden, reason: "Cancellations must be made at least 48 hours in advance.")
         }
 
-        booking.$lesson.id = try newLesson.requireID()
+        let userID = try user.requireID()
+        let oldLessonID = try oldLesson.requireID()
+        let newLessonID = try newLesson.requireID()
+
+        // Reset the old lesson's finance record so it's no longer reserved against this student.
+        if let oldFinance = try await LessonFinance.find(oldLessonID, on: req.db),
+           oldFinance.$student.id == userID,
+           oldFinance.chargeStatus != "charged", oldFinance.financeStatus != "charged" {
+            oldFinance.financeStatus = "not_covered"
+            oldFinance.reservedAmount = nil
+            oldFinance.coveredAt = nil
+            try await oldFinance.save(on: req.db)
+        }
+
+        booking.$lesson.id = newLessonID
         booking.rescheduled = true
 
         if let mins = booking.durationMinutes {
@@ -343,6 +410,41 @@ struct StudentBookingsController: RouteCollection {
         }
 
         try await booking.save(on: req.db)
+
+        // Ensure the new lesson has a finance record pointing to this student.
+        if let existingFinance = try await LessonFinance.find(newLessonID, on: req.db) {
+            if existingFinance.$student.id != userID,
+               existingFinance.chargeStatus != "charged", existingFinance.financeStatus != "charged" {
+                existingFinance.$student.id = userID
+                existingFinance.financeStatus = "not_covered"
+                existingFinance.reservedAmount = nil
+                existingFinance.coveredAt = nil
+                try await existingFinance.save(on: req.db)
+            }
+        } else {
+            let durationMinutes = max(0, Int(newLesson.endsAt.timeIntervalSince(newLesson.startsAt) / 60))
+            let defaultHourlyRate = Decimal(45)
+            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            if let instructorID = try await User.query(on: req.db)
+                .filter(\.$role == "instructor").first()?.requireID() {
+                let newFinance = LessonFinance(
+                    lessonID: newLessonID,
+                    studentID: userID,
+                    instructorID: instructorID,
+                    durationMinutes: durationMinutes,
+                    hourlyRateSnapshot: defaultHourlyRate,
+                    priceSnapshot: priceSnapshot,
+                    chargeStatus: "not_charged",
+                    chargedLedgerEntryID: nil,
+                    financeStatus: "not_covered",
+                    coveredAt: nil,
+                    reservedAmount: nil
+                )
+                try await newFinance.save(on: req.db)
+            }
+        }
+        try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
+
         req.broadcastRescheduled(old: oldLesson, new: newLesson)
 
         return .ok
@@ -407,6 +509,7 @@ struct StudentBookingsController: RouteCollection {
             deletedAt: nil,
             pickupLocation: booking.pickupLocation,
             pickupSource: booking.pickupSource,
+            dropoffLocation: booking.dropoffLocation,
             lessonStartsAt: lesson.startsAt,
             lessonEndsAt: lesson.endsAt,
             paymentStatus: booking.paymentStatus,
@@ -559,10 +662,12 @@ struct StudentBookingsController: RouteCollection {
                 deletedAt: booking.deletedAt,
                 pickupLocation: booking.pickupLocation,
                 pickupSource: booking.pickupSource,
+                dropoffLocation: booking.dropoffLocation,
                 lessonStartsAt: lesson?.startsAt,
                 lessonEndsAt: lesson?.endsAt,
                 paymentStatus: booking.paymentStatus,
-                fullChargeApplied: booking.cancellationType == "late_cancellation" ? true : nil
+                fullChargeApplied: booking.cancellationType == "late_cancellation" ? true : nil,
+                cancellationSource: booking.cancellationSource
             )
         }
     }
@@ -579,10 +684,12 @@ struct StudentBookingsController: RouteCollection {
         var deletedAt: Date?
         var pickupLocation: String?
         var pickupSource: String?
+        var dropoffLocation: String?
         var lessonStartsAt: Date?
         var lessonEndsAt: Date?
         var paymentStatus: String?
         var fullChargeApplied: Bool?
+        var cancellationSource: String?
     }
 
     // MARK: UPDATE PICKUP
@@ -610,5 +717,29 @@ struct StudentBookingsController: RouteCollection {
     struct UpdatePickupInput: Content {
         var pickupLocation: String?
         var pickupSource: String?
+    }
+
+    // MARK: UPDATE DROPOFF
+
+    func updateDropoff(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let bookingID = try req.parameters.require("bookingID", as: UUID.self)
+        let input = try req.content.decode(UpdateDropoffInput.self)
+
+        guard var booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+
+        guard booking.$user.id == user.id else {
+            throw Abort(.forbidden)
+        }
+
+        booking.dropoffLocation = input.dropoffLocation
+        try await booking.save(on: req.db)
+        return .ok
+    }
+
+    struct UpdateDropoffInput: Content {
+        var dropoffLocation: String?
     }
 }
