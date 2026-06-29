@@ -262,10 +262,29 @@ struct InstructorLessonController: RouteCollection {
             .all()
 
         for booking in activeBookings {
-            try await booking.delete(on: req.db)
             let sid = booking.$user.id
-            try req.broadcastCancelled(for: lesson, studentID: sid)
+            let student = try? await User.find(sid, on: req.db)
+            booking.cancellationSource = "instructor_personal"
+            try await booking.save(on: req.db)
+            try await booking.delete(on: req.db)
+
+            let evt = BookingEvent(
+                type: "instructor.personal",
+                userID: sid,
+                lessonID: lessonID,
+                bookingID: try? booking.requireID()
+            )
+            try? await evt.save(on: req.db)
+
+            try req.broadcastCancelled(for: lesson, student: student, studentID: sid)
             req.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
+
+        // Remove any lesson_finance record — the instructor is reclaiming the slot,
+        // the student owes nothing and the record should not affect their coverage.
+        if let finance = try await LessonFinance.find(lessonID, on: req.db),
+           finance.chargeStatus != "charged", finance.financeStatus != "charged" {
+            try await finance.delete(force: true, on: req.db)
         }
 
         // Broadcast rich event so agent can move the EKEvent (by stamped MSM_LESSON_ID).
