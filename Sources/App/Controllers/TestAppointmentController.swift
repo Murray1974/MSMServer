@@ -9,6 +9,8 @@ struct TestAppointmentController: RouteCollection {
 
         // Lightweight student list for the client-side picker
         instructor.get("students", use: listStudents)
+        // All tests for a specific student
+        instructor.get("students", ":userID", "tests", use: studentTestHistory)
 
         let tests = instructor.grouped("tests")
         tests.post(use: createTest)
@@ -19,6 +21,7 @@ struct TestAppointmentController: RouteCollection {
         tests.delete(":testID", use: deleteTest)
         tests.patch(":testID", use: updateTest)
         tests.post(":testID", "result", use: addResult)
+        tests.get("results", use: listResults)
 
         // Instructor: pending student-submitted requests
         let reqs = instructor.grouped("test-requests")
@@ -31,6 +34,23 @@ struct TestAppointmentController: RouteCollection {
         student.get("tests", use: studentTests)
         student.delete("tests", ":testID", use: cancelTest)
         student.post("tests", ":testID", "reschedule", use: rescheduleTest)
+    }
+
+    // MARK: - DVSA fault types
+
+    struct DVSAFaultEntry: Content {
+        var category: Int   // 1–27 (DVSA DL25 categories)
+        var sub: String?    // sub-category name, nil for top-level categories
+        var df: Int         // driver/minor faults
+        var s: Int          // serious fault (instant fail)
+        var d: Int          // dangerous fault (instant fail)
+    }
+
+    struct DVSAFaultSheet: Codable {
+        var v: Int = 2
+        var attemptNumber: Int?
+        var etpa: Bool
+        var entries: [DVSAFaultEntry]
     }
 
     // MARK: - Shared DTO
@@ -53,7 +73,10 @@ struct TestAppointmentController: RouteCollection {
         var chargedLedgerEntryID: UUID?
         var examiner: String?
         var outcome: String?
-        var faults: [String]?
+        var faults: [String]?           // legacy free-text; nil for new records
+        var attemptNumber: Int?
+        var etpa: Bool?
+        var faultEntries: [DVSAFaultEntry]?
         var createdAt: Date?
     }
 
@@ -72,22 +95,28 @@ struct TestAppointmentController: RouteCollection {
         var examiner: String?
         var outcome: String?
         var faults: [String]?
+        var rejectionReason: String?
     }
 
-    private func decodeFaults(_ raw: String?) -> [String]? {
-        guard let raw, !raw.isEmpty,
-              let data = raw.data(using: .utf8),
-              let arr = try? JSONDecoder().decode([String].self, from: data) else { return nil }
-        return arr
+    private func decodeFaultSheet(_ raw: String?) -> DVSAFaultSheet? {
+        guard let raw, !raw.isEmpty, let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(DVSAFaultSheet.self, from: data)
     }
 
-    private func encodeFaults(_ arr: [String]) -> String? {
-        guard let data = try? JSONEncoder().encode(arr) else { return nil }
+    private func encodeFaultSheet(_ sheet: DVSAFaultSheet) -> String? {
+        guard let data = try? JSONEncoder().encode(sheet) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
+    private func decodeLegacyFaults(_ raw: String?) -> [String]? {
+        guard let raw, !raw.isEmpty, let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode([String].self, from: data)
+    }
+
     private func dto(from appt: TestAppointment) -> TestAppointmentDTO {
-        TestAppointmentDTO(
+        let sheet = decodeFaultSheet(appt.faults)
+        let legacyFaults = sheet == nil ? decodeLegacyFaults(appt.faults) : nil
+        return TestAppointmentDTO(
             id: appt.id ?? UUID(),
             userID: appt.$user.id,
             studentName: appt.studentName,
@@ -105,9 +134,25 @@ struct TestAppointmentController: RouteCollection {
             chargedLedgerEntryID: appt.$chargedLedgerEntry.id,
             examiner: appt.examiner,
             outcome: appt.outcome,
-            faults: decodeFaults(appt.faults),
+            faults: legacyFaults,
+            attemptNumber: sheet?.attemptNumber,
+            etpa: sheet?.etpa,
+            faultEntries: sheet?.entries,
             createdAt: appt.createdAt
         )
+    }
+
+    // MARK: - GET /instructor/students/:userID/tests
+
+    func studentTestHistory(_ req: Request) async throws -> [TestAppointmentDTO] {
+        guard let userID = req.parameters.get("userID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing userID")
+        }
+        let appts = try await TestAppointment.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .sort(\.$startsAt, .descending)
+            .all()
+        return appts.map { dto(from: $0) }
     }
 
     // MARK: - GET /instructor/students
@@ -165,6 +210,17 @@ struct TestAppointmentController: RouteCollection {
         )
         try await appt.save(on: req.db)
         return dto(from: appt)
+    }
+
+    // MARK: - GET /instructor/tests/results
+
+    func listResults(_ req: Request) async throws -> [TestAppointmentDTO] {
+        let appts = try await TestAppointment.query(on: req.db)
+            .filter(\.$state == "attended")
+            .filter(\.$outcome != nil)
+            .sort(\.$startsAt, .descending)
+            .all()
+        return appts.map { dto(from: $0) }
     }
 
     // MARK: - GET /instructor/tests/range
@@ -271,6 +327,8 @@ struct TestAppointmentController: RouteCollection {
         var cancelByDate: String?
         var testTime: String?
         var ekEventID: String?
+        var startsAt: Date?
+        var endsAt: Date?
     }
 
     func updateTest(_ req: Request) async throws -> TestAppointmentDTO {
@@ -287,6 +345,8 @@ struct TestAppointmentController: RouteCollection {
         if let v = body.cancelByDate { appt.cancelByDate = v }
         if let v = body.testTime     { appt.testTime     = v }
         if let v = body.ekEventID    { appt.ekEventID    = v }
+        if let v = body.startsAt     { appt.startsAt     = v }
+        if let v = body.endsAt       { appt.endsAt       = v }
         try await appt.save(on: req.db)
         return dto(from: appt)
     }
@@ -295,8 +355,10 @@ struct TestAppointmentController: RouteCollection {
 
     struct AddResultInput: Content {
         var examiner: String
-        var outcome: String    // "pass" | "fail"
-        var faults: [String]?
+        var outcome: String          // "pass" | "fail"
+        var attemptNumber: Int?
+        var etpa: Bool?
+        var faultEntries: [DVSAFaultEntry]?
     }
 
     func addResult(_ req: Request) async throws -> TestAppointmentDTO {
@@ -309,7 +371,12 @@ struct TestAppointmentController: RouteCollection {
         let body = try req.content.decode(AddResultInput.self)
         appt.examiner = body.examiner
         appt.outcome  = body.outcome
-        appt.faults   = body.faults.flatMap { encodeFaults($0) }
+        let sheet = DVSAFaultSheet(
+            attemptNumber: body.attemptNumber,
+            etpa: body.etpa ?? false,
+            entries: body.faultEntries ?? []
+        )
+        appt.faults = encodeFaultSheet(sheet)
         try await appt.save(on: req.db)
         return dto(from: appt)
     }
@@ -391,6 +458,54 @@ struct TestAppointmentController: RouteCollection {
         df.timeZone = TimeZone(secondsFromGMT: 0)
         let cancelByStr = df.string(from: cancelDate)
 
+        // ── Auto-reject rules ────────────────────────────────────────────
+        var autoRejectionReason: String? = nil
+
+        // Load the instructor's settings (first user with role "instructor")
+        if let instructor = try await User.query(on: req.db).filter(\.$role == "instructor").first() {
+
+            // Rule 1 — minimum weeks notice
+            if instructor.testMinWeeksEnabled {
+                let minSeconds = Double(instructor.testMinWeeks) * 7 * 24 * 3600
+                let gap = body.testDate.timeIntervalSinceNow
+                if gap < minSeconds {
+                    autoRejectionReason = "This test date is less than \(instructor.testMinWeeks) week\(instructor.testMinWeeks == 1 ? "" : "s") away. Please book further in advance."
+                }
+            }
+
+            // Rule 2 — clash detection (only if not already rejected)
+            if autoRejectionReason == nil && instructor.testAutoRejectClash {
+                // Check lessons (MSM or personal) — exclude "available" marker slots
+                let clashingLesson = try await Lesson.query(on: req.db)
+                    .filter(\.$calendarName != "MSM Available")
+                    .filter(\.$startsAt < slotEnd)
+                    .filter(\.$endsAt   > slotStart)
+                    .first()
+
+                if clashingLesson != nil {
+                    let label = clashingLesson?.calendarName == "Personal" ? "a personal appointment" : "a scheduled lesson"
+                    autoRejectionReason = "This time slot clashes with \(label) in the instructor's calendar."
+                }
+
+                // Check other test appointments (non-cancelled, non-rejected)
+                if autoRejectionReason == nil {
+                    let clashingTest = try await TestAppointment.query(on: req.db)
+                        .filter(\.$state  != "cancelled")
+                        .filter(\.$status != "rejected")
+                        .filter(\.$status != "auto_rejected")
+                        .filter(\.$startsAt < slotEnd)
+                        .filter(\.$endsAt   > slotStart)
+                        .first()
+
+                    if clashingTest != nil {
+                        autoRejectionReason = "This time slot clashes with another test already in the calendar."
+                    }
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────
+
+        let finalStatus = autoRejectionReason != nil ? "auto_rejected" : "pending"
         let appt = TestAppointment(
             userID: studentID,
             studentName: student.displayName ?? student.username,
@@ -401,13 +516,13 @@ struct TestAppointmentController: RouteCollection {
             cancelByDate: cancelByStr,
             startsAt: slotStart,
             endsAt: slotEnd,
-            state: "scheduled",
-            status: "pending",
+            state: finalStatus == "auto_rejected" ? "cancelled" : "scheduled",
+            status: finalStatus,
             submittedBy: "student"
         )
         try await appt.save(on: req.db)
-        req.application.broadcastTestUpdated(studentID: studentID, status: "pending", to: .instructors)
-        return studentDTO(from: appt)
+        req.application.broadcastTestUpdated(studentID: studentID, status: finalStatus, to: .instructors)
+        return studentDTO(from: appt, rejectionReason: autoRejectionReason)
     }
 
     // MARK: - GET /student/tests
@@ -510,7 +625,7 @@ struct TestAppointmentController: RouteCollection {
 
     // MARK: - Private helpers
 
-    private func studentDTO(from appt: TestAppointment) -> StudentTestDTO {
+    private func studentDTO(from appt: TestAppointment, rejectionReason: String? = nil) -> StudentTestDTO {
         StudentTestDTO(
             id: appt.id,
             testTime: appt.testTime,
@@ -525,7 +640,8 @@ struct TestAppointmentController: RouteCollection {
             submittedBy: appt.submittedBy,
             examiner: appt.examiner,
             outcome: appt.outcome,
-            faults: decodeFaults(appt.faults)
+            faults: decodeLegacyFaults(appt.faults),
+            rejectionReason: rejectionReason
         )
     }
 }

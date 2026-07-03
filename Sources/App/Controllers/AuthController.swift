@@ -7,6 +7,8 @@ struct AuthController: RouteCollection {
         auth.post("register", use: register)
         auth.post("login", use: login)
         auth.post("logout", use: logout)
+        auth.post("forgot-password", use: forgotPassword)
+        auth.post("reset-password", use: resetPassword)
     }
 
     // MARK: - DTOs
@@ -16,41 +18,84 @@ struct AuthController: RouteCollection {
     }
 
     struct RegisterRequest: Content {
-        let username: String
+        let email: String
         let password: String
-        let firstName: String?
-        let lastName: String?
+        let firstName: String
+        let lastName: String
     }
 
     struct LoginResponse: Content {
         let token: String
     }
 
+    struct ForgotPasswordRequest: Content {
+        let email: String
+    }
+
+    struct ResetPasswordRequest: Content {
+        let email: String
+        let code: String
+        let newPassword: String
+    }
+
     // MARK: - Handlers
 
     /// POST /auth/register
-    /// Creates a new user if the username is not taken.
-    func register(_ req: Request) async throws -> HTTPStatus {
+    /// Self-registration for new students. Creates User + StudentProfile and returns a session
+    /// token so the student is logged in immediately after signing up.
+    func register(_ req: Request) async throws -> LoginResponse {
         let input = try req.content.decode(RegisterRequest.self)
 
-        // Ensure username uniqueness
-        if let _ = try await User.query(on: req.db)
-            .filter(\.$username == input.username)
-            .first() {
-            throw Abort(.conflict, reason: "Username already exists.")
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !email.isEmpty, email.contains("@") else {
+            throw Abort(.unprocessableEntity, reason: "Please enter a valid email address.")
+        }
+        guard input.firstName.trimmingCharacters(in: .whitespaces).isEmpty == false else {
+            throw Abort(.unprocessableEntity, reason: "First name is required.")
+        }
+        guard input.password.count >= 8 else {
+            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
         }
 
-        // Create user with hashed password
+        // Email must be unique across both User (username) and StudentProfile.
+        if let _ = try await User.query(on: req.db)
+            .filter(\.$username == email)
+            .first() {
+            throw Abort(.conflict, reason: "An account with this email already exists.")
+        }
+        if let _ = try await StudentProfile.query(on: req.db)
+            .filter(\.$email == email)
+            .first() {
+            throw Abort(.conflict, reason: "An account with this email already exists.")
+        }
+
         let hash = try Bcrypt.hash(input.password)
         let user = User(
-            username: input.username,
+            username: email,
             passwordHash: hash,
-            firstName: input.firstName,
-            lastName: input.lastName
+            firstName: input.firstName.trimmingCharacters(in: .whitespaces),
+            lastName: input.lastName.trimmingCharacters(in: .whitespaces).isEmpty
+                ? nil
+                : input.lastName.trimmingCharacters(in: .whitespaces)
         )
         try await user.save(on: req.db)
+        let userID = try user.requireID()
 
-        return .created
+        let profile = StudentProfile(
+            userID: userID,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: email
+        )
+        try await profile.save(on: req.db)
+
+        let (raw, token) = try SessionToken.generate(for: user, ttl: 60 * 60 * 24 * 30)
+        try await token.save(on: req.db)
+        req.session.data["userID"] = userID.uuidString
+
+        req.logger.notice("[Auth] New student registered: '\(email)'")
+        return .init(token: raw)
     }
 
     /// POST /auth/login
@@ -58,17 +103,28 @@ struct AuthController: RouteCollection {
     func login(_ req: Request) async throws -> LoginResponse {
         let input = try req.content.decode(Credentials.self)
 
+        // Brute-force guard — check before hitting the DB so enumeration is also rate-limited.
+        if let reason = await LoginRateLimiter.shared.check(username: input.username) {
+            throw Abort(.tooManyRequests, reason: reason)
+        }
+
         guard let user = try await User.query(on: req.db)
             .filter(\.$username == input.username)
             .first() else {
+            await LoginRateLimiter.shared.recordFailure(username: input.username)
             throw Abort(.unauthorized)
         }
 
         let ok = try Bcrypt.verify(input.password, created: user.passwordHash)
-        guard ok else { throw Abort(.unauthorized) }
+        guard ok else {
+            await LoginRateLimiter.shared.recordFailure(username: input.username)
+            throw Abort(.unauthorized)
+        }
 
         // Issue opaque API token (unchanged behaviour if the project already uses tokens)
-        let (raw, model) = try SessionToken.generate(for: user, ttl: 60 * 60) // 1 hour
+        await LoginRateLimiter.shared.recordSuccess(username: input.username)
+
+        let (raw, model) = try SessionToken.generate(for: user, ttl: 60 * 60 * 24 * 30) // 30 days
         try await model.save(on: req.db)
 
         // ALSO create a server-side session so WebSocket & cookie-protected routes work
@@ -83,5 +139,104 @@ struct AuthController: RouteCollection {
     func logout(_ req: Request) async throws -> HTTPStatus {
         req.session.destroy()
         return .noContent
+    }
+
+    /// POST /auth/forgot-password
+    /// Generates a 6-digit OTP for the account associated with the given email and
+    /// sends it via SendGrid. Always returns 200 to prevent email enumeration.
+    func forgotPassword(_ req: Request) async throws -> HTTPStatus {
+        let input = try req.content.decode(ForgotPasswordRequest.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Silently succeed if the email isn't found — avoids account enumeration.
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$email == email)
+            .with(\.$user)
+            .first()
+        else {
+            req.logger.info("[Auth] Forgot-password requested for unknown email — ignoring.")
+            return .ok
+        }
+
+        let user = profile.user
+        let userID = try user.requireID()
+
+        // Invalidate any existing unused tokens for this user.
+        try await PasswordResetToken.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$used == false)
+            .delete()
+
+        // Generate and hash a 6-digit OTP.
+        let code = String(format: "%06d", Int.random(in: 0..<1_000_000))
+        let hash = try Bcrypt.hash(code)
+        let token = PasswordResetToken(
+            userID: userID,
+            codeHash: hash,
+            expiresAt: Date().addingTimeInterval(15 * 60)
+        )
+        try await token.save(on: req.db)
+
+        // Send via SendGrid — best-effort; don't fail the request if email is unconfigured.
+        if let sg = SendGridService(req: req) {
+            try await sg.sendPasswordReset(to: email, firstName: profile.firstName, code: code)
+        }
+
+        return .ok
+    }
+
+    /// POST /auth/reset-password
+    /// Verifies the OTP and updates the user's password.
+    func resetPassword(_ req: Request) async throws -> HTTPStatus {
+        let input = try req.content.decode(ResetPasswordRequest.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard input.newPassword.count >= 8 else {
+            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
+        }
+
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$email == email)
+            .with(\.$user)
+            .first()
+        else {
+            throw Abort(.unprocessableEntity, reason: "Invalid or expired code.")
+        }
+
+        let user = profile.user
+        let userID = try user.requireID()
+
+        // Find the most recent valid token for this user.
+        guard let token = try await PasswordResetToken.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$used == false)
+            .sort(\.$createdAt, .descending)
+            .first()
+        else {
+            throw Abort(.unprocessableEntity, reason: "Invalid or expired code.")
+        }
+
+        guard !token.isExpired else {
+            throw Abort(.unprocessableEntity, reason: "This code has expired. Please request a new one.")
+        }
+
+        guard try Bcrypt.verify(input.code, created: token.codeHash) else {
+            throw Abort(.unprocessableEntity, reason: "Invalid or expired code.")
+        }
+
+        // Mark token used, update password.
+        token.used = true
+        try await token.save(on: req.db)
+
+        user.passwordHash = try Bcrypt.hash(input.newPassword)
+        try await user.save(on: req.db)
+
+        // Invalidate all existing session tokens so old sessions are booted.
+        try await SessionToken.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .delete()
+
+        req.logger.notice("[Auth] Password reset successful for user '\(user.username)'.")
+        return .ok
     }
 }

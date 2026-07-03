@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import Foundation
 
 /// Handles creation and querying of confirmed lessons.
 /// A "confirmed lesson" is a lesson + booking that the instructor has explicitly
@@ -15,9 +16,7 @@ struct ConfirmedLessonController: RouteCollection {
 
     func boot(routes: RoutesBuilder) throws {
 
-        // DEV: no auth middleware for now to avoid 401s while wiring up.
-        // Later, you can re-add SessionTokenAuthenticator() and User.guardMiddleware().
-        let instructor = routes.grouped("instructor")
+        let instructor = routes.grouped(SessionTokenAuthenticator(), User.guardMiddleware()).grouped("instructor")
 
         // POST /instructor/bookings/:bookingID/confirm
         instructor.post("bookings", ":bookingID", "confirm", use: confirmBooking)
@@ -72,6 +71,15 @@ struct ConfirmedLessonController: RouteCollection {
 
             try await existing.save(on: req.db)
 
+            if desiredStatus == .attended || desiredStatus == .noShow {
+                try await autoChargeIfCovered(
+                    bookingID: bookingID,
+                    lessonID: lessonID,
+                    userID: userID,
+                    on: req.db
+                )
+            }
+
             // Note: confirming a lesson does not broadcast booking/slot changes.
 
             return try existing.asPublic()
@@ -90,6 +98,15 @@ struct ConfirmedLessonController: RouteCollection {
         )
 
         try await confirmation.save(on: req.db)
+
+        if desiredStatus == .attended || desiredStatus == .noShow {
+            try await autoChargeIfCovered(
+                bookingID: bookingID,
+                lessonID: lessonID,
+                userID: userID,
+                on: req.db
+            )
+        }
 
         // Note: confirming a lesson does not broadcast booking/slot changes.
 
@@ -138,5 +155,49 @@ struct ConfirmedLessonController: RouteCollection {
             .all()
 
         return try rows.map { try $0.asPublic() }
+    }
+
+    private func autoChargeIfCovered(
+        bookingID: UUID,
+        lessonID: UUID,
+        userID: UUID,
+        on db: Database
+    ) async throws {
+        guard let lessonFinance = try await LessonFinance.find(lessonID, on: db) else {
+            return
+        }
+
+        // Already charged: leave it alone.
+        if lessonFinance.chargeStatus == "charged" || lessonFinance.financeStatus == "charged" {
+            return
+        }
+
+        guard let lesson = try await Lesson.find(lessonID, on: db) else {
+            return
+        }
+
+        let amount = -lessonFinance.priceSnapshot
+
+        let ledgerEntry = LedgerEntry(
+            studentID: userID,
+            instructorID: lessonFinance.$instructor.id,
+            lessonID: lessonID,
+            type: "lesson_charge",
+            amount: amount,
+            paymentMethod: nil,
+            note: nil,
+            effectiveDate: lesson.startsAt,
+            createdByUserID: lessonFinance.$instructor.id
+        )
+
+        try await ledgerEntry.save(on: db)
+
+        lessonFinance.chargeStatus = "charged"
+        lessonFinance.financeStatus = "charged"
+        lessonFinance.coveredAt = lessonFinance.coveredAt ?? Date()
+        lessonFinance.reservedAmount = nil
+        lessonFinance.$chargedLedgerEntry.id = try ledgerEntry.requireID()
+
+        try await lessonFinance.save(on: db)
     }
 }

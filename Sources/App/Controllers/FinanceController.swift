@@ -416,6 +416,12 @@ struct FinanceController {
         }
 
         try await reevaluateCoverageForStudent(input.studentID, on: req.db)
+
+        req.application.broadcastBalanceUpdated(
+            studentID: input.studentID,
+            creditPounds: input.amount
+        )
+
         return entry
     }
 
@@ -435,12 +441,31 @@ struct FinanceController {
             guard let lessonID = lf.id,
                   let lesson = try await Lesson.find(lessonID, on: req.db),
                   lesson.startsAt < now else { continue }
+
+            let booking = try await Booking.query(on: req.db)
+                .filter(\.$lesson.$id == lessonID)
+                .filter(\.$user.$id == studentID)
+                .withDeleted()
+                .first()
+            let bookingID = try booking?.requireID()
+
+            let isAttended: Bool
+            if let bid = bookingID {
+                isAttended = try await ConfirmedLesson.query(on: req.db)
+                    .filter(\.$booking.$id == bid)
+                    .first() != nil
+            } else {
+                isAttended = false
+            }
+
             results.append(OutstandingLessonDTO(
                 lessonID: lessonID,
                 startsAt: lesson.startsAt,
                 endsAt: lesson.endsAt,
                 amountDue: lf.priceSnapshot,
-                financeStatus: lf.financeStatus
+                financeStatus: lf.financeStatus,
+                bookingID: bookingID,
+                isAttended: isAttended
             ))
         }
         return results.sorted { $0.startsAt < $1.startsAt }
@@ -452,6 +477,8 @@ struct FinanceController {
         let endsAt: Date
         let amountDue: Decimal
         let financeStatus: String
+        let bookingID: UUID?
+        let isAttended: Bool
     }
 
     func addExpense(req: Request) async throws -> LedgerEntry {
@@ -567,6 +594,7 @@ struct FinanceController {
 
         let entries = try await LedgerEntry.query(on: req.db)
             .filter(\.$student.$id == studentID)
+            .with(\.$lesson)
             .sort(\.$effectiveDate, .descending)
             .all()
 
@@ -575,6 +603,7 @@ struct FinanceController {
             return StudentTransactionView(
                 id: id,
                 lessonID: entry.$lesson.id,
+                lessonStartsAt: entry.lesson?.startsAt,
                 type: entry.type,
                 amount: entry.amount,
                 paymentMethod: entry.paymentMethod,

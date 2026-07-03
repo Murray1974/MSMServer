@@ -434,6 +434,21 @@ struct BookingsController: RouteCollection {
         // Late charges are only appropriate for student-initiated cancellations (StudentBookingsController).
         // Using the charge-free path prevents accidental charges if the calendar app calls this
         // endpoint on a stale event that has already been rebooked by a different student.
+
+        // Warn if any active booking was created very recently — this can indicate a race
+        // condition where the slot was just filled by a recovery booking (Tyler Strong case).
+        // No action taken; the cancel proceeds charge-free, but the log aids diagnosis.
+        let activeBookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        for b in activeBookings {
+            if let createdAt = b.createdAt, Date().timeIntervalSince(createdAt) < 300 {
+                req.logger.warning("[cancel-bookings] ⚠️  Cancelling a booking created only \(Int(Date().timeIntervalSince(createdAt)))s ago — lessonID=\(lessonID) bookingID=\((try? b.requireID())?.uuidString ?? "?") studentID=\(b.$user.id) — proceeding charge-free")
+            }
+        }
+
         let cancelledStudentIDs = try await req.cancelActiveBookings(for: lesson)
 
         if !cancelledStudentIDs.isEmpty {
@@ -578,123 +593,9 @@ extension Request {
         return cancelledStudentIDs
     }
 
-    /// Like `cancelActiveBookings` but also applies late-cancellation charges when
-    /// the lesson starts within 48 hours — used for instructor-initiated cancellations
-    /// made on behalf of a student. Returns the cancelled student IDs so the caller
-    /// can run `reevaluateCoverageForStudent` after resetting finance records.
-    func cancelActiveBookingsApplyingLateCharges(for lesson: Lesson) async throws -> [UUID] {
-        let lessonID = try lesson.requireID()
-        let hoursUntilLesson = lesson.startsAt.timeIntervalSinceNow / 3600
-        let isLate = hoursUntilLesson >= 0 && hoursUntilLesson < 48
-
-        let bookings = try await Booking.query(on: self.db)
-            .filter(\.$lesson.$id == lessonID)
-            .filter(\.$deletedAt == nil)
-            .all()
-
-        guard !bookings.isEmpty else {
-            if lesson.state != "available" || lesson.calendarName != "MSM Available" {
-                lesson.state = "available"
-                lesson.calendarName = "MSM Available"
-                try await lesson.save(on: self.db)
-            }
-            return []
-        }
-
-        // Load finance and resolve instructor ID once — shared across all bookings.
-        let lessonFinance = try await LessonFinance.find(lessonID, on: self.db)
-        let instructorID: UUID?
-        if let iid = lessonFinance?.$instructor.id {
-            instructorID = iid
-        } else {
-            instructorID = try? await User.query(on: self.db)
-                .filter(\.$role == "instructor")
-                .first()?
-                .requireID()
-        }
-
-        var cancelledStudentIDs: [UUID] = []
-        var cancelledStudents: [UUID: User] = [:]
-        cancelledStudentIDs.reserveCapacity(bookings.count)
-
-        for booking in bookings {
-            let studentID = booking.$user.id
-            cancelledStudentIDs.append(studentID)
-            if let student = try? await User.find(studentID, on: self.db) {
-                cancelledStudents[studentID] = student
-            }
-
-            booking.cancellationSource = "instructor_cancel"
-            if isLate {
-                booking.cancellationType = "late_cancellation"
-                try await booking.save(on: self.db)
-
-                if let finance = lessonFinance {
-                    finance.fullChargeApplied = true
-                    try await finance.save(on: self.db)
-                }
-
-                let chargeAmount: Decimal
-                if let snapshot = lessonFinance?.priceSnapshot {
-                    chargeAmount = snapshot
-                } else {
-                    let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                    chargeAmount = (Decimal(45) * Decimal(mins)) / Decimal(60)
-                }
-
-                if let iid = instructorID {
-                    let chargeEntry = LedgerEntry(
-                        studentID: studentID,
-                        instructorID: iid,
-                        lessonID: lessonID,
-                        type: "late_cancellation_charge",
-                        amount: -chargeAmount,
-                        note: "Late cancellation — full charge applies",
-                        effectiveDate: Date(),
-                        createdByUserID: iid
-                    )
-                    try await chargeEntry.save(on: self.db)
-
-                    if let student = try? await User.find(studentID, on: self.db),
-                       let fcmToken = student.fcmToken,
-                       let fcm = FCMNotificationService(req: self) {
-                        try? await fcm.send(
-                            to: fcmToken,
-                            title: "Lesson Update",
-                            body: "A late cancellation fee has been applied to your account per our 48h policy."
-                        )
-                    }
-                }
-            } else {
-                try await booking.save(on: self.db)
-            }
-
-            try await booking.delete(on: self.db)
-
-            let evt = BookingEvent(
-                type: isLate ? "instructor.late_cancelled" : "instructor.cancelled",
-                userID: studentID,
-                lessonID: lessonID,
-                bookingID: try booking.requireID()
-            )
-            try await evt.save(on: self.db)
-        }
-
-        // Free the lesson slot.
-        if lesson.state != "available" || lesson.calendarName != "MSM Available" {
-            lesson.state = "available"
-            lesson.calendarName = "MSM Available"
-            try await lesson.save(on: self.db)
-        }
-
-        for sid in cancelledStudentIDs {
-            try self.broadcastCancelled(for: lesson, student: cancelledStudents[sid], studentID: sid, cancellationSource: "instructor_cancel")
-            self.broadcastBookingCleared(for: lesson, studentID: sid)
-        }
-        self.broadcastBookingCleared(for: lesson)
-
-        return cancelledStudentIDs
-    }
+    // INVARIANT: instructor-initiated cancellations (cancel-bookings endpoint) must NEVER
+    // apply late-cancellation charges. Late charges are exclusively for student-initiated
+    // cancellations (StudentBookingsController). Do not add a charge-applying path here.
 
     private func sendBookingPayload(_ payload: [String: Any], studentID: UUID?) {
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),

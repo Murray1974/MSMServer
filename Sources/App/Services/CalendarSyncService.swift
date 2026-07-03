@@ -9,7 +9,7 @@ struct CalendarSlot: Hashable {
 
 private func isUnassignedCalendarName(_ name: String) -> Bool {
     let t = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return t == "untitled" || t.contains("unassigned")
+    return t == "untitled" || t == "msm available" || t.contains("unassigned")
 }
 
 /// Infer a calendar name from the ICS event summary/title.
@@ -18,12 +18,12 @@ private func inferredCalendarName(from summary: String) -> String {
     let s = summary.trimmingCharacters(in: .whitespacesAndNewlines)
     let l = s.lowercased()
 
-    if s.isEmpty { return "Untitled" }
-    if l.contains("unassigned") || l.contains("available") { return "Untitled" }
+    if s.isEmpty { return "MSM Available" }
+    if l.contains("unassigned") || l.contains("available") { return "MSM Available" }
     if l.contains("personal") { return "Personal" }
 
     // Default: treat as work/booked calendar
-    return "Mike work"
+    return "MSM Lessons"
 }
 
 final class CalendarSyncService {

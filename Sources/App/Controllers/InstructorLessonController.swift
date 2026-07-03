@@ -30,6 +30,10 @@ struct InstructorLessonController: RouteCollection {
 
         // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
         instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
+
+        // Full lesson history for a student (past + upcoming) with finance status
+        // Uses :userID to match TestAppointmentController's param name at this path position
+        instructor.get("students", ":userID", "lesson-history", use: studentLessons)
     }
 
     struct InstructorLessonRow: Content {
@@ -535,5 +539,72 @@ struct InstructorLessonController: RouteCollection {
         req.logger.info("instructor.createBookingForStudent: created bookingID=\(bookingID) for studentID=\(studentID) lessonID=\(lesson.id?.uuidString ?? "?")")
 
         return InstructorCreateBookingResponse(bookingID: bookingID)
+    }
+
+    // MARK: - Student lesson history
+
+    struct StudentLessonRow: Content {
+        let lessonID: UUID
+        let bookingID: UUID
+        let startsAt: Date
+        let endsAt: Date
+        let durationMinutes: Int
+        let financeStatus: String?   // not_covered | covered | charge_pending | charged | nil
+        let chargeStatus: String?    // not_charged | charged | nil
+        let isConfirmed: Bool
+        let attendanceStatus: String? // attended | no_show | nil
+        let cancellationType: String? // late_cancellation | nil (soft-deleted bookings only)
+        let deletedAt: Date?
+    }
+
+    func studentLessons(_ req: Request) async throws -> [StudentLessonRow] {
+        guard let studentID = req.parameters.get("userID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing userID")
+        }
+
+        let bookings = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$user.$id == studentID)
+            .with(\.$lesson)
+            .all()
+
+        let lessonIDs = bookings.compactMap { $0.$lesson.id }
+        let finances = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ lessonIDs)
+            .all()
+        let financeByLesson: [UUID: LessonFinance] = finances.reduce(into: [:]) { dict, f in
+            if let id = f.id { dict[id] = f }
+        }
+
+        let bookingIDs = bookings.compactMap { $0.id }
+        let confirmed = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$booking.$id ~~ bookingIDs)
+            .all()
+        let confirmedByBooking: [UUID: ConfirmedLesson] = confirmed.reduce(into: [:]) { dict, c in
+            dict[c.$booking.id] = c
+        }
+
+        return bookings.compactMap { booking -> StudentLessonRow? in
+            guard let bookingID = booking.id else { return nil }
+            let lesson = booking.lesson
+            guard let lessonID = lesson.id else { return nil }
+            let finance = financeByLesson[lessonID]
+            let conf = confirmedByBooking[bookingID]
+            let durationMins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            return StudentLessonRow(
+                lessonID: lessonID,
+                bookingID: bookingID,
+                startsAt: lesson.startsAt,
+                endsAt: lesson.endsAt,
+                durationMinutes: durationMins,
+                financeStatus: finance?.financeStatus,
+                chargeStatus: finance?.chargeStatus,
+                isConfirmed: conf != nil,
+                attendanceStatus: conf?.status,
+                cancellationType: booking.cancellationType,
+                deletedAt: booking.deletedAt
+            )
+        }
+        .sorted { $0.startsAt > $1.startsAt }
     }
 }

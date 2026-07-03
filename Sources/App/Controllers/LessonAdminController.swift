@@ -67,7 +67,7 @@ struct LessonAdminController: RouteCollection {
             startsAt: input.startsAt,
             endsAt: input.endsAt,
             capacity: input.capacity ?? 1,   // 👈 DEFAULT so build doesn’t fail
-            calendarName: input.calendarName ?? "Untitled"
+            calendarName: input.calendarName ?? "MSM Available"
         )
 
         try await lesson.save(on: req.db)
@@ -106,7 +106,7 @@ struct LessonAdminController: RouteCollection {
             startsAt: input.startsAt,
             endsAt: input.endsAt,
             capacity: input.capacity ?? 1,
-            calendarName: input.calendarName ?? "Untitled"
+            calendarName: input.calendarName ?? "MSM Available"
         )
 
         try await lesson.save(on: req.db)

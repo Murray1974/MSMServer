@@ -136,8 +136,8 @@ extension Application {
             // Schedule fanout on an EventLoop to keep ordering consistent and avoid
             // doing extra work on whatever thread invoked `broadcast`.
             app.eventLoopGroup.next().execute {
-                app.msmInstructorHub.broadcast(text)
-                app.msmStudentHub.broadcast(text)
+                app.instructorHub.broadcast(text)
+                app.studentHub.broadcast(text)
                 app.logger.debug("Broadcasted(all): \(text)")
             }
         }

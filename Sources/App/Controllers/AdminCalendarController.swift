@@ -2,7 +2,7 @@ import Vapor
 
 struct AdminCalendarController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let admin = routes.grouped("admin", "calendar")
+        let admin = routes.grouped(SessionTokenAuthenticator(), User.guardMiddleware()).grouped("admin", "calendar")
         admin.get("resync", use: resync) // GET /admin/calendar/resync
     }
 

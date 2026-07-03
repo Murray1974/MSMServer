@@ -15,6 +15,10 @@ let package = Package(
     .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
     // Postgres driver
     .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.9.0"),
+    // HMAC-SHA256 for Stripe webhook signature verification (cross-platform)
+    .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+    // RS256 JWT signing for FCM HTTP v1 access-token exchange
+    .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
   ],
   targets: [
     .target(
@@ -23,6 +27,8 @@ let package = Package(
         .product(name: "Vapor", package: "vapor"),
         .product(name: "Fluent", package: "fluent"),
         .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+        .product(name: "Crypto", package: "swift-crypto"),
+        .product(name: "JWTKit", package: "jwt-kit"),
       ],
       path: "Sources/App"
     ),

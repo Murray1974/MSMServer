@@ -73,7 +73,14 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateTestAppointment())
     app.migrations.add(AddTestRequestFields())
     app.migrations.add(AddCancellationSourceToBooking())
+    app.migrations.add(AddTestAutoRulesSettings())
     app.migrations.add(CreateTestCentre())
+    app.migrations.add(AddAddressToTestCentre())
+    app.migrations.add(AddIsPrimaryToTestCentre())
+    app.migrations.add(SeedDVSACentres())
+    app.migrations.add(SeedDVSACentresScotlandWales())
+    app.migrations.add(SeedDVSACentresSupplementary())
+    app.migrations.add(CreatePasswordResetToken())
 
     try app.autoMigrate().wait()
 
@@ -102,6 +109,13 @@ public func configure(_ app: Application) throws {
         app.logger.notice("[Stripe] Webhook secret loaded.")
     } else {
         app.logger.warning("[Stripe] STRIPE_WEBHOOK_SECRET is not set — POST /stripe/webhook will return 500.")
+    }
+
+    if let sgKey = Environment.get("SENDGRID_API_KEY"), !sgKey.isEmpty {
+        app.sendGridApiKey = sgKey
+        app.logger.notice("[SendGrid] API key loaded.")
+    } else {
+        app.logger.warning("[SendGrid] SENDGRID_API_KEY is not set — password reset emails will not be sent.")
     }
 
     // FCM — load from .secrets/firebase-service-account.json (file takes priority)

@@ -104,6 +104,20 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "medical_conditions")
     var medicalConditions: String?
 
+    // MARK: - Documents
+
+    @Field(key: "theory_test_passed")
+    var theoryTestPassed: Bool
+
+    @OptionalField(key: "theory_test_date")
+    var theoryTestDate: Date?
+
+    @OptionalField(key: "licence_photo_path")
+    var licencePhotoPath: String?
+
+    @Field(key: "licence_verified")
+    var licenceVerified: Bool
+
     // MARK: - Timestamps
 
     @Timestamp(key: "created_at", on: .create)
@@ -140,7 +154,11 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         defaultLessonLengthMinutes: Int = 120,
         hourlyRatePence: Int = 4500,
         eyesightTestPassed: Bool = false,
-        medicalConditions: String? = nil
+        medicalConditions: String? = nil,
+        theoryTestPassed: Bool = false,
+        theoryTestDate: Date? = nil,
+        licencePhotoPath: String? = nil,
+        licenceVerified: Bool = false
     ) {
         self.id = id
         self.$user.id = userID
@@ -165,5 +183,9 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.hourlyRatePence = hourlyRatePence
         self.eyesightTestPassed = eyesightTestPassed
         self.medicalConditions = medicalConditions
+        self.theoryTestPassed = theoryTestPassed
+        self.theoryTestDate = theoryTestDate
+        self.licencePhotoPath = licencePhotoPath
+        self.licenceVerified = licenceVerified
     }
 }

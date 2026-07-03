@@ -16,6 +16,10 @@ final class WebSocketHub: @unchecked Sendable {
     func broadcast(_ text: String) {
         lock.withLock { clients.forEach { $0.send(text) } }
     }
+
+    var hasClients: Bool {
+        lock.withLock { clients.contains { !$0.isClosed } }
+    }
 }
 
 // MARK: - Storage key & Application accessor
@@ -32,12 +36,16 @@ extension Application {
         set { storage[InstructorHubKey.self] = newValue }
     }
 
+    private struct StudentHubKey: StorageKey { typealias Value = WebSocketHub }
+
     // Student-facing hub (Phase 2): mirrors instructor hub but used for student clients (/ws/student)
     var studentHub: WebSocketHub {
-        struct StudentHubKey: StorageKey { typealias Value = WebSocketHub }
-        if let hub = storage[StudentHubKey.self] { return hub }
-        let hub = WebSocketHub()
-        storage[StudentHubKey.self] = hub
-        return hub
+        get {
+            if let hub = storage[StudentHubKey.self] { return hub }
+            let hub = WebSocketHub()
+            storage[StudentHubKey.self] = hub
+            return hub
+        }
+        set { storage[StudentHubKey.self] = newValue }
     }
 }

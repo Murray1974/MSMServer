@@ -652,20 +652,6 @@ public func routes(_ app: Application) throws {
         }
     }
 
-    // MARK: - Student: mark booking as paid
-    app.post("student", "bookings", ":bookingID", "payment") { req async throws -> HTTPStatus in
-        struct PayIn: Content { let method: String }
-        _ = try req.content.decode(PayIn.self)
-        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "bookingID missing or invalid")
-        }
-
-        // TODO: Replace this placeholder with real DB update logic.
-        req.logger.info("(TEMP) Mark booking paid: \(bookingID)")
-
-        return .ok
-    }
-
     let studentProtected = app.grouped(SessionTokenAuthenticator(), BearerTokenAuthenticator(), User.guardMiddleware()).grouped("student")
 
     // GET /student/balance — student's own balance, late-cancel fees, and transaction history
@@ -674,6 +660,7 @@ public func routes(_ app: Application) throws {
 
         let entries = try await LedgerEntry.query(on: req.db)
             .filter(\.$student.$id == userID)
+            .with(\.$lesson)
             .sort(\.$effectiveDate, .descending)
             .all()
 
@@ -688,6 +675,7 @@ public func routes(_ app: Application) throws {
             return StudentTransactionView(
                 id: id,
                 lessonID: entry.$lesson.id,
+                lessonStartsAt: entry.lesson?.startsAt,
                 type: entry.type,
                 amount: entry.amount,
                 paymentMethod: entry.paymentMethod,

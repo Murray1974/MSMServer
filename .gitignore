@@ -8,3 +8,15 @@ xcuserdata/
 .DS_Store
 # If you ever generate an Xcode project
 *.xcodeproj
+# Firebase / secrets — never commit credentials
+.secrets/
+# Environment variables contain live API keys and DB credentials — never commit
+.env
+# Generated / local data files
+*.sqlite
+*.sqlite3
+entities.json
+file-map.txt
+mempalace.yaml
+# Temporary directories
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*/

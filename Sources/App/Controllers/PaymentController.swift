@@ -16,17 +16,55 @@ struct PaymentController: RouteCollection {
     /// Response: { "clientSecret": "pi_xxx_secret_xxx" }
     func createPaymentIntent(_ req: Request) async throws -> CreatePaymentIntentResponse {
         let student   = try req.auth.require(User.self)
-        let studentID = try student.requireID().uuidString
+        let studentID = try student.requireID()
 
         let input  = try req.content.decode(CreatePaymentIntentRequest.self)
         let stripe = try StripeService(request: req)
 
+        var amountPence: Int
+        var metadata: [String: String] = ["studentID": studentID.uuidString]
+
+        if let bookingID = input.bookingID {
+            // Verify the booking belongs to this student and is active
+            guard let booking = try await Booking.query(on: req.db)
+                .filter(\.$id == bookingID)
+                .filter(\.$user.$id == studentID)
+                .filter(\.$deletedAt == .null)
+                .first()
+            else {
+                throw Abort(.notFound, reason: "Booking not found")
+            }
+
+            // Resolve price: prefer LessonFinance snapshot, fall back to duration estimate
+            let lessonID = booking.$lesson.id
+            let price: Decimal
+            if let snapshot = try await LessonFinance.find(lessonID, on: req.db)?.priceSnapshot {
+                price = snapshot
+            } else {
+                let lesson = try await booking.$lesson.get(on: req.db)
+                let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+                price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+            }
+
+            var pence = price * 100
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &pence, 0, .plain)
+            amountPence = max(50, NSDecimalNumber(decimal: rounded).intValue)
+
+            metadata["bookingID"] = bookingID.uuidString
+
+        } else if let explicit = input.amount {
+            amountPence = explicit
+        } else {
+            throw Abort(.badRequest, reason: "Provide bookingID (per-lesson) or amount (top-up).")
+        }
+
         let secret = try await stripe.createPaymentIntent(
-            amount: input.amount,
-            metadata: ["studentID": studentID]
+            amount: amountPence,
+            metadata: metadata
         )
 
-        return CreatePaymentIntentResponse(clientSecret: secret)
+        return CreatePaymentIntentResponse(clientSecret: secret, amountPence: amountPence)
     }
 
     // MARK: - POST /stripe/webhook
@@ -147,17 +185,26 @@ struct PaymentController: RouteCollection {
 
         req.logger.notice("[Stripe] ✅ Payment succeeded for student '\(studentName)' — £\(creditPounds) credited. PI: \(piID)")
 
-        // ── 8. Re-evaluate lesson coverage now that the student's balance has increased ──
+        // ── 8. Mark the booking as paid if this was a per-lesson payment ─────
+        if let bookingIDStr = pi.metadata["bookingID"],
+           let bookingID = UUID(uuidString: bookingIDStr),
+           let booking = try? await Booking.find(bookingID, on: req.db) {
+            booking.paymentStatus = "paid"
+            try? await booking.save(on: req.db)
+            req.logger.info("[Stripe] Booking \(bookingID) marked paid.")
+        }
+
+        // ── 10. Re-evaluate lesson coverage now that the student's balance has increased ──
         do {
             try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
         } catch {
             req.logger.error("reevaluateCoverage failed: \(error)")
         }
 
-        // ── 9. Real-time balance update ───────────────────────────────────────
+        // ── 11. Real-time balance update ─────────────────────────────────────
         req.application.broadcastBalanceUpdated(studentID: studentID, creditPounds: creditPounds)
 
-        // ── 9. FCM push notification (best-effort) ────────────────────────────
+        // ── 12. FCM push notification (best-effort) ──────────────────────────
         if let fcmToken = try await User.find(studentID, on: req.db)?.fcmToken,
            let fcm = FCMNotificationService(req: req) {
             try? await fcm.send(

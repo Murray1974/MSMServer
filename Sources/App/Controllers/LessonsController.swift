@@ -14,6 +14,8 @@ struct LessonsController: RouteCollection {
         // Protected actions (requires valid bearer token)
         let protected = lessons.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
         protected.post(":id", "book", use: book)
+        protected.get("capacity", "remaining-this-week", use: remainingCapacityThisWeek)
+        protected.get("slot", "availability", use: slotAvailability)
     }
 
     struct PageQuery: Content {
@@ -164,6 +166,133 @@ struct LessonsController: RouteCollection {
         var total: Int
         var hasNext: Bool
         var items: [FilteredLessonRow]
+    }
+
+    struct RemainingCapacityResponse: Content {
+        var from: Date
+        var to: Date
+        var availableSlots: Int
+    }
+
+    struct SlotAvailabilityQuery: Content {
+        var weekday: Int?
+        var startHour: Int?
+        var endHour: Int?
+        var lessonID: UUID?
+    }
+
+    struct SlotAvailabilityResponse: Content {
+        var isAvailable: Bool
+    }
+    // MARK: GET /lessons/capacity/remaining-this-week
+    func remainingCapacityThisWeek(_ req: Request) async throws -> RemainingCapacityResponse {
+        _ = try req.auth.require(User.self)
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        calendar.firstWeekday = 2 // Monday
+
+        let now = Date()
+        let start = now
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
+        let end = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now
+
+        let lessons = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt >= start)
+            .filter(\.$startsAt < end)
+            .filter(\.$state == "available")
+            .sort(\.$startsAt, .ascending)
+            .all()
+
+        guard !lessons.isEmpty else {
+            return RemainingCapacityResponse(from: start, to: end, availableSlots: 0)
+        }
+
+        let ids = lessons.compactMap { $0.id }
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id ~~ ids)
+            .all()
+
+        var countByLesson: [UUID: Int] = [:]
+        for booking in bookings {
+            let lessonID = booking.$lesson.id
+            countByLesson[lessonID, default: 0] += 1
+        }
+
+        let availableSlots = lessons.reduce(0) { partial, lesson in
+            guard let lessonID = lesson.id else { return partial }
+            let booked = countByLesson[lessonID, default: 0]
+            let available = max(lesson.capacity - booked, 0)
+            return partial + available
+        }
+
+        return RemainingCapacityResponse(from: start, to: end, availableSlots: availableSlots)
+    }
+
+    // MARK: GET /lessons/slot/availability?weekday=1&startHour=16&endHour=18&lessonID=UUID
+    func slotAvailability(_ req: Request) async throws -> SlotAvailabilityResponse {
+        _ = try req.auth.require(User.self)
+        let q = try req.query.decode(SlotAvailabilityQuery.self)
+
+        // If lessonID is provided, treat that as the source of truth.
+        if let lessonID = q.lessonID {
+            guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
+                return SlotAvailabilityResponse(isAvailable: false)
+            }
+
+            let activeBookings = try await Booking.query(on: req.db)
+                .filter(\.$lesson.$id == lessonID)
+                .filter(\.$deletedAt == nil)
+                .count()
+
+            let isAvailable = lesson.state == "available" && activeBookings < lesson.capacity
+            return SlotAvailabilityResponse(isAvailable: isAvailable)
+        }
+
+        // Fallback to the older slot-pattern lookup if no specific lessonID is supplied.
+        guard let weekday = q.weekday,
+              let startHour = q.startHour,
+              let endHour = q.endHour else {
+            return SlotAvailabilityResponse(isAvailable: true)
+        }
+
+        let lessons = try await Lesson.query(on: req.db)
+            .filter(\.$state == "available")
+            .filter(\.$startsAt >= Date())
+            .all()
+
+        let cal = Calendar.current
+        let matchingLessons = lessons.filter { lesson in
+            let lessonWeekday = cal.component(.weekday, from: lesson.startsAt)
+            let lessonStartHour = cal.component(.hour, from: lesson.startsAt)
+            let lessonEndHour = cal.component(.hour, from: lesson.endsAt)
+            return lessonWeekday == weekday && lessonStartHour == startHour && lessonEndHour == endHour
+        }
+
+        guard !matchingLessons.isEmpty else {
+            return SlotAvailabilityResponse(isAvailable: false)
+        }
+
+        let ids = matchingLessons.compactMap { $0.id }
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id ~~ ids)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        var countByLesson: [UUID: Int] = [:]
+        for booking in bookings {
+            let lessonID = booking.$lesson.id
+            countByLesson[lessonID, default: 0] += 1
+        }
+
+        let anyAvailable = matchingLessons.contains { lesson in
+            guard let lessonID = lesson.id else { return false }
+            let booked = countByLesson[lessonID, default: 0]
+            return booked < lesson.capacity
+        }
+
+        return SlotAvailabilityResponse(isAvailable: anyAvailable)
     }
 
     // MARK: GET /lessons/search?from=YYYY-MM-DD&to=YYYY-MM-DD&availableOnly=true&page=1&per=10

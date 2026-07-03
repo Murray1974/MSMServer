@@ -56,6 +56,17 @@ final class Booking: Model, Content, @unchecked Sendable {
     @OptionalField(key: "cancellation_type")
     var cancellationType: String?
 
+    /// Who initiated the cancellation:
+    ///   "student_app"        — student cancelled via the student app
+    ///   "instructor_cancel"  — instructor cancelled on the student's behalf
+    ///   "instructor_personal"— instructor reclaimed the slot as personal
+    @OptionalField(key: "cancellation_source")
+    var cancellationSource: String?
+
+    /// True when this booking was moved from a different lesson via the reschedule flow.
+    @OptionalField(key: "rescheduled")
+    var rescheduled: Bool?
+
     init() { }
 
     init(

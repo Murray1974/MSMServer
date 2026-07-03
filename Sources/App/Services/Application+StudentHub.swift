@@ -5,9 +5,12 @@ private struct MSMStudentHubKey: StorageKey {
     typealias Value = WebSocketHub
 }
 
-/// Storage key for student socket map (studentID → WebSocket)
+/// Storage key for student socket map (studentID → [WebSocket])
+/// Stores a list so multiple simultaneous connections from the same student
+/// (e.g. LessonsPage + MessagesPage both open a /ws/student socket) all receive
+/// targeted deliveries without race-condition overwrites.
 private struct MSMStudentSocketMapKey: StorageKey {
-    typealias Value = [UUID: WebSocket]
+    typealias Value = [UUID: [WebSocket]]
 }
 
 extension Application {
@@ -22,8 +25,8 @@ extension Application {
         set { storage[MSMStudentHubKey.self] = newValue }
     }
 
-    /// Map of authenticated student sockets for future targeted delivery.
-    var msmStudentSockets: [UUID: WebSocket] {
+    /// Map of authenticated student sockets for targeted delivery.
+    var msmStudentSockets: [UUID: [WebSocket]] {
         get { storage[MSMStudentSocketMapKey.self] ?? [:] }
         set { storage[MSMStudentSocketMapKey.self] = newValue }
     }

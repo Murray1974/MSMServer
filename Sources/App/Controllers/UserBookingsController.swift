@@ -25,6 +25,10 @@ struct MeProfileResponse: Content {
         var hourlyRatePence: Int?
         var eyesightTestPassed: Bool?
         var medicalConditions: String?
+        var theoryTestPassed: Bool?
+        var theoryTestDate: Date?
+        var licencePhotoPath: String?
+        var licenceVerified: Bool?
     }
 
     var id: UUID
@@ -71,8 +75,6 @@ struct UserBookingsController: RouteCollection {
         // GET /me/profile
         me.get("profile", use: profile)
 
-        // POST /me/profile/seed  (temporary helper to create a test profile row)
-        me.post("profile", "seed", use: seedProfile)
 
         // PUT /me/profile  (create or update the student's profile)
         me.put("profile", use: updateProfile)
@@ -114,7 +116,11 @@ struct UserBookingsController: RouteCollection {
                 defaultLessonLengthMinutes: p.defaultLessonLengthMinutes,
                 hourlyRatePence: p.hourlyRatePence,
                 eyesightTestPassed: p.eyesightTestPassed,
-                medicalConditions: p.medicalConditions
+                medicalConditions: p.medicalConditions,
+                theoryTestPassed: p.theoryTestPassed,
+                theoryTestDate: p.theoryTestDate,
+                licencePhotoPath: p.licencePhotoPath,
+                licenceVerified: p.licenceVerified
             )
         } else {
             profilePayload = nil
@@ -265,34 +271,4 @@ struct UserBookingsController: RouteCollection {
         return try await profile(req)
     }
 
-    // MARK: POST /me/profile/seed
-    /// Temporary helper: creates a simple StudentProfile for the logged-in user
-    /// so that /me/profile returns a non-nil profile block.
-    func seedProfile(_ req: Request) async throws -> MeProfileResponse {
-        let user = try req.auth.require(User.self)
-        let id = try user.requireID()
-  
-        // If a profile already exists, just return the normal /me/profile payload.
-        if let _ = try await StudentProfile.query(on: req.db)
-            .filter(\.$user.$id == id)
-            .first()
-        {
-            return try await profile(req)
-        }
-  
-        // Create a basic starter profile for testing.
-        let newProfile = StudentProfile(
-            userID: id,
-            firstName: "Michael",
-            lastName: "Murray",
-            mobile: "07000000000",
-            email: "test@example.com",
-            defaultLessonLengthMinutes: 120,
-            hourlyRatePence: 4500,
-            eyesightTestPassed: false
-        )
-  
-        try await newProfile.save(on: req.db)
-        return try await profile(req)
-    }
 }

@@ -51,8 +51,8 @@ final class SessionToken: Model {
     /// Generates a new session token for the specified user.
     /// Returns a tuple containing (rawToken, modelInstance)
     static func generate(for user: User, ttl: TimeInterval? = nil) throws -> (String, SessionToken) {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        var rng = SystemRandomNumberGenerator()
+        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
         let raw = Data(bytes).base64EncodedString()
 
         let hashed = Self.hash(raw)

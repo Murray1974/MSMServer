@@ -9,8 +9,15 @@ struct BearerTokenAuthenticator: AsyncBearerAuthenticator {
 
         guard let sessionToken = try await SessionToken.query(on: req.db)
             .filter(\SessionToken.$tokenHash == hashed)
+            .filter(\SessionToken.$revoked == false)
             .first()
         else {
+            return
+        }
+
+        if let exp = sessionToken.expiresAt, exp < Date() {
+            sessionToken.revoked = true
+            try await sessionToken.update(on: req.db)
             return
         }
 
@@ -33,7 +40,7 @@ struct StudentLessonController: RouteCollection {
         student.get("lessons", "available", use: availableLessons)
     }
 
-    func availableLessons(_ req: Request) async throws -> [Lesson] {
+    func availableLessons(_ req: Request) async throws -> [Lesson.Public] {
         let now = Date()
 
         // 1) Start with all future lessons that are explicitly available.
@@ -44,7 +51,7 @@ struct StudentLessonController: RouteCollection {
 
         // 2) For each lesson, check how many active bookings it already has and only
         //    return those that are not yet full (respecting capacity, defaulting to 1).
-        var available: [Lesson] = []
+        var result: [Lesson.Public] = []
         for lesson in candidates {
             guard let lessonID = lesson.id else { continue }
 
@@ -55,10 +62,10 @@ struct StudentLessonController: RouteCollection {
 
             let capacity = lesson.capacity
             if existingCount < capacity {
-                available.append(lesson)
+                result.append(lesson.asPublic(available: capacity - existingCount))
             }
         }
 
-        return available
+        return result
     }
 }

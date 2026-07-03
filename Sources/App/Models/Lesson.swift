@@ -39,7 +39,7 @@ final class Lesson: Model, Content {
         startsAt: Date,
         endsAt: Date,
         capacity: Int,
-        calendarName: String = "Untitled",
+        calendarName: String = "MSM Available",
         state: String = "available"
     ) {
         self.id = id
@@ -71,3 +71,40 @@ extension Lesson {
 
 // Concurrency
 extension Lesson: @unchecked Sendable {}
+
+
+// MARK: - Recovery Event Logging
+
+final class RecoveryEvent: Model, Content {
+    static let schema = "recovery_events"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "lesson_id")
+    var lessonID: UUID
+
+    @Field(key: "stage")
+    var stage: String // P1, P2, P3
+
+    @Field(key: "result")
+    var result: String // sent, stopped_filled, no_clients
+
+    @Field(key: "client_count")
+    var clientCount: Int
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    init() {}
+
+    init(id: UUID? = nil, lessonID: UUID, stage: String, result: String, clientCount: Int) {
+        self.id = id
+        self.lessonID = lessonID
+        self.stage = stage
+        self.result = result
+        self.clientCount = clientCount
+    }
+}
+
+extension RecoveryEvent: @unchecked Sendable {}
