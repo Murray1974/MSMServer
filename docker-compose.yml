@@ -19,6 +19,7 @@ services:
       retries: 20
 
   app:
+    image: ghcr.io/murray1974/msmserver:latest
     build: .
     container_name: msm_server
     depends_on:
