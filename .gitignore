@@ -12,6 +12,8 @@ xcuserdata/
 .secrets/
 # Environment variables contain live API keys and DB credentials — never commit
 .env
+# Logs
+*.log
 # Generated / local data files
 *.sqlite
 *.sqlite3
