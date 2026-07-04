@@ -93,6 +93,7 @@ final class CalendarSyncService {
                 lesson.title = s.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Available" : s.summary
                 lesson.startsAt = s.start
                 lesson.endsAt = s.end
+                lesson.capacity = 1
                 lesson.calendarName = newCalendarName
                 oldCalendarName = nil
             }
