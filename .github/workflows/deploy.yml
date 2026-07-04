@@ -47,14 +47,18 @@ jobs:
             set -e
             cd /opt/msm
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            echo "=== Image digest BEFORE pull ==="
-            docker inspect ghcr.io/murray1974/msmserver:latest --format='{{.Id}}' 2>/dev/null || echo "(not present)"
+            echo "=== Stopping container ==="
+            docker compose stop app || true
+            echo "=== Removing old image ==="
+            docker image rm ghcr.io/murray1974/msmserver:latest || echo "(image not found, that is fine)"
+            echo "=== Pulling fresh image ==="
             docker compose pull app
-            echo "=== Image digest AFTER pull ==="
+            echo "=== Image digest after pull ==="
             docker inspect ghcr.io/murray1974/msmserver:latest --format='{{.Id}}'
-            docker compose up -d --no-build --force-recreate
+            echo "=== Starting container ==="
+            docker compose up -d --no-build
             docker compose ps
-            sleep 5
+            sleep 8
             echo "=== Health check ==="
             curl -sf http://127.0.0.1:8080/health || echo "Health check failed"
             echo "Deploy complete — $(date)"
