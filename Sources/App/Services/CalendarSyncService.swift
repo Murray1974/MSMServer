@@ -46,13 +46,11 @@ final class CalendarSyncService {
 
     /// Fetch ICS, parse, and return slots (no DB writes yet).
     func fetchSlots(_ req: Request? = nil) async throws -> [CalendarSlot] {
-        app.logger.notice("[ICS] fetchSlots called, url=\(icsURL)")
         let client = (req?.client) ?? app.client
         var headers = HTTPHeaders()
         headers.add(name: .userAgent, value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)")
         headers.add(name: .accept, value: "text/calendar, */*")
         let res = try await client.get(icsURL, headers: headers)
-        app.logger.notice("[ICS] response status=\(res.status.code) bodyBytes=\(res.body?.readableBytes ?? -1)")
         guard res.status == .ok, var body = res.body else {
             throw Abort(.badRequest, reason: "ICS fetch failed: \(res.status.code)")
         }
@@ -61,11 +59,6 @@ final class CalendarSyncService {
             throw Abort(.internalServerError, reason: "ICS parse: invalid encoding")
         }
         let events = ICSParser.parseEvents(text, tz: tz)
-        app.logger.notice("[ICS] fetched \(text.count) bytes, parsed \(events.count) event(s)")
-        if events.isEmpty {
-            let preview = String(text.prefix(200)).replacingOccurrences(of: "\r\n", with: "⏎")
-            app.logger.notice("[ICS] preview: \(preview)")
-        }
         return events.map { CalendarSlot(start: $0.start, end: $0.end, summary: $0.summary) }
     }
 

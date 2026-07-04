@@ -25,7 +25,8 @@ enum ICSParser {
             cur.removeAll()
         }
 
-        for raw in ics.split(separator: "\n", omittingEmptySubsequences: false) {
+        let normalized = ics.replacingOccurrences(of: "\r\n", with: "\n")
+        for raw in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line == "BEGIN:VEVENT" { inEvent = true; cur.removeAll(); continue }
             if line == "END:VEVENT" { if inEvent { flush() }; inEvent = false; continue }
