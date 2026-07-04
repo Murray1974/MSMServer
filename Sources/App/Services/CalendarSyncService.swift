@@ -47,7 +47,10 @@ final class CalendarSyncService {
     /// Fetch ICS, parse, and return slots (no DB writes yet).
     func fetchSlots(_ req: Request? = nil) async throws -> [CalendarSlot] {
         let client = (req?.client) ?? app.client
-        let res = try await client.get(icsURL)
+        let res = try await client.get(icsURL) { req in
+            req.headers.add(name: .userAgent, value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)")
+            req.headers.add(name: .accept, value: "text/calendar, */*")
+        }
         guard res.status == .ok, var body = res.body else {
             throw Abort(.badRequest, reason: "ICS fetch failed: \(res.status.code)")
         }
