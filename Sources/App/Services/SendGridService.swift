@@ -21,7 +21,7 @@ struct SendGridService {
             personalizations: [
                 .init(to: [.init(email: email)])
             ],
-            from: .init(email: "noreply@msmdrivingschool.co.uk", name: "MSM Driving School"),
+            from: .init(email: "noreply@murrayschoolofmotoring.co.uk", name: "Murray School of Motoring"),
             subject: "Your MSM password reset code",
             content: [
                 .init(
@@ -37,7 +37,7 @@ struct SendGridService {
 
                     If you didn't request a password reset, you can safely ignore this email.
 
-                    — MSM Driving School
+                    — Murray School of Motoring
                     """
                 )
             ]
