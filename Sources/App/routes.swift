@@ -135,7 +135,7 @@ public func routes(_ app: Application) throws {
     app.get("health") { req -> Response in
         let res = Response(status: .ok)
         res.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
-        res.body = .init(string: "ok-build-test")
+        res.body = .init(string: "ok")
         return res
     }
 
