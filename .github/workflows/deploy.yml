@@ -25,6 +25,8 @@ jobs:
 
       - name: Build and push image
         run: |
+          echo "=== Building commit $(git rev-parse HEAD) ==="
+          grep -n "fetchSlots called" Sources/App/Services/CalendarSyncService.swift && echo "✅ new log found" || echo "❌ new log NOT found"
           docker build --no-cache -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
