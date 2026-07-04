@@ -15,15 +15,30 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_built: ${{ steps.check.outputs.changed }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if source changed
+        id: check
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -qvE '^\.github/'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Log in to GitHub Container Registry
+        if: steps.check.outputs.changed == 'true'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build and push image
+        if: steps.check.outputs.changed == 'true'
         run: |
           docker build --no-cache -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
@@ -45,19 +60,12 @@ jobs:
             set -e
             cd /opt/msm
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            echo "=== Syncing repo files ==="
             git fetch origin main
             git checkout origin/main -- docker-compose.yml
-            echo "=== Stopping container ==="
             docker compose stop app || true
-            echo "=== Removing old image ==="
-            docker image rm ghcr.io/murray1974/msmserver:latest || echo "(image not found, that is fine)"
-            echo "=== Pulling fresh image ==="
+            docker image rm ghcr.io/murray1974/msmserver:latest || true
             docker pull ghcr.io/murray1974/msmserver:latest
-            echo "=== Starting container ==="
             docker compose up -d --no-build --force-recreate app
-            docker compose ps
             sleep 8
-            echo "=== Health check ==="
             curl -sf http://127.0.0.1:8080/health || echo "Health check failed"
             echo "Deploy complete — $(date)"
