@@ -26,8 +26,14 @@ jobs:
       - name: Build and push image
         run: |
           echo "=== Building commit $(git rev-parse HEAD) ==="
-          grep -n "fetchSlots called" Sources/App/Services/CalendarSyncService.swift && echo "✅ new log found" || echo "❌ new log NOT found"
+          grep -n "ok-build-test" Sources/App/routes.swift && echo "✅ routes.swift has ok-build-test" || echo "❌ routes.swift does NOT have ok-build-test"
           docker build --no-cache -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+          echo "=== Inspecting compiled binary ==="
+          docker create --name binary_check ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker cp binary_check:/run/Run /tmp/Run
+          docker rm binary_check
+          ls -la /tmp/Run
+          grep -c "ok-build-test" /tmp/Run && echo "✅ binary contains ok-build-test" || echo "❌ binary does NOT contain ok-build-test"
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
   deploy:
