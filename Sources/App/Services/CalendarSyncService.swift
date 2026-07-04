@@ -90,6 +90,7 @@ final class CalendarSyncService {
             } else {
                 // Create a new lesson row for this slot.
                 lesson = Lesson()
+                lesson.title = s.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Available" : s.summary
                 lesson.startsAt = s.start
                 lesson.endsAt = s.end
                 lesson.calendarName = newCalendarName
