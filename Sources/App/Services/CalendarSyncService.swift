@@ -59,6 +59,12 @@ final class CalendarSyncService {
             throw Abort(.internalServerError, reason: "ICS parse: invalid encoding")
         }
         let events = ICSParser.parseEvents(text, tz: tz)
+        let logger = req.map { $0.logger } ?? app.logger
+        logger.notice("[ICS] fetched \(text.count) bytes, parsed \(events.count) event(s)")
+        if events.isEmpty {
+            let preview = String(text.prefix(200)).replacingOccurrences(of: "\r\n", with: "⏎")
+            logger.notice("[ICS] preview: \(preview)")
+        }
         return events.map { CalendarSlot(start: $0.start, end: $0.end, summary: $0.summary) }
     }
 
