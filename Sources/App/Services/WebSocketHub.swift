@@ -17,8 +17,39 @@ final class WebSocketHub: @unchecked Sendable {
         lock.withLock { clients.forEach { $0.send(text) } }
     }
 
+    /// Sends a WebSocket ping to all open clients to keep connections alive through
+    /// reverse-proxy idle timeouts (Nginx default: 60s). Call every ~30s.
+    func pingAll() {
+        lock.withLock {
+            clients = clients.filter { !$0.isClosed }
+            clients.forEach { $0.sendPing() }
+        }
+    }
+
     var hasClients: Bool {
         lock.withLock { clients.contains { !$0.isClosed } }
+    }
+}
+
+// MARK: - Keepalive lifecycle
+
+final class WebSocketKeepaliveLifecycle: LifecycleHandler, @unchecked Sendable {
+    private var task: Task<Void, Never>?
+
+    func didBoot(_ application: Application) throws {
+        task = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s
+                application.instructorHub.pingAll()
+                application.studentHub.pingAll()
+                application.availabilityHub.pingAll()
+            }
+        }
+        application.logger.notice("[WS] Keepalive started — pinging all hubs every 30s")
+    }
+
+    func shutdown(_ application: Application) {
+        task?.cancel()
     }
 }
 

@@ -98,6 +98,13 @@ final class AvailabilityHub: @unchecked Sendable {
         }
     }
 
+    func pingAll() {
+        lock.withLock {
+            clients = clients.filter { !$0.isClosed }
+            clients.forEach { $0.sendPing() }
+        }
+    }
+
     func broadcast(_ update: AvailabilityUpdate) {
         do {
             // Fill defaults without forcing call sites to change

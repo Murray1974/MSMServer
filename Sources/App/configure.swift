@@ -87,6 +87,10 @@ public func configure(_ app: Application) throws {
     // Recovery sequence background processor — runs every 60 seconds.
     app.lifecycle.use(RecoverySchedulerLifecycle())
 
+    // WebSocket keepalive — pings all connected clients every 30s to prevent
+    // Nginx from closing idle connections (default proxy_read_timeout = 60s).
+    app.lifecycle.use(WebSocketKeepaliveLifecycle())
+
     app.routes.defaultMaxBodySize = "10mb"
 
     // Ensure upload directories exist
