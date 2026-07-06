@@ -466,11 +466,20 @@ public func routes(_ app: Application) throws {
 
         let input = try req.content.decode(SyncIn.self)
 
-        // Load all future lessons to optionally prune those not present in the payload
+        // Load all future lessons once — used for in-memory lookups to avoid N+1 DB queries.
         let now = Date()
         let futureLessons = try await Lesson.query(on: req.db)
             .filter(\.$startsAt >= now)
             .all()
+
+        // Build lookup maps so each slot can be matched in O(1) without extra DB queries.
+        var futureByID: [UUID: Lesson] = [:]
+        var futureByTime: [String: Lesson] = [:]
+        for l in futureLessons {
+            if let id = l.id { futureByID[id] = l }
+            let key = "\(l.startsAt.timeIntervalSince1970)_\(l.endsAt.timeIntervalSince1970)"
+            futureByTime[key] = l
+        }
 
         var keepIDs = Set<UUID>()
         var upsertedCount = 0
@@ -492,14 +501,13 @@ public func routes(_ app: Application) throws {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
             }
 
-            // Try match by explicit id first, then by start/end window
+            // Match by explicit id first (in-memory), then by start/end time (in-memory).
+            // No per-slot DB queries — all lookups use the futureLessons fetch above.
+            let timeKey = "\(start.timeIntervalSince1970)_\(end.timeIntervalSince1970)"
             let lesson: Lesson
-            if let lid = s.id, let existing = try await Lesson.find(lid, on: req.db) {
+            if let lid = s.id, let existing = futureByID[lid] {
                 lesson = existing
-            } else if let existing = try await Lesson.query(on: req.db)
-                        .filter(\.$startsAt == start)
-                        .filter(\.$endsAt == end)
-                        .first() {
+            } else if let existing = futureByTime[timeKey] {
                 lesson = existing
             } else {
                 let l = Lesson()
