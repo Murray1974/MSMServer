@@ -534,18 +534,16 @@ public func routes(_ app: Application) throws {
                 upsertedCount += 1
             }
 
-            // Update simple fields if they changed (title/capacity/calendarName)
-            var changed = false
-            if let t = s.title, t != lesson.title { lesson.title = t; changed = true }
-            if let c = s.capacity, c != lesson.capacity { lesson.capacity = c; changed = true }
-            if cal != lesson.calendarName {
+            // Only save when state changes (available ↔ booked). Title/calendarName drift
+            // is cosmetic and not worth a DB write on every sync — avoid N+1 saves.
+            let stateChanged = lesson.state != syncedState
+            if stateChanged {
+                if let t = s.title { lesson.title = t }
+                if let c = s.capacity { lesson.capacity = c }
                 lesson.calendarName = cal
-                changed = true
-            }
-            if lesson.state != syncedState {
                 lesson.state = syncedState
-                changed = true
             }
+            let changed = stateChanged
             if changed {
                 try await lesson.save(on: req.db)
 
