@@ -596,6 +596,74 @@ public func routes(_ app: Application) throws {
     let admin = app.grouped("admin")
     let adminProtected = admin.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
 
+    // POST /admin/backfill-lesson-finance
+    // One-time fix: creates missing LessonFinance records for all active bookings that
+    // were created via the instructor path (which previously skipped LessonFinance creation).
+    adminProtected.post("backfill-lesson-finance") { req async throws -> Response in
+        struct BackfillResult: Content {
+            var created: Int
+            var skipped: Int
+            var studentCount: Int
+        }
+
+        let now = Date()
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$deletedAt == nil)
+            .with(\.$lesson)
+            .all()
+
+        let instructorID = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()?.requireID()
+        guard let instructorID else {
+            throw Abort(.internalServerError, reason: "No instructor found")
+        }
+
+        var created = 0
+        var skipped = 0
+        var affectedStudentIDs = Set<UUID>()
+
+        for booking in bookings {
+            let lessonID = booking.$lesson.id
+            let studentID = booking.$user.id
+
+            if try await LessonFinance.find(lessonID, on: req.db) != nil {
+                skipped += 1
+                continue
+            }
+
+            let lesson = booking.lesson
+            let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            let defaultHourlyRate = Decimal(45)
+            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+
+            let finance = LessonFinance(
+                lessonID: lessonID,
+                studentID: studentID,
+                instructorID: instructorID,
+                durationMinutes: durationMinutes,
+                hourlyRateSnapshot: defaultHourlyRate,
+                priceSnapshot: priceSnapshot,
+                chargeStatus: "not_charged",
+                chargedLedgerEntryID: nil,
+                financeStatus: "not_covered",
+                coveredAt: nil,
+                reservedAmount: nil
+            )
+            try await finance.save(on: req.db)
+            created += 1
+            affectedStudentIDs.insert(studentID)
+        }
+
+        for studentID in affectedStudentIDs {
+            try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
+        }
+
+        req.logger.notice("[backfill] LessonFinance: created=\(created) skipped=\(skipped) students=\(affectedStudentIDs.count)")
+        return try await BackfillResult(created: created, skipped: skipped, studentCount: affectedStudentIDs.count)
+            .encodeResponse(status: .ok, for: req)
+    }
+
     // GET /admin/booking-events?type=admin.cancelled&bookingID=...&userID=...
     adminProtected.get("booking-events") { req async throws -> [BookingEvent] in
         struct Filter: Decodable {
