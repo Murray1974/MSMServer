@@ -538,6 +538,42 @@ struct InstructorLessonController: RouteCollection {
         let bookingID = try booking.requireID()
         req.logger.info("instructor.createBookingForStudent: created bookingID=\(bookingID) for studentID=\(studentID) lessonID=\(lesson.id?.uuidString ?? "?")")
 
+        // Create or reassign a LessonFinance record so coverage/charge status works.
+        let lessonID = input.lessonID
+        if let existingFinance = try await LessonFinance.find(lessonID, on: req.db) {
+            if existingFinance.$student.id != studentID {
+                existingFinance.$student.id = studentID
+                existingFinance.financeStatus = "not_covered"
+                existingFinance.reservedAmount = nil
+                existingFinance.coveredAt = nil
+                try await existingFinance.save(on: req.db)
+            }
+        } else {
+            let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            let defaultHourlyRate = Decimal(45)
+            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let instructorID = try await User.query(on: req.db)
+                .filter(\.$role == "instructor")
+                .first()?.requireID()
+            if let instructorID {
+                let newFinance = LessonFinance(
+                    lessonID: lessonID,
+                    studentID: studentID,
+                    instructorID: instructorID,
+                    durationMinutes: durationMinutes,
+                    hourlyRateSnapshot: defaultHourlyRate,
+                    priceSnapshot: priceSnapshot,
+                    chargeStatus: "not_charged",
+                    chargedLedgerEntryID: nil,
+                    financeStatus: "not_covered",
+                    coveredAt: nil,
+                    reservedAmount: nil
+                )
+                try await newFinance.save(on: req.db)
+            }
+        }
+        try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
+
         return InstructorCreateBookingResponse(bookingID: bookingID)
     }
 
