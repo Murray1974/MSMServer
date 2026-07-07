@@ -207,6 +207,12 @@ struct StudentBookingsController: RouteCollection {
         req.logger.info("student.createBooking: broadcasting booked lessonID=\((try? bookedLesson.requireID())?.uuidString ?? input.lessonID.uuidString) userID=\(userID) username=\(user.username) displayName=\(user.displayName)")
         try req.broadcastBooked(for: bookedLesson)
 
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEE d MMM, HH:mm"
+        fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        await notifyInstructor(req: req, title: "New Booking",
+            body: "\(user.displayName) booked \(fmt.string(from: bookedLesson.startsAt))")
+
         return .created
     }
 
@@ -342,6 +348,16 @@ struct StudentBookingsController: RouteCollection {
 
         try req.broadcastCancelled(for: freedLesson)
         req.application.broadcastRecoveryCandidate(for: freedLesson)
+
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEE d MMM, HH:mm"
+        fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        let cancelTitle = isLate ? "Late Cancellation" : "Lesson Cancelled"
+        let cancelBody  = isLate
+            ? "\(user.displayName) cancelled \(fmt.string(from: freedLesson.startsAt)) — full charge applies"
+            : "\(user.displayName) cancelled \(fmt.string(from: freedLesson.startsAt))"
+        await notifyInstructor(req: req, title: cancelTitle, body: cancelBody)
+
         return .ok
     }
 
@@ -741,5 +757,12 @@ struct StudentBookingsController: RouteCollection {
 
     struct UpdateDropoffInput: Content {
         var dropoffLocation: String?
+    }
+
+    private func notifyInstructor(req: Request, title: String, body: String) async {
+        guard let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),
+              let token = instructor.fcmToken,
+              let fcm = FCMNotificationService(req: req) else { return }
+        try? await fcm.send(to: token, title: title, body: body)
     }
 }
