@@ -31,6 +31,9 @@ struct InstructorLessonController: RouteCollection {
         // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
         instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
 
+        // Instructor cancels any booking without late-cancel charges
+        instructor.delete("bookings", ":bookingID", use: instructorCancelBooking)
+
         // Full lesson history for a student (past + upcoming) with finance status
         // Uses :userID to match TestAppointmentController's param name at this path position
         instructor.get("students", ":userID", "lesson-history", use: studentLessons)
@@ -575,6 +578,52 @@ struct InstructorLessonController: RouteCollection {
         try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
 
         return InstructorCreateBookingResponse(bookingID: bookingID)
+    }
+
+    // MARK: - DELETE /instructor/bookings/:bookingID
+
+    func instructorCancelBooking(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+
+        if booking.deletedAt != nil { return .ok }
+
+        let studentID = booking.$user.id
+        booking.cancellationSource = "instructor"
+        try await booking.save(on: req.db)
+        try await booking.delete(on: req.db)
+
+        let evt = BookingEvent(
+            type: "instructor.cancelled",
+            userID: studentID,
+            lessonID: booking.$lesson.id,
+            bookingID: bookingID
+        )
+        try await evt.save(on: req.db)
+
+        let freedLesson = try await booking.$lesson.get(on: req.db)
+        freedLesson.state = "available"
+        freedLesson.calendarName = "MSM Available"
+        try await freedLesson.save(on: req.db)
+
+        do {
+            try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
+        } catch {
+            req.logger.error("reevaluateCoverage failed after instructor cancel: \(error)")
+        }
+
+        try req.broadcastCancelled(for: freedLesson)
+        req.application.broadcastRecoveryCandidate(for: freedLesson)
+        return .ok
     }
 
     // MARK: - Student lesson history
