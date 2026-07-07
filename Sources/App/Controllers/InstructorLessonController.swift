@@ -34,6 +34,10 @@ struct InstructorLessonController: RouteCollection {
         // Instructor cancels any booking without late-cancel charges
         instructor.delete("bookings", ":bookingID", use: instructorCancelBooking)
 
+        // Look up any lesson by approximate start time (regardless of state/calendarName)
+        // Used by the instructor app to resolve the correct lessonID before booking
+        instructor.get("lessons", "at", use: lessonAt)
+
         // Full lesson history for a student (past + upcoming) with finance status
         // Uses :userID to match TestAppointmentController's param name at this path position
         instructor.get("students", ":userID", "lesson-history", use: studentLessons)
@@ -578,6 +582,52 @@ struct InstructorLessonController: RouteCollection {
         try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
 
         return InstructorCreateBookingResponse(bookingID: bookingID)
+    }
+
+    // MARK: - GET /instructor/lessons/at?starts=<ISO8601>
+    // Returns any lesson whose startsAt is within ±2 minutes of the requested time,
+    // regardless of state or calendarName. Used by the instructor app to reliably
+    // resolve the correct lessonID before booking, bypassing calendarName drift.
+
+    func lessonAt(_ req: Request) async throws -> InstructorLessonRow {
+        struct Query: Decodable { var starts: String }
+        let q = try req.query.decode(Query.self)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        iso.timeZone = TimeZone(secondsFromGMT: 0)
+        guard let target = iso.date(from: q.starts) else {
+            throw Abort(.badRequest, reason: "Invalid ISO8601 date for 'starts'")
+        }
+
+        let window: TimeInterval = 120
+        let lessons = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt >= target.addingTimeInterval(-window))
+            .filter(\.$startsAt <= target.addingTimeInterval(window))
+            .all()
+
+        guard let lesson = lessons.min(by: {
+            abs($0.startsAt.timeIntervalSince(target)) < abs($1.startsAt.timeIntervalSince(target))
+        }), let lessonID = lesson.id else {
+            throw Abort(.notFound, reason: "No lesson found near \(q.starts)")
+        }
+
+        let existingCount = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .count()
+
+        let capacity = lesson.capacity
+        return InstructorLessonRow(
+            id: lessonID,
+            title: lesson.title,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt,
+            capacity: capacity,
+            booked: existingCount,
+            available: max(0, capacity - existingCount),
+            state: lesson.state
+        )
     }
 
     // MARK: - DELETE /instructor/bookings/:bookingID
