@@ -572,13 +572,19 @@ public func routes(_ app: Application) throws {
 
         var prunedCount = 0
         if input.prune == true {
-            for l in futureLessons {
-                if let id = l.id, !keepIDs.contains(id) {
-                    try await l.delete(on: req.db)
-                    prunedCount += 1
-                    // Notify clients this slot is gone
+            let toPrune = futureLessons.filter { l in
+                guard let id = l.id else { return false }
+                return !keepIDs.contains(id)
+            }
+            if !toPrune.isEmpty {
+                let pruneIDs = toPrune.compactMap { $0.id }
+                try await Lesson.query(on: req.db)
+                    .filter(\.$id ~~ pruneIDs)
+                    .delete()
+                prunedCount = toPrune.count
+                for l in toPrune {
                     let update = AvailabilityUpdate(
-                        action: AvailabilityAction.slotUnavailable, // treat as no longer available
+                        action: AvailabilityAction.slotUnavailable,
                         id: try l.requireID(),
                         title: l.title,
                         startsAt: l.startsAt,
