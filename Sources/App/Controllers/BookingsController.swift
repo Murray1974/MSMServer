@@ -609,11 +609,14 @@ extension Request {
     /// Broadcast that a lesson has been booked.
     func broadcastBooked(for lesson: Lesson, student: User? = nil) throws {
         let lessonID = try lesson.requireID().uuidString
+        let formatter = ISO8601DateFormatter()
 
         var payload: [String: Any] = [
             "type": "booking_changed",
             "lessonID": lessonID,
-            "status": "booked"
+            "status": "booked",
+            "startsAt": formatter.string(from: lesson.startsAt),
+            "endsAt": formatter.string(from: lesson.endsAt)
         ]
 
         let resolvedUser = student ?? self.auth.get(User.self)
