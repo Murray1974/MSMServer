@@ -317,7 +317,9 @@ struct InstructorLessonController: RouteCollection {
             lessonID: lessonID,
             bookingID: nil,
             status: "unavailable",
-            reason: body.reason
+            reason: body.reason,
+            startsAt: lesson.startsAt,
+            endsAt: lesson.endsAt
         )
 
         return .ok

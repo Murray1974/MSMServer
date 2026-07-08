@@ -20,6 +20,10 @@ struct BroadcastEvent: Codable {
     // Optional human reason (e.g. instructor set slot to personal)
     let reason: String?
 
+    // Optional lesson timing — lets agents find unstamped calendar events by time
+    let startsAt: Date?
+    let endsAt: Date?
+
     init(type: String,
          title: String,
          message: String,
@@ -27,7 +31,9 @@ struct BroadcastEvent: Codable {
          bookingID: UUID? = nil,
          userID: UUID? = nil,
          status: String? = nil,
-         reason: String? = nil) {
+         reason: String? = nil,
+         startsAt: Date? = nil,
+         endsAt: Date? = nil) {
         self.type = type
         self.title = title
         self.message = message
@@ -36,6 +42,8 @@ struct BroadcastEvent: Codable {
         self.userID = userID
         self.status = status
         self.reason = reason
+        self.startsAt = startsAt
+        self.endsAt = endsAt
     }
 }
 
@@ -102,6 +110,8 @@ extension Application {
                              bookingID: UUID? = nil,
                              status: String? = nil,
                              reason: String? = nil,
+                             startsAt: Date? = nil,
+                             endsAt: Date? = nil,
                              to audience: BroadcastAudience = .instructors) {
         let dedupeKey = [
             type,
@@ -122,7 +132,9 @@ extension Application {
             lessonID: lessonID,
             bookingID: bookingID,
             status: status,
-            reason: reason
+            reason: reason,
+            startsAt: startsAt,
+            endsAt: endsAt
         )
 
         guard let data = try? JSONEncoder().encode(payload),
