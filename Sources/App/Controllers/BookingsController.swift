@@ -476,6 +476,23 @@ struct BookingsController: RouteCollection {
             }
         }
 
+        // Push notification to each affected student.
+        if !cancelledStudentIDs.isEmpty, let fcm = FCMNotificationService(req: req) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEE d MMM, HH:mm"
+            fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+            let dateStr = fmt.string(from: lesson.startsAt)
+            for sid in cancelledStudentIDs {
+                if let fcmToken = try await User.find(sid, on: req.db)?.fcmToken {
+                    try? await fcm.send(
+                        to: fcmToken,
+                        title: "Lesson Cancelled",
+                        body: "Your lesson on \(dateStr) has been cancelled by your instructor"
+                    )
+                }
+            }
+        }
+
         struct Out: Content {
             let ok: Bool
             let lessonID: UUID
