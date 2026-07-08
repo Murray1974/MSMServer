@@ -689,12 +689,18 @@ extension Request {
     func broadcastRescheduled(old oldLesson: Lesson, new newLesson: Lesson, explicitStudent: User? = nil) {
         let oldID = (try? oldLesson.requireID().uuidString) ?? ""
         let newID = (try? newLesson.requireID().uuidString) ?? ""
+        let formatter = ISO8601DateFormatter()
 
         var payload: [String: Any] = [
             "type": "booking_changed",
             "oldLessonID": oldID,
             "newLessonID": newID,
-            "status": "rescheduled"
+            "status": "rescheduled",
+            // Timing lets MSMAgent locate unstamped EKEvents by time as a fallback.
+            "startsAt": formatter.string(from: oldLesson.startsAt),
+            "endsAt": formatter.string(from: oldLesson.endsAt),
+            "newLessonStartsAt": formatter.string(from: newLesson.startsAt),
+            "newLessonEndsAt": formatter.string(from: newLesson.endsAt)
         ]
 
         let user = explicitStudent ?? self.auth.get(User.self)
