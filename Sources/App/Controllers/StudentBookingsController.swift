@@ -461,6 +461,16 @@ struct StudentBookingsController: RouteCollection {
         }
         try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
 
+        // Free the old lesson — no active bookings remain after the move.
+        oldLesson.state = "available"
+        oldLesson.calendarName = "MSM Available"
+        try await oldLesson.save(on: req.db)
+
+        // Mark the new lesson as booked.
+        newLesson.state = "booked"
+        newLesson.calendarName = "MSM Lessons"
+        try await newLesson.save(on: req.db)
+
         req.broadcastRescheduled(old: oldLesson, new: newLesson)
 
         return .ok
