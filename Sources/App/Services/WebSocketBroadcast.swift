@@ -84,7 +84,9 @@ extension Application {
     /// Send an event to a specific audience (instructors, students, or both).
     func broadcastEvent(type: String, title: String, message: String, to audience: BroadcastAudience) {
         let payload = BroadcastEvent(type: type, title: title, message: message)
-        guard let data = try? JSONEncoder().encode(payload),
+        let iso8601Encoder = JSONEncoder()
+        iso8601Encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? iso8601Encoder.encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             self.logger.warning("Broadcast encode failed: type=\(type) title=\(title)")
             return
@@ -137,7 +139,9 @@ extension Application {
             endsAt: endsAt
         )
 
-        guard let data = try? JSONEncoder().encode(payload),
+        let iso8601Encoder = JSONEncoder()
+        iso8601Encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? iso8601Encoder.encode(payload),
               let text = String(data: data, encoding: .utf8) else {
             self.logger.warning("Broadcast encode failed: type=\(type) title=\(title)")
             return
