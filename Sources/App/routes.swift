@@ -574,6 +574,11 @@ public func routes(_ app: Application) throws {
         if input.prune == true {
             let toPrune = futureLessons.filter { l in
                 guard let id = l.id else { return false }
+                // Only prune available lessons. Booked, personal, confirmed, and other
+                // non-available lessons are managed by their own endpoints and must never
+                // be deleted by a calendar sync — doing so would re-expose personal slots
+                // to students and delete lesson history.
+                guard l.state == "available" else { return false }
                 return !keepIDs.contains(id)
             }
             if !toPrune.isEmpty {
