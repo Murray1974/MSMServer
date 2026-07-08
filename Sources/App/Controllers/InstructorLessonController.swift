@@ -289,6 +289,17 @@ struct InstructorLessonController: RouteCollection {
 
             try req.broadcastCancelled(for: lesson, student: student, studentID: sid)
             req.broadcastBookingCleared(for: lesson, studentID: sid)
+
+            if let fcmToken = student?.fcmToken, let fcm = FCMNotificationService(req: req) {
+                let fmt = DateFormatter()
+                fmt.dateFormat = "EEE d MMM, HH:mm"
+                fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+                try? await fcm.send(
+                    to: fcmToken,
+                    title: "Lesson Cancelled",
+                    body: "Your lesson on \(fmt.string(from: lesson.startsAt)) has been cancelled by your instructor"
+                )
+            }
         }
 
         // Remove any lesson_finance record — the instructor is reclaiming the slot,
