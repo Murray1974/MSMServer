@@ -195,6 +195,14 @@ struct TestAppointmentController: RouteCollection {
         guard try await User.find(body.userID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Student not found")
         }
+        let clash = try await TestAppointment.query(on: req.db)
+            .filter(\.$state != "cancelled")
+            .filter(\.$startsAt < body.endsAt)
+            .filter(\.$endsAt   > body.startsAt)
+            .first()
+        if clash != nil {
+            throw Abort(.conflict, reason: "A test appointment already exists in this time slot")
+        }
         let appt = TestAppointment(
             userID: body.userID,
             studentName: body.studentName,
@@ -352,6 +360,17 @@ struct TestAppointmentController: RouteCollection {
             throw Abort(.notFound, reason: "Test appointment not found")
         }
         let body = try req.content.decode(UpdateTestInput.self)
+        if let newStart = body.startsAt, let newEnd = body.endsAt {
+            let clash = try await TestAppointment.query(on: req.db)
+                .filter(\.$id != testID)
+                .filter(\.$state != "cancelled")
+                .filter(\.$startsAt < newEnd)
+                .filter(\.$endsAt   > newStart)
+                .first()
+            if clash != nil {
+                throw Abort(.conflict, reason: "A test appointment already exists in this time slot")
+            }
+        }
         if let v = body.testRef      { appt.testRef      = v }
         if let v = body.testLocation { appt.testLocation = v }
         if let v = body.testCentre   { appt.testCentre   = v }
