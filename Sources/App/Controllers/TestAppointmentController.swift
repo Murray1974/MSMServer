@@ -16,6 +16,7 @@ struct TestAppointmentController: RouteCollection {
         tests.post(use: createTest)
         tests.get("range", use: testsInRange)
         tests.get("cancelled-events", use: cancelledWithEKEvent)
+        tests.get(":testID", use: fetchTestByID)
         tests.post(":testID", "withdraw", use: withdrawTest)
         tests.post(":testID", "attend", use: markAttended)
         tests.delete(":testID", use: deleteTest)
@@ -239,6 +240,18 @@ struct TestAppointmentController: RouteCollection {
             .filter(\.$state != "cancelled")
             .all()
         return appts.map { dto(from: $0) }
+    }
+
+    // MARK: - GET /instructor/tests/:testID
+
+    func fetchTestByID(_ req: Request) async throws -> TestAppointmentDTO {
+        guard let testID = req.parameters.get("testID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing testID")
+        }
+        guard let appt = try await TestAppointment.find(testID, on: req.db) else {
+            throw Abort(.notFound, reason: "Test appointment not found")
+        }
+        return dto(from: appt)
     }
 
     // MARK: - POST /instructor/tests/:testID/withdraw
