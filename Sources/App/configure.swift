@@ -7,6 +7,13 @@ public func configure(_ app: Application) throws {
     let bootStamp = ISO8601DateFormatter().string(from: Date())
     app.logger.notice("[SERVER] 🚀 configure() bootStamp=\(bootStamp) env=\(app.environment.name)")
 
+    // Encode all Date fields as ISO8601 strings so every client can decode them uniformly.
+    // Without this, Vapor's default JSONEncoder uses numeric Apple-reference-date timestamps
+    // which the iOS/Flutter clients cannot parse.
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    ContentConfiguration.global.use(encoder: encoder, for: .json)
+
     // db setup…
     app.databases.use(.postgres(
         hostname: Environment.get("POSTGRES_HOST") ?? "127.0.0.1",
