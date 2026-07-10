@@ -88,6 +88,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(SeedDVSACentresScotlandWales())
     app.migrations.add(SeedDVSACentresSupplementary())
     app.migrations.add(CreatePasswordResetToken())
+    app.migrations.add(CreateOdometerEntry())
 
     try app.autoMigrate().wait()
 

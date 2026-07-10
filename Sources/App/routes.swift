@@ -1042,7 +1042,7 @@ public func routes(_ app: Application) throws {
     financeProtected.get("instructor",  "vehicle", "expenses", "summary",use: vehicleController.expenseSummary)
     financeProtected.get("instructor",  "vehicle", "expenses", ":expenseID", "receipt", use: vehicleController.getReceipt)
 
-    // Mileage log
+    // Mileage log (HMRC per-trip)
     // GET    /instructor/mileage          — summary + all entries
     // POST   /instructor/mileage          — add entry
     // DELETE /instructor/mileage/:entryID — remove entry
@@ -1050,6 +1050,19 @@ public func routes(_ app: Application) throws {
     financeProtected.get("instructor",    "mileage",            use: mileageController.list)
     financeProtected.post("instructor",   "mileage",            use: mileageController.create)
     financeProtected.delete("instructor", "mileage", ":entryID", use: mileageController.delete)
+
+    // Odometer log (daily odometer readings)
+    // GET    /instructor/odometer         — full history + stats
+    // GET    /instructor/odometer/last    — most recent entry
+    // POST   /instructor/odometer         — log today's reading (date = yesterday)
+    // POST   /instructor/odometer/gap     — back-fill missing days
+    // DELETE /instructor/odometer/:entryID
+    let odometerController = OdometerController()
+    financeProtected.get("instructor",    "odometer",              use: odometerController.list)
+    financeProtected.get("instructor",    "odometer", "last",      use: odometerController.lastEntry)
+    financeProtected.post("instructor",   "odometer",              use: odometerController.logReading)
+    financeProtected.post("instructor",   "odometer", "gap",       use: odometerController.logGapEntries)
+    financeProtected.delete("instructor", "odometer", ":entryID",  use: odometerController.delete)
 
     // Chat
     // GET    /student/chat/messages
