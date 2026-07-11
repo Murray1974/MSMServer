@@ -186,7 +186,8 @@ struct PaymentEnforcementService {
             app.broadcastRecoveryCandidate(for: lesson)
 
             // Push notification to student.
-            if let fcmToken = try await User.find(studentID, on: db)?.fcmToken,
+            if let user = try? await User.find(studentID, on: db),
+               let fcmToken = user.fcmToken,
                let fcm = FCMNotificationService(app: app) {
                 try? await fcm.send(
                     to: fcmToken,
@@ -205,8 +206,8 @@ struct PaymentEnforcementService {
     // MARK: - Push helpers
 
     private func sendReminderPush(studentID: UUID, lesson: Lesson) async {
-        guard let fcmToken = try? await User.find(studentID, on: db)?.fcmToken,
-              let token = fcmToken,
+        guard let user = try? await User.find(studentID, on: db),
+              let fcmToken = user.fcmToken,
               let fcm = FCMNotificationService(app: app) else { return }
 
         let formatter = DateFormatter()
@@ -216,7 +217,7 @@ struct PaymentEnforcementService {
         let dateStr = formatter.string(from: lesson.startsAt)
 
         try? await fcm.send(
-            to: token,
+            to: fcmToken,
             title: "Payment Reminder",
             body: "Your lesson on \(dateStr) needs to be paid. Open the app to pay now."
         )
@@ -224,8 +225,8 @@ struct PaymentEnforcementService {
     }
 
     private func sendWarningPush(studentID: UUID, lesson: Lesson) async {
-        guard let fcmToken = try? await User.find(studentID, on: db)?.fcmToken,
-              let token = fcmToken,
+        guard let user = try? await User.find(studentID, on: db),
+              let fcmToken = user.fcmToken,
               let fcm = FCMNotificationService(app: app) else { return }
 
         let formatter = DateFormatter()
@@ -235,7 +236,7 @@ struct PaymentEnforcementService {
         let dateStr = formatter.string(from: lesson.startsAt)
 
         try? await fcm.send(
-            to: token,
+            to: fcmToken,
             title: "⚠️ Final Warning — Lesson at Risk",
             body: "Your lesson on \(dateStr) will be cancelled at 8pm tonight if payment is not received."
         )
