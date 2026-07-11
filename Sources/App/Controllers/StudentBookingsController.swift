@@ -53,6 +53,15 @@ struct StudentBookingsController: RouteCollection {
         bookings.post("recover-and-pay", use: recoverAndPay)
     }
 
+    // MARK: RESPONSE STRUCTS
+
+    struct CreateBookingResponse: Content {
+        let bookingID: String
+        let requiresImmediatePayment: Bool
+        let clientSecret: String?
+        let amountPence: Int?
+    }
+
     // MARK: INPUT STRUCTS
 
     struct CreateBookingInput: Content {
@@ -74,7 +83,7 @@ struct StudentBookingsController: RouteCollection {
 
     // MARK: CREATE BOOKING
 
-    func createBooking(_ req: Request) async throws -> HTTPStatus {
+    func createBooking(_ req: Request) async throws -> CreateBookingResponse {
         let user = try req.auth.require(User.self)
         let userID = try user.requireID()
         req.logger.info("student.createBooking: userID=\(userID) username=\(user.username) displayName=\(user.displayName) lessonID_param=pending")
@@ -217,7 +226,49 @@ struct StudentBookingsController: RouteCollection {
         await notifyInstructor(req: req, title: "New Booking",
             body: "\(user.displayName) booked \(fmt.string(from: bookedLesson.startsAt))")
 
-        return .created
+        let bookingID = try booking.requireID()
+
+        // If the lesson starts within 48 hours, require immediate payment.
+        let withinWindow = lesson.startsAt.timeIntervalSinceNow < 48 * 3_600
+        if withinWindow {
+            booking.paymentStatus = "requires_immediate_payment"
+            try await booking.save(on: req.db)
+
+            // Create a Stripe PaymentIntent so the client can present the sheet immediately.
+            let lf = try await LessonFinance.find(input.lessonID, on: req.db)
+            let price: Decimal
+            if let snapshot = lf?.priceSnapshot, snapshot > 0 {
+                price = snapshot
+            } else {
+                let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+                price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+            }
+            var pence = price * 100
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &pence, 0, .plain)
+            let amountPence = max(50, NSDecimalNumber(decimal: rounded).intValue)
+
+            let stripe = try StripeService(request: req)
+            let clientSecret = try await stripe.createPaymentIntent(
+                amount: amountPence,
+                metadata: ["studentID": userID.uuidString, "bookingID": bookingID.uuidString]
+            )
+
+            req.logger.info("[createBooking] Within-48h lesson — immediate payment required for booking \(bookingID).")
+            return CreateBookingResponse(
+                bookingID: bookingID.uuidString,
+                requiresImmediatePayment: true,
+                clientSecret: clientSecret,
+                amountPence: amountPence
+            )
+        }
+
+        return CreateBookingResponse(
+            bookingID: bookingID.uuidString,
+            requiresImmediatePayment: false,
+            clientSecret: nil,
+            amountPence: nil
+        )
     }
 
     // MARK: CANCEL BOOKING

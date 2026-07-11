@@ -98,7 +98,17 @@ struct PaymentEnforcementService {
         let cancelTime  = cal.date(bySettingHour: 20, minute: 0, second: 0, of: enforcementDay)!
 
         // ── Auto-cancel at 8pm ────────────────────────────────────────────────
-        if now >= cancelTime {
+        // If the cancel deadline has already passed but this booking was created
+        // AFTER that deadline (student booked within the 48h window), give them
+        // 2 hours from creation before auto-cancelling.
+        let effectiveCancelTime: Date
+        if let createdAt = booking.createdAt, createdAt > cancelTime {
+            effectiveCancelTime = createdAt.addingTimeInterval(2 * 3_600)
+        } else {
+            effectiveCancelTime = cancelTime
+        }
+
+        if now >= effectiveCancelTime {
             await performAutoCancel(booking: booking, lesson: lesson, studentID: studentID)
             return
         }
