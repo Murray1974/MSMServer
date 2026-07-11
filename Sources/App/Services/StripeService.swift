@@ -54,9 +54,7 @@ struct StripeService {
         var params = [
             "amount=\(amount)",
             "currency=\(currency)",
-            "payment_method_types%5B%5D=card",
-            "payment_method_types%5B%5D=pay_by_bank",
-            "payment_method_types%5B%5D=link",
+            "automatic_payment_methods%5Benabled%5D=true",
         ]
 
         for (key, value) in metadata {
