@@ -801,6 +801,8 @@ public func routes(_ app: Application) throws {
 
             for booking in upcomingBookings {
                 guard let bookingID = booking.id else { continue }
+                // Only enforce Stripe payment bookings — cash/bank students are managed manually.
+                guard booking.paymentStatus == "requires_immediate_payment" else { continue }
                 let bLessonID = booking.$lesson.id
                 let bLesson = booking.lesson
                 let threshold = bLesson.startsAt.addingTimeInterval(-48 * 3_600)
