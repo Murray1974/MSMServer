@@ -90,11 +90,15 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreatePasswordResetToken())
     app.migrations.add(CreateOdometerEntry())
     app.migrations.add(AddAccountHoldToStudentProfile())
+    app.migrations.add(AddPaymentEnforcementFieldsToBooking())
 
     try app.autoMigrate().wait()
 
     // Recovery sequence background processor — runs every 60 seconds.
     app.lifecycle.use(RecoverySchedulerLifecycle())
+
+    // Payment enforcement — reminds, warns, and auto-cancels unpaid bookings in 48h window.
+    app.lifecycle.use(PaymentEnforcementLifecycle())
 
     // WebSocket keepalive — pings all connected clients every 30s to prevent
     // Nginx from closing idle connections (default proxy_read_timeout = 60s).

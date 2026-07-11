@@ -776,13 +776,93 @@ public func routes(_ app: Application) throws {
             )
         }
 
+        // ── Pending payment booking (48h enforcement window) ─────────────────
+        // Find the soonest active booking within the next 50h that isn't covered.
+        let iso = ISO8601DateFormatter()
+        let now = Date()
+        let windowEnd = now.addingTimeInterval(50 * 3_600)
+
+        let upcomingLessons = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt > now)
+            .filter(\.$startsAt <= windowEnd)
+            .all()
+        let upcomingLessonIDs = upcomingLessons.compactMap { $0.id }
+
+        var pendingPaymentBooking: PendingPaymentView? = nil
+
+        if !upcomingLessonIDs.isEmpty {
+            let upcomingBookings = try await Booking.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$lesson.$id ~~ upcomingLessonIDs)
+                .filter(\.$deletedAt == .null)
+                .with(\.$lesson)
+                .sort(\.$createdAt, .ascending)
+                .all()
+
+            for booking in upcomingBookings {
+                guard let bookingID = booking.id else { continue }
+                let bLessonID = booking.$lesson.id
+                let bLesson = booking.lesson
+                let threshold = bLesson.startsAt.addingTimeInterval(-48 * 3_600)
+                // Only show modal once inside 48h window.
+                guard now >= threshold else { continue }
+
+                let lf = try? await LessonFinance.find(bLessonID, on: req.db)
+                if lf?.financeStatus == "covered" { continue }
+
+                // Calculate amount due.
+                let amountDue: Decimal
+                if let snapshot = lf?.priceSnapshot, snapshot > 0 {
+                    amountDue = snapshot
+                } else {
+                    let mins = max(0, Int(bLesson.endsAt.timeIntervalSince(bLesson.startsAt) / 60))
+                    amountDue = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                }
+
+                pendingPaymentBooking = PendingPaymentView(
+                    bookingID: bookingID.uuidString,
+                    lessonID: bLessonID.uuidString,
+                    startsAt: iso.string(from: bLesson.startsAt),
+                    endsAt: iso.string(from: bLesson.endsAt),
+                    amountDue: amountDue
+                )
+                break  // surface the soonest only
+            }
+        }
+
+        // ── Hold recovery info ────────────────────────────────────────────────
+        var holdLessonID: String? = nil
+        var holdLessonStartsAt: String? = nil
+        var holdLessonAvailable = false
+
+        if profile?.accountHold == true {
+            // Find the most recent system auto-cancel for this student.
+            if let cancelledBooking = try? await Booking.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$cancellationSource == "system_auto_cancel")
+                .withDeleted()
+                .sort(\.$deletedAt, .descending)
+                .with(\.$lesson)
+                .first() {
+
+                let cancelledLesson = cancelledBooking.lesson
+                holdLessonID = cancelledLesson.id?.uuidString
+                holdLessonStartsAt = iso.string(from: cancelledLesson.startsAt)
+                holdLessonAvailable = (cancelledLesson.state == "available" && cancelledLesson.startsAt > now)
+            }
+        }
+
         return StudentSelfBalanceView(
             currentBalance: balance,
             lateCancelFeesCount: lateCancelFeesCount,
             lateCancelFeesTotal: lateCancelFeesTotal,
             transactions: transactions,
             accountHold: profile?.accountHold ?? false,
-            accountHoldReason: profile?.accountHoldReason
+            accountHoldReason: profile?.accountHoldReason,
+            pendingPaymentBooking: pendingPaymentBooking,
+            holdLessonID: holdLessonID,
+            holdLessonStartsAt: holdLessonStartsAt,
+            holdLessonAvailable: holdLessonAvailable
         )
     }
 

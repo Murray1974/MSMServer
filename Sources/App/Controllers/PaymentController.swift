@@ -185,13 +185,45 @@ struct PaymentController: RouteCollection {
 
         req.logger.notice("[Stripe] ✅ Payment succeeded for student '\(studentName)' — £\(creditPounds) credited. PI: \(piID)")
 
-        // ── 8. Mark the booking as paid if this was a per-lesson payment ─────
+        // ── 8. Mark the booking as paid and handle recovery hold-clear ───────
         if let bookingIDStr = pi.metadata["bookingID"],
            let bookingID = UUID(uuidString: bookingIDStr),
            let booking = try? await Booking.find(bookingID, on: req.db) {
             booking.paymentStatus = "paid"
             try? await booking.save(on: req.db)
             req.logger.info("[Stripe] Booking \(bookingID) marked paid.")
+
+            // If this was a recovery payment, lift the account hold.
+            if pi.metadata["isRecovery"] == "true" {
+                if let profile = try? await StudentProfile.query(on: req.db)
+                    .filter(\.$user.$id == studentID)
+                    .first(), profile.accountHold {
+                    profile.accountHold = false
+                    profile.accountHoldReason = nil
+                    try? await profile.save(on: req.db)
+                    req.logger.notice("[Stripe] Account hold lifted for student \(studentID) after recovery payment.")
+                }
+            }
+        }
+
+        // ── 8b. Also lift hold if balance is now non-negative (covers top-up payments) ─
+        do {
+            let allEntries = try await LedgerEntry.query(on: req.db)
+                .filter(\.$student.$id == studentID)
+                .filter(\.$voidedAt == .null)
+                .all()
+            let currentBalance = allEntries.reduce(Decimal.zero) { $0 + $1.amount }
+            if currentBalance >= 0,
+               let profile = try await StudentProfile.query(on: req.db)
+                   .filter(\.$user.$id == studentID)
+                   .first(), profile.accountHold {
+                profile.accountHold = false
+                profile.accountHoldReason = nil
+                try await profile.save(on: req.db)
+                req.logger.notice("[Stripe] Account hold lifted for student \(studentID) — balance restored to £\(currentBalance).")
+            }
+        } catch {
+            req.logger.error("[Stripe] Hold-lift check failed for student \(studentID): \(error)")
         }
 
         // ── 10. Re-evaluate lesson coverage now that the student's balance has increased ──

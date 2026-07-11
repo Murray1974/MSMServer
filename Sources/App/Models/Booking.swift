@@ -67,6 +67,14 @@ final class Booking: Model, Content, @unchecked Sendable {
     @OptionalField(key: "rescheduled")
     var rescheduled: Bool?
 
+    /// Set when the 48-hour payment reminder push was dispatched.
+    @OptionalField(key: "payment_reminder_sent_at")
+    var paymentReminderSentAt: Date?
+
+    /// Set when the 7pm payment warning push was dispatched.
+    @OptionalField(key: "payment_warning_sent_at")
+    var paymentWarningSentAt: Date?
+
     init() { }
 
     init(

@@ -47,6 +47,10 @@ struct StudentBookingsController: RouteCollection {
 
         // POST /student/bookings/:bookingID/pay  (mock payment gateway)
         byID.post("pay", use: simulatePay)
+
+        // POST /student/bookings/recover-and-pay
+        // Called after an account hold to rebook the auto-cancelled lesson if it's still available.
+        bookings.post("recover-and-pay", use: recoverAndPay)
     }
 
     // MARK: INPUT STRUCTS
@@ -774,5 +778,90 @@ struct StudentBookingsController: RouteCollection {
               let token = instructor.fcmToken,
               let fcm = FCMNotificationService(req: req) else { return }
         try? await fcm.send(to: token, title: title, body: body)
+    }
+
+    // MARK: - POST /student/bookings/recover-and-pay
+
+    struct RecoverAndPayInput: Content {
+        let lessonID: UUID
+    }
+
+    struct RecoverAndPayResponse: Content {
+        let available: Bool
+        let clientSecret: String?
+        let bookingID: String?
+        let amountPence: Int?
+    }
+
+    /// Called after an account hold when the student wants to rebook the auto-cancelled slot.
+    /// If the lesson is still available, creates a new booking and a Stripe PaymentIntent.
+    func recoverAndPay(_ req: Request) async throws -> RecoverAndPayResponse {
+        let student   = try req.auth.require(User.self)
+        let studentID = try student.requireID()
+
+        // Verify student is on hold.
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first(), profile.accountHold else {
+            throw Abort(.forbidden, reason: "No active account hold.")
+        }
+
+        let input = try req.content.decode(RecoverAndPayInput.self)
+
+        // Verify lesson exists and is available.
+        guard let lesson = try await Lesson.find(input.lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Lesson not found.")
+        }
+
+        guard lesson.state == "available" && lesson.startsAt > Date() else {
+            return RecoverAndPayResponse(available: false, clientSecret: nil, bookingID: nil, amountPence: nil)
+        }
+
+        // Create a new booking in pending_recovery state.
+        let booking = Booking(
+            userID: studentID,
+            lessonID: input.lessonID,
+            paymentStatus: "pending_recovery"
+        )
+        try await booking.save(on: req.db)
+        guard let bookingID = booking.id else {
+            throw Abort(.internalServerError)
+        }
+
+        // Mark lesson as booked.
+        lesson.state = "booked"
+        try await lesson.save(on: req.db)
+
+        // Resolve amount.
+        let price: Decimal
+        if let snapshot = try await LessonFinance.find(input.lessonID, on: req.db)?.priceSnapshot, snapshot > 0 {
+            price = snapshot
+        } else {
+            let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+        }
+
+        var pence = price * 100
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &pence, 0, .plain)
+        let amountPence = max(50, NSDecimalNumber(decimal: rounded).intValue)
+
+        // Create Stripe PaymentIntent with recovery metadata.
+        let stripe = try StripeService(request: req)
+        let clientSecret = try await stripe.createPaymentIntent(
+            amount: amountPence,
+            metadata: [
+                "studentID": studentID.uuidString,
+                "bookingID": bookingID.uuidString,
+                "isRecovery": "true"
+            ]
+        )
+
+        return RecoverAndPayResponse(
+            available: true,
+            clientSecret: clientSecret,
+            bookingID: bookingID.uuidString,
+            amountPence: amountPence
+        )
     }
 }
