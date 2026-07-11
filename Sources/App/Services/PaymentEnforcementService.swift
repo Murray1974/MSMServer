@@ -66,6 +66,10 @@ struct PaymentEnforcementService {
         let studentID = booking.$user.id
         let startsAt = lesson.startsAt
 
+        // Only enforce bookings that explicitly require Stripe payment.
+        // Cash / bank-transfer students are managed manually and must not be auto-cancelled.
+        guard booking.paymentStatus == "requires_immediate_payment" else { return }
+
         // Only act once we're inside the 48-hour window.
         let threshold = startsAt.addingTimeInterval(-48 * 3_600)
         guard now >= threshold else { return }

@@ -1066,6 +1066,64 @@ public func routes(_ app: Application) throws {
         ]
     }
 
+    // POST /admin/restore-booking/:bookingID — un-cancels a system_auto_cancel booking
+    financeProtected.post("admin", "restore-booking", ":bookingID") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .with(\.$lesson)
+            .first()
+        else { throw Abort(.notFound, reason: "Booking not found") }
+
+        let studentID = booking.$user.id
+        let lessonID  = booking.$lesson.id
+
+        // Un-soft-delete the booking.
+        booking.deletedAt        = nil
+        booking.cancellationType = nil
+        booking.cancellationSource = nil
+        booking.paymentStatus    = "pending"
+        try await booking.restore(on: req.db)
+        try await booking.save(on: req.db)
+
+        // Restore lesson to booked state.
+        let lesson = booking.lesson
+        lesson.state = "booked"
+        try await lesson.save(on: req.db)
+
+        // Void any late_cancellation_charge entries for this lesson/student.
+        let charges = try await LedgerEntry.query(on: req.db)
+            .filter(\.$type == "late_cancellation_charge")
+            .filter(\.$lesson.$id == lessonID)
+            .all()
+        for charge in charges {
+            if charge.$student.id == studentID {
+                charge.voidedAt    = Date()
+                charge.voidReason  = "Restored by instructor — incorrect auto-cancel"
+                try await charge.save(on: req.db)
+            }
+        }
+
+        // Clear account hold if it was set by this cancellation.
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first(), profile.accountHold == true {
+            profile.accountHold       = false
+            profile.accountHoldReason = nil
+            try await profile.save(on: req.db)
+        }
+
+        req.logger.notice("[Admin] Booking \(bookingID) restored by \(instructor.username)")
+        return .ok
+    }
+
     financeProtected.post("finance", "payments", use: finance.addPayment)
     financeProtected.post("finance", "expenses", use: finance.addExpense)
     financeProtected.post("finance", "expenses", ":expenseID", "update", use: finance.updateExpense)
