@@ -89,6 +89,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(SeedDVSACentresSupplementary())
     app.migrations.add(CreatePasswordResetToken())
     app.migrations.add(CreateOdometerEntry())
+    app.migrations.add(AddAccountHoldToStudentProfile())
 
     try app.autoMigrate().wait()
 

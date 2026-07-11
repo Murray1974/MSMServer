@@ -755,6 +755,10 @@ public func routes(_ app: Application) throws {
         let lateCancelFeesCount = lateCancelEntries.count
         let lateCancelFeesTotal = lateCancelEntries.reduce(Decimal.zero) { $0 + abs($1.amount) }
 
+        let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+
         let transactions = activeEntries.compactMap { entry -> StudentTransactionView? in
             guard let id = entry.id else { return nil }
             return StudentTransactionView(
@@ -776,7 +780,9 @@ public func routes(_ app: Application) throws {
             currentBalance: balance,
             lateCancelFeesCount: lateCancelFeesCount,
             lateCancelFeesTotal: lateCancelFeesTotal,
-            transactions: transactions
+            transactions: transactions,
+            accountHold: profile?.accountHold ?? false,
+            accountHoldReason: profile?.accountHoldReason
         )
     }
 

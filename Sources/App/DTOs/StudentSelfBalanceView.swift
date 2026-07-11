@@ -5,4 +5,6 @@ struct StudentSelfBalanceView: Content {
     let lateCancelFeesCount: Int
     let lateCancelFeesTotal: Decimal
     let transactions: [StudentTransactionView]
+    let accountHold: Bool
+    let accountHoldReason: String?
 }

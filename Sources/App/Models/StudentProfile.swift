@@ -118,6 +118,14 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @Field(key: "licence_verified")
     var licenceVerified: Bool
 
+    // MARK: - Account hold
+
+    @Field(key: "account_hold")
+    var accountHold: Bool
+
+    @OptionalField(key: "account_hold_reason")
+    var accountHoldReason: String?
+
     // MARK: - Timestamps
 
     @Timestamp(key: "created_at", on: .create)
@@ -158,7 +166,9 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         theoryTestPassed: Bool = false,
         theoryTestDate: Date? = nil,
         licencePhotoPath: String? = nil,
-        licenceVerified: Bool = false
+        licenceVerified: Bool = false,
+        accountHold: Bool = false,
+        accountHoldReason: String? = nil
     ) {
         self.id = id
         self.$user.id = userID
@@ -187,5 +197,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.theoryTestDate = theoryTestDate
         self.licencePhotoPath = licencePhotoPath
         self.licenceVerified = licenceVerified
+        self.accountHold = accountHold
+        self.accountHoldReason = accountHoldReason
     }
 }
