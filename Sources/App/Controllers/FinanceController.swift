@@ -1006,13 +1006,23 @@ struct FinanceController {
         }
 
         let refundAmount = abs(input.amount ?? original.amount)
+
+        // If the original entry was a Stripe card payment, issue a real card refund first.
+        // The PI ID is stored in the note field for all entries of type "payment".
+        let isStripePayment = original.type == "payment" && original.note?.hasPrefix("pi_") == true
+        if isStripePayment, let piID = original.note {
+            let stripe = try StripeService(request: req)
+            let amountPence = NSDecimalNumber(decimal: refundAmount * 100).intValue
+            try await stripe.createRefund(paymentIntentID: piID, amount: amountPence)
+        }
+
         let refund = LedgerEntry(
             studentID: studentID,
             instructorID: instructorID,
             lessonID: original.$lesson.id,
             type: "refund",
             amount: refundAmount,
-            paymentMethod: nil,
+            paymentMethod: isStripePayment ? "stripe" : nil,
             note: input.reason,
             effectiveDate: Date(),
             createdByUserID: instructorID
@@ -1020,7 +1030,7 @@ struct FinanceController {
         try await refund.save(on: req.db)
         try await reevaluateCoverageForStudent(studentID, on: req.db)
 
-        req.logger.notice("[Finance] Refund of £\(refundAmount) issued by \(instructor.username) for student \(studentID) — reason: \(input.reason)")
+        req.logger.notice("[Finance] Refund of £\(refundAmount) issued by \(instructor.username) for student \(studentID) — Stripe=\(isStripePayment) — reason: \(input.reason)")
         return refund
     }
 

@@ -89,6 +89,50 @@ struct StripeService {
         return pi.client_secret
     }
 
+    // MARK: - Refund
+
+    /// Issues a Stripe refund against an existing PaymentIntent.
+    /// - Parameters:
+    ///   - paymentIntentID: The `pi_...` ID stored in the `LedgerEntry.note` field.
+    ///   - amount: Amount to refund in pence. Pass `nil` to refund the full charge.
+    func createRefund(paymentIntentID: String, amount: Int? = nil) async throws {
+        var params = ["payment_intent=\(paymentIntentID)"]
+        if let amount { params.append("amount=\(amount)") }
+        let formBody = params.joined(separator: "&")
+
+        let response = try await client.post(
+            URI(string: "https://api.stripe.com/v1/refunds")
+        ) { outReq in
+            outReq.headers.basicAuthorization = BasicAuthorization(username: secretKey, password: "")
+            outReq.headers.contentType = .urlEncodedForm
+            outReq.body = .init(string: formBody)
+        }
+
+        guard response.status == .ok else {
+            let raw = response.body.map {
+                String(bytes: $0.readableBytesView, encoding: .utf8) ?? "(unreadable)"
+            } ?? "(empty body)"
+            logger.error("[Stripe] Refund failed \(response.status): \(raw)")
+
+            // Surface Stripe's own error message when available.
+            struct StripeError: Decodable {
+                struct Detail: Decodable { let message: String? }
+                let error: Detail?
+            }
+            let reason: String
+            if let data = response.body,
+               let se = try? JSONDecoder().decode(StripeError.self, from: Data(data.readableBytesView)),
+               let msg = se.error?.message {
+                reason = msg
+            } else {
+                reason = "Stripe refund failed."
+            }
+            throw Abort(.badGateway, reason: reason)
+        }
+
+        logger.notice("[Stripe] Refund issued for PaymentIntent \(paymentIntentID).")
+    }
+
     // MARK: - Webhook signature verification
 
     /// Verifies the `Stripe-Signature` header against the raw request body using
