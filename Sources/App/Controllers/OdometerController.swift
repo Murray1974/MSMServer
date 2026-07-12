@@ -46,10 +46,12 @@ struct OdometerController: RouteCollection {
             .all()
 
         let now = Date()
-        let cal = Calendar.current
-        let sevenAgo  = cal.date(byAdding: .day, value: -7,  to: now)!
-        let thirtyAgo = cal.date(byAdding: .day, value: -30, to: now)!
-        let weekStart = cal.date(from: cal.dateComponents(
+        var londonCal = Calendar(identifier: .gregorian)
+        londonCal.timeZone = TimeZone(identifier: "Europe/London")!
+        londonCal.firstWeekday = 2  // Monday
+        let sevenAgo  = londonCal.date(byAdding: .day, value: -7,  to: now)!
+        let thirtyAgo = londonCal.date(byAdding: .day, value: -30, to: now)!
+        let weekStart = londonCal.date(from: londonCal.dateComponents(
             [.yearForWeekOfYear, .weekOfYear], from: now))!
 
         let sevenDayMiles  = all.filter { $0.date >= sevenAgo  }.reduce(0) { $0 + $1.dailyMiles }
