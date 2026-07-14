@@ -1210,6 +1210,15 @@ public func routes(_ app: Application) throws {
     financeProtected.post("instructor",   "odometer", "gap",       use: odometerController.logGapEntries)
     financeProtected.delete("instructor", "odometer", ":entryID",  use: odometerController.delete)
 
+    // Fuel log
+    // GET    /instructor/fuel          — full history + stats
+    // POST   /instructor/fuel          — log a fill-up
+    // DELETE /instructor/fuel/:entryID
+    let fuelController = FuelController()
+    financeProtected.get("instructor",    "fuel",              use: fuelController.list)
+    financeProtected.post("instructor",   "fuel",              use: fuelController.log)
+    financeProtected.delete("instructor", "fuel", ":entryID",  use: fuelController.delete)
+
     // Chat
     // GET    /student/chat/messages
     // POST   /student/chat/messages
