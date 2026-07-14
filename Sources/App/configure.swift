@@ -90,6 +90,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreatePasswordResetToken())
     app.migrations.add(CreateOdometerEntry())
     app.migrations.add(CreateFuelEntry())
+    app.migrations.add(AddVendorAndBusinessPercentToExpenseEntry())
     app.migrations.add(AddAccountHoldToStudentProfile())
     app.migrations.add(AddPaymentEnforcementFieldsToBooking())
 

@@ -16,6 +16,9 @@ final class ExpenseEntry: Model, Content, @unchecked Sendable {
     @Field(key: "category")
     var category: String
 
+    @OptionalField(key: "vendor")
+    var vendor: String?
+
     @OptionalField(key: "note")
     var note: String?
 
@@ -27,6 +30,9 @@ final class ExpenseEntry: Model, Content, @unchecked Sendable {
 
     @Field(key: "is_business_use")
     var isBusinessUse: Bool
+
+    @Field(key: "business_use_percent")
+    var businessUsePercent: Double
 
     @OptionalField(key: "mileage")
     var mileage: Int?
@@ -41,20 +47,24 @@ final class ExpenseEntry: Model, Content, @unchecked Sendable {
         instructorID: UUID,
         amount: Decimal,
         category: String,
+        vendor: String? = nil,
         note: String? = nil,
         expenseDate: Date,
         receiptPath: String? = nil,
         isBusinessUse: Bool = true,
+        businessUsePercent: Double = 100.0,
         mileage: Int? = nil
     ) {
         self.id = id
         self.$instructor.id = instructorID
         self.amount = amount
         self.category = category
+        self.vendor = vendor
         self.note = note
         self.expenseDate = expenseDate
         self.receiptPath = receiptPath
         self.isBusinessUse = isBusinessUse
+        self.businessUsePercent = businessUsePercent
         self.mileage = mileage
     }
 }

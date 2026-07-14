@@ -44,9 +44,12 @@ struct VehicleController: RouteCollection {
         let id: UUID
         let amount: Double
         let category: String
+        let vendor: String?
         let note: String?
         let expenseDate: Date
         let isBusinessUse: Bool
+        let businessUsePercent: Double
+        let claimableAmount: Double
         let mileage: Int?
         let hasReceipt: Bool
         let createdAt: Date?
@@ -128,9 +131,11 @@ struct VehicleController: RouteCollection {
         struct ExpenseInput: Content {
             var amount: String
             var category: String
+            var vendor: String?
             var note: String?
             var expenseDate: String?
             var isBusinessUse: String?
+            var businessUsePercent: String?
             var mileage: String?
             var wasMOT: String?
             var photo: File?
@@ -151,17 +156,20 @@ struct VehicleController: RouteCollection {
             expenseDate = Date()
         }
 
-        let isBusinessUse = input.isBusinessUse?.lowercased() != "false"
+        let businessUsePercent = input.businessUsePercent.flatMap { Double($0) } ?? 100.0
+        let isBusinessUse = businessUsePercent > 0
         let mileage = input.mileage.flatMap { Int($0) }
 
         let entry = ExpenseEntry(
-            instructorID:  instructorID,
-            amount:        amountDecimal,
-            category:      input.category.lowercased(),
-            note:          input.note?.isEmpty == true ? nil : input.note,
-            expenseDate:   expenseDate,
-            isBusinessUse: isBusinessUse,
-            mileage:       mileage
+            instructorID:       instructorID,
+            amount:             amountDecimal,
+            category:           input.category.lowercased(),
+            vendor:             input.vendor?.isEmpty == true ? nil : input.vendor,
+            note:               input.note?.isEmpty == true ? nil : input.note,
+            expenseDate:        expenseDate,
+            isBusinessUse:      isBusinessUse,
+            businessUsePercent: businessUsePercent,
+            mileage:            mileage
         )
         try await entry.save(on: req.db)
 
@@ -240,9 +248,10 @@ struct VehicleController: RouteCollection {
         var totalPersonal: Double = 0
 
         for e in entries {
-            let amt = (e.amount as NSDecimalNumber).doubleValue
-            byCategory[e.category, default: 0] += amt
-            if e.isBusinessUse { totalBusiness += amt } else { totalPersonal += amt }
+            let amt       = (e.amount as NSDecimalNumber).doubleValue
+            let claimable = (amt * e.businessUsePercent / 100 * 100).rounded() / 100
+            byCategory[e.category, default: 0] += claimable
+            if e.isBusinessUse { totalBusiness += claimable } else { totalPersonal += amt }
         }
 
         return ExpenseSummaryResponse(
@@ -422,16 +431,21 @@ struct VehicleController: RouteCollection {
     }
 
     private func toExpenseRow(_ entry: ExpenseEntry) throws -> ExpenseRow {
-        ExpenseRow(
-            id:            try entry.requireID(),
-            amount:        (entry.amount as NSDecimalNumber).doubleValue,
-            category:      entry.category,
-            note:          entry.note,
-            expenseDate:   entry.expenseDate,
-            isBusinessUse: entry.isBusinessUse,
-            mileage:       entry.mileage,
-            hasReceipt:    entry.receiptPath != nil,
-            createdAt:     entry.createdAt
+        let amount = (entry.amount as NSDecimalNumber).doubleValue
+        let pct    = entry.businessUsePercent
+        return ExpenseRow(
+            id:                 try entry.requireID(),
+            amount:             amount,
+            category:           entry.category,
+            vendor:             entry.vendor,
+            note:               entry.note,
+            expenseDate:        entry.expenseDate,
+            isBusinessUse:      entry.isBusinessUse,
+            businessUsePercent: pct,
+            claimableAmount:    (amount * pct / 100 * 100).rounded() / 100,
+            mileage:            entry.mileage,
+            hasReceipt:         entry.receiptPath != nil,
+            createdAt:          entry.createdAt
         )
     }
 }
