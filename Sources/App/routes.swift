@@ -1144,11 +1144,14 @@ public func routes(_ app: Application) throws {
             .count() > 0
         else { throw Abort(.notFound, reason: "Booking not found") }
 
-        // Use raw SQL because Fluent's save() skips soft-deleted rows
-        // (it adds WHERE deleted_at IS NULL to the UPDATE).
-        try await (req.db as! SQLDatabase).raw(
-            "UPDATE bookings SET cancellation_type = NULL, cancellation_source = NULL WHERE id = \(bind: bookingID)"
-        ).run()
+        // Fluent's bulk-update path with withDeleted() updates the row without
+        // inserting a WHERE deleted_at IS NULL guard (unlike Model.save()).
+        try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .set(\.$cancellationType, to: Optional<String>.none)
+            .set(\.$cancellationSource, to: Optional<String>.none)
+            .update()
 
         req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
         return .ok
