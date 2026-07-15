@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import FluentSQL
 import Foundation
 
 private struct SlotLink: Content {
@@ -1144,14 +1145,14 @@ public func routes(_ app: Application) throws {
             .count() > 0
         else { throw Abort(.notFound, reason: "Booking not found") }
 
-        // Fluent's bulk-update path with withDeleted() updates the row without
-        // inserting a WHERE deleted_at IS NULL guard (unlike Model.save()).
-        try await Booking.query(on: req.db)
-            .withDeleted()
-            .filter(\.$id == bookingID)
-            .set(\.$cancellationType, to: Optional<String>.none)
-            .set(\.$cancellationSource, to: Optional<String>.none)
-            .update()
+        // Raw SQL via FluentSQL so the UPDATE bypasses Fluent's soft-delete
+        // WHERE deleted_at IS NULL guard entirely.
+        guard let sql = req.db as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "DB is not an SQLDatabase")
+        }
+        try await sql.raw(
+            "UPDATE bookings SET cancellation_type = NULL, cancellation_source = NULL WHERE id = \(bind: bookingID)"
+        ).run()
 
         req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
         return .ok
