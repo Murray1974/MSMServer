@@ -1137,15 +1137,18 @@ public func routes(_ app: Application) throws {
             throw Abort(.badRequest, reason: "Missing bookingID")
         }
 
-        guard let booking = try await Booking.query(on: req.db)
+        // Verify the booking exists (including soft-deleted).
+        guard try await Booking.query(on: req.db)
             .withDeleted()
             .filter(\.$id == bookingID)
-            .first()
+            .count() > 0
         else { throw Abort(.notFound, reason: "Booking not found") }
 
-        booking.cancellationType   = nil
-        booking.cancellationSource = nil
-        try await booking.save(on: req.db)
+        // Use raw SQL because Fluent's save() skips soft-deleted rows
+        // (it adds WHERE deleted_at IS NULL to the UPDATE).
+        try await (req.db as! SQLDatabase).raw(
+            "UPDATE bookings SET cancellation_type = NULL, cancellation_source = NULL WHERE id = \(bind: bookingID)"
+        ).run()
 
         req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
         return .ok
