@@ -1126,6 +1126,31 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/clear-late-cancel/:bookingID — clears cancellationType on a soft-deleted duplicate
+    // without un-deleting it. Use when a booking can't be fully restored due to a unique constraint
+    // (e.g., a duplicate auto-cancel record that should just be scrubbed quietly).
+    financeProtected.post("admin", "clear-late-cancel", ":bookingID") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .first()
+        else { throw Abort(.notFound, reason: "Booking not found") }
+
+        booking.cancellationType   = nil
+        booking.cancellationSource = nil
+        try await booking.save(on: req.db)
+
+        req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
+        return .ok
+    }
+
     financeProtected.post("finance", "payments", use: finance.addPayment)
     financeProtected.post("finance", "expenses", use: finance.addExpense)
     financeProtected.post("finance", "expenses", ":expenseID", "update", use: finance.updateExpense)

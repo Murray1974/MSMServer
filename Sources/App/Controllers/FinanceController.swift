@@ -687,12 +687,13 @@ struct FinanceController {
             }
 
             // Outstanding late cancel fees = gross charges minus any waivers already applied.
-            let lateCancelCharges = ledgerForStudent.filter { $0.type == "late_cancellation_charge" }
+            // Only count non-voided entries so voided charges don't inflate the totals.
+            let lateCancelCharges = ledgerForStudent.filter { $0.type == "late_cancellation_charge" && $0.voidedAt == nil }
                 .reduce(Decimal.zero) { $0 + abs($1.amount) }
             let lateCancelWaivers = ledgerForStudent.filter { $0.type == "fee_waiver" }
                 .reduce(Decimal.zero) { $0 + $1.amount }
             let netLateCancelFees = max(Decimal.zero, lateCancelCharges - lateCancelWaivers)
-            let lateCancelEntries = ledgerForStudent.filter { $0.type == "late_cancellation_charge" }
+            let lateCancelEntries = ledgerForStudent.filter { $0.type == "late_cancellation_charge" && $0.voidedAt == nil }
             let lateCancelFeesCount = netLateCancelFees > 0 ? lateCancelEntries.count : 0
             let lateCancelFeesTotal = netLateCancelFees
 
