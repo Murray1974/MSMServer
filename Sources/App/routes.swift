@@ -1130,7 +1130,14 @@ public func routes(_ app: Application) throws {
     // POST /admin/clear-late-cancel/:bookingID — clears cancellationType on a soft-deleted duplicate
     // without un-deleting it. Use when a booking can't be fully restored due to a unique constraint
     // (e.g., a duplicate auto-cancel record that should just be scrubbed quietly).
-    financeProtected.post("admin", "clear-late-cancel", ":bookingID") { req async throws -> HTTPStatus in
+    struct ClearLateCancelResult: Content {
+        var found: Bool
+        var isSQLDatabase: Bool
+        var cancellationTypeBefore: String?
+        var cancellationTypeAfter: String?
+        var uuidStr: String
+    }
+    financeProtected.post("admin", "clear-late-cancel", ":bookingID") { req async throws -> ClearLateCancelResult in
         let instructor = try req.auth.require(User.self)
         guard instructor.role == "instructor" else { throw Abort(.forbidden) }
 
@@ -1138,24 +1145,36 @@ public func routes(_ app: Application) throws {
             throw Abort(.badRequest, reason: "Missing bookingID")
         }
 
-        // Verify the booking exists (including soft-deleted).
-        guard try await Booking.query(on: req.db)
+        let uuidStr = bookingID.uuidString
+
+        // Read state before
+        let before = try await Booking.query(on: req.db)
             .withDeleted()
             .filter(\.$id == bookingID)
-            .count() > 0
-        else { throw Abort(.notFound, reason: "Booking not found") }
+            .first()
 
-        // Raw SQL via FluentSQL so the UPDATE bypasses Fluent's soft-delete
-        // WHERE deleted_at IS NULL guard entirely.
-        guard let sql = req.db as? SQLDatabase else {
-            throw Abort(.internalServerError, reason: "DB is not an SQLDatabase")
+        let isSQLDatabase = req.db is SQLDatabase
+
+        if let sql = req.db as? SQLDatabase {
+            try await sql.raw(
+                "UPDATE bookings SET cancellation_type = NULL, cancellation_source = NULL WHERE id = \(bind: bookingID)"
+            ).run()
         }
-        try await sql.raw(
-            "UPDATE bookings SET cancellation_type = NULL, cancellation_source = NULL WHERE id = \(bind: bookingID)"
-        ).run()
 
-        req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
-        return .ok
+        // Read state after
+        let after = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$id == bookingID)
+            .first()
+
+        req.logger.notice("[Admin] clear-late-cancel \(uuidStr): before=\(before?.cancellationType ?? "nil") after=\(after?.cancellationType ?? "nil") isSQL=\(isSQLDatabase)")
+        return ClearLateCancelResult(
+            found: before != nil,
+            isSQLDatabase: isSQLDatabase,
+            cancellationTypeBefore: before?.cancellationType,
+            cancellationTypeAfter: after?.cancellationType,
+            uuidStr: uuidStr
+        )
     }
 
     financeProtected.post("finance", "payments", use: finance.addPayment)
