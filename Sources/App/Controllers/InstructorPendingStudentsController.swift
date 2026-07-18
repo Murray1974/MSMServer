@@ -27,8 +27,20 @@ struct InstructorPendingStudentsController: RouteCollection {
         let reason: String
     }
 
+    struct CompleteProfileRequest: Content {
+        let tcVersion: String
+        let gdprConsent: Bool
+        let dashcamConsent: Bool
+        let socialMediaOptIn: Bool
+        let eyesightConfirmed: Bool
+        let dateOfBirth: Date?
+        let transmissionPreference: String?
+        let previousHours: Int?
+    }
+
     struct StatusResponse: Content {
         let approvalStatus: String
+        let profileComplete: Bool
     }
 
     // MARK: - GET /instructor/students/pending
@@ -102,6 +114,60 @@ struct InstructorPendingStudentsController: RouteCollection {
         return .ok
     }
 
+    // MARK: - POST /student/complete-profile
+
+    func completeProfile(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        let input = try req.content.decode(CompleteProfileRequest.self)
+
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Profile not found.")
+        }
+
+        guard input.gdprConsent else {
+            throw Abort(.unprocessableEntity, reason: "GDPR consent is required.")
+        }
+        guard input.dashcamConsent else {
+            throw Abort(.unprocessableEntity, reason: "Dashcam consent is required.")
+        }
+        guard input.eyesightConfirmed else {
+            throw Abort(.unprocessableEntity, reason: "Please confirm your eyesight meets the legal standard.")
+        }
+
+        let now = Date()
+        if profile.tcAcceptedAt == nil {
+            profile.tcAcceptedAt = now
+            profile.tcVersion = input.tcVersion
+        }
+        if profile.gdprConsentAt == nil {
+            profile.gdprConsentAt = now
+        }
+        if profile.dashcamConsentAt == nil {
+            profile.dashcamConsentAt = now
+        }
+        if profile.eyesightConfirmedAt == nil {
+            profile.eyesightConfirmedAt = now
+        }
+        profile.socialMediaOptIn = input.socialMediaOptIn
+        if let dob = input.dateOfBirth, profile.dateOfBirth == nil {
+            profile.dateOfBirth = dob
+        }
+        if let tp = input.transmissionPreference, profile.transmissionPreference == nil {
+            profile.transmissionPreference = tp
+        }
+        if let ph = input.previousHours, profile.previousHours == nil {
+            profile.previousHours = ph
+        }
+
+        try await profile.save(on: req.db)
+        req.logger.notice("[Students] Profile completed for user \(userID)")
+        return .ok
+    }
+
     // MARK: - GET /student/status (student-facing)
 
     func studentStatus(_ req: Request) async throws -> StatusResponse {
@@ -115,6 +181,11 @@ struct InstructorPendingStudentsController: RouteCollection {
             throw Abort(.notFound, reason: "Profile not found.")
         }
 
-        return StatusResponse(approvalStatus: profile.approvalStatus)
+        let profileComplete = profile.gdprConsentAt != nil
+            && profile.dashcamConsentAt != nil
+            && profile.tcAcceptedAt != nil
+            && profile.eyesightConfirmedAt != nil
+
+        return StatusResponse(approvalStatus: profile.approvalStatus, profileComplete: profileComplete)
     }
 }

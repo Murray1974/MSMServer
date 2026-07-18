@@ -1291,8 +1291,9 @@ public func routes(_ app: Application) throws {
     financeProtected.post("instructor", "students", ":studentID", "approve", use: pendingController.approve)
     financeProtected.post("instructor", "students", ":studentID", "reject",  use: pendingController.reject)
 
-    // Student approval status check
-    studentProtected.get("status", use: pendingController.studentStatus)
+    // Student approval status check + profile completion
+    studentProtected.get("status",            use: pendingController.studentStatus)
+    studentProtected.post("complete-profile", use: pendingController.completeProfile)
 
     // controllers
     try app.register(collection: AuthController())

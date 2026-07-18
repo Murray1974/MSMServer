@@ -38,6 +38,7 @@ struct AuthController: RouteCollection {
     struct LoginResponse: Content {
         let token: String
         let approvalStatus: String?
+        let profileComplete: Bool?
     }
 
     struct ForgotPasswordRequest: Content {
@@ -165,13 +166,18 @@ struct AuthController: RouteCollection {
         let uid = try user.requireID()
         req.session.data["userID"] = uid.uuidString   // <-- Sets Set-Cookie: vapor-session=...
 
-        // Return approvalStatus so student app can show pending screen if account not yet approved.
-        // Instructor accounts have no StudentProfile so approvalStatus will be nil (skipped).
+        // Return approvalStatus and profileComplete so the student app can gate access correctly.
+        // Instructor accounts have no StudentProfile so both fields will be nil.
         let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == uid)
             .first()
 
-        return .init(token: raw, approvalStatus: profile?.approvalStatus)
+        let profileComplete: Bool? = profile.map {
+            $0.gdprConsentAt != nil && $0.dashcamConsentAt != nil
+                && $0.tcAcceptedAt != nil && $0.eyesightConfirmedAt != nil
+        }
+
+        return .init(token: raw, approvalStatus: profile?.approvalStatus, profileComplete: profileComplete)
     }
 
     /// POST /auth/logout
