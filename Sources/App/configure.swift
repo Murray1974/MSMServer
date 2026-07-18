@@ -14,6 +14,32 @@ public func configure(_ app: Application) throws {
     encoder.dateEncodingStrategy = .iso8601
     ContentConfiguration.global.use(encoder: encoder, for: .json)
 
+    // Decode ISO8601 date strings from request bodies, supporting both fractional-second
+    // ("2000-01-01T00:00:00.000Z" — Flutter's toIso8601String()) and whole-second
+    // ("2000-01-01T00:00:00Z" — Swift's .iso8601 encoder) formats.
+    let decoder = JSONDecoder()
+    let isoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    let isoWhole: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    decoder.dateDecodingStrategy = .custom { dec in
+        let container = try dec.singleValueContainer()
+        let str = try container.decode(String.self)
+        if let date = isoFrac.date(from: str) { return date }
+        if let date = isoWhole.date(from: str) { return date }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Expected ISO8601 date string, got: \(str)"
+        )
+    }
+    ContentConfiguration.global.use(decoder: decoder, for: .json)
+
     // db setup…
     app.databases.use(.postgres(
         hostname: Environment.get("POSTGRES_HOST") ?? "127.0.0.1",
