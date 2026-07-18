@@ -1284,6 +1284,16 @@ public func routes(_ app: Application) throws {
     financeProtected.post("instructor",   "student", ":studentID", "private-notes", use: privateNoteController.createPrivateNote)
     financeProtected.patch("instructor",  "private-notes", ":noteID", use: privateNoteController.updatePrivateNote)
     financeProtected.delete("instructor", "private-notes", ":noteID", use: privateNoteController.deletePrivateNote)
+
+    // Pending student approval (instructor)
+    let pendingController = InstructorPendingStudentsController()
+    financeProtected.get("instructor",  "students", "pending",              use: pendingController.listPending)
+    financeProtected.post("instructor", "students", ":profileID", "approve", use: pendingController.approve)
+    financeProtected.post("instructor", "students", ":profileID", "reject",  use: pendingController.reject)
+
+    // Student approval status check
+    studentProtected.get("status", use: pendingController.studentStatus)
+
     // controllers
     try app.register(collection: AuthController())
     try app.register(collection: LessonsController())

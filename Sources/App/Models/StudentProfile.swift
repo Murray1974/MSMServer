@@ -126,6 +126,47 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "account_hold_reason")
     var accountHoldReason: String?
 
+    // MARK: - Registration consents
+
+    @OptionalField(key: "tc_accepted_at")
+    var tcAcceptedAt: Date?
+
+    @OptionalField(key: "tc_version")
+    var tcVersion: String?
+
+    @OptionalField(key: "gdpr_consent_at")
+    var gdprConsentAt: Date?
+
+    @OptionalField(key: "dashcam_consent_at")
+    var dashcamConsentAt: Date?
+
+    @Field(key: "social_media_opt_in")
+    var socialMediaOptIn: Bool
+
+    @OptionalField(key: "eyesight_confirmed_at")
+    var eyesightConfirmedAt: Date?
+
+    // MARK: - Driving background (self-reported at registration)
+
+    @OptionalField(key: "date_of_birth")
+    var dateOfBirth: Date?
+
+    /// "manual" | "automatic" | "either"
+    @OptionalField(key: "transmission_preference")
+    var transmissionPreference: String?
+
+    @OptionalField(key: "previous_hours")
+    var previousHours: Int?
+
+    // MARK: - Approval
+
+    /// "pending" | "approved" | "rejected"
+    @Field(key: "approval_status")
+    var approvalStatus: String
+
+    @OptionalField(key: "approval_notes")
+    var approvalNotes: String?
+
     // MARK: - Timestamps
 
     @Timestamp(key: "created_at", on: .create)
@@ -168,7 +209,18 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         licencePhotoPath: String? = nil,
         licenceVerified: Bool = false,
         accountHold: Bool = false,
-        accountHoldReason: String? = nil
+        accountHoldReason: String? = nil,
+        tcAcceptedAt: Date? = nil,
+        tcVersion: String? = nil,
+        gdprConsentAt: Date? = nil,
+        dashcamConsentAt: Date? = nil,
+        socialMediaOptIn: Bool = false,
+        eyesightConfirmedAt: Date? = nil,
+        dateOfBirth: Date? = nil,
+        transmissionPreference: String? = nil,
+        previousHours: Int? = nil,
+        approvalStatus: String = "approved",
+        approvalNotes: String? = nil
     ) {
         self.id = id
         self.$user.id = userID
@@ -199,5 +251,16 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.licenceVerified = licenceVerified
         self.accountHold = accountHold
         self.accountHoldReason = accountHoldReason
+        self.tcAcceptedAt = tcAcceptedAt
+        self.tcVersion = tcVersion
+        self.gdprConsentAt = gdprConsentAt
+        self.dashcamConsentAt = dashcamConsentAt
+        self.socialMediaOptIn = socialMediaOptIn
+        self.eyesightConfirmedAt = eyesightConfirmedAt
+        self.dateOfBirth = dateOfBirth
+        self.transmissionPreference = transmissionPreference
+        self.previousHours = previousHours
+        self.approvalStatus = approvalStatus
+        self.approvalNotes = approvalNotes
     }
 }

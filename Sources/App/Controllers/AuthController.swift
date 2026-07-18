@@ -22,10 +22,22 @@ struct AuthController: RouteCollection {
         let password: String
         let firstName: String
         let lastName: String
+        // Consents — all must be true except socialMediaOptIn
+        let tcVersion: String
+        let gdprConsent: Bool
+        let dashcamConsent: Bool
+        let socialMediaOptIn: Bool
+        let eyesightConfirmed: Bool
+        // Driving background
+        let provisionalLicenceNumber: String?
+        let dateOfBirth: Date?
+        let transmissionPreference: String?
+        let previousHours: Int?
     }
 
     struct LoginResponse: Content {
         let token: String
+        let approvalStatus: String?
     }
 
     struct ForgotPasswordRequest: Content {
@@ -41,8 +53,9 @@ struct AuthController: RouteCollection {
     // MARK: - Handlers
 
     /// POST /auth/register
-    /// Self-registration for new students. Creates User + StudentProfile and returns a session
-    /// token so the student is logged in immediately after signing up.
+    /// Self-registration for new students. Creates User + StudentProfile (approval_status =
+    /// "pending") and returns a session token and the pending status so the app shows a
+    /// waiting screen until the instructor approves the account.
     func register(_ req: Request) async throws -> LoginResponse {
         let input = try req.content.decode(RegisterRequest.self)
 
@@ -56,6 +69,15 @@ struct AuthController: RouteCollection {
         }
         guard input.password.count >= 8 else {
             throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
+        }
+        guard input.gdprConsent else {
+            throw Abort(.unprocessableEntity, reason: "GDPR consent is required to create an account.")
+        }
+        guard input.dashcamConsent else {
+            throw Abort(.unprocessableEntity, reason: "Dashcam consent is required to take lessons.")
+        }
+        guard input.eyesightConfirmed else {
+            throw Abort(.unprocessableEntity, reason: "Please confirm your eyesight meets the legal standard.")
         }
 
         // Email must be unique across both User (username) and StudentProfile.
@@ -82,11 +104,23 @@ struct AuthController: RouteCollection {
         try await user.save(on: req.db)
         let userID = try user.requireID()
 
+        let now = Date()
         let profile = StudentProfile(
             userID: userID,
             firstName: user.firstName,
             lastName: user.lastName,
-            email: email
+            email: email,
+            provisionalLicenceNumber: input.provisionalLicenceNumber,
+            tcAcceptedAt: now,
+            tcVersion: input.tcVersion,
+            gdprConsentAt: input.gdprConsent ? now : nil,
+            dashcamConsentAt: input.dashcamConsent ? now : nil,
+            socialMediaOptIn: input.socialMediaOptIn,
+            eyesightConfirmedAt: input.eyesightConfirmed ? now : nil,
+            dateOfBirth: input.dateOfBirth,
+            transmissionPreference: input.transmissionPreference,
+            previousHours: input.previousHours,
+            approvalStatus: "pending"
         )
         try await profile.save(on: req.db)
 
@@ -94,8 +128,8 @@ struct AuthController: RouteCollection {
         try await token.save(on: req.db)
         req.session.data["userID"] = userID.uuidString
 
-        req.logger.notice("[Auth] New student registered: '\(email)'")
-        return .init(token: raw)
+        req.logger.notice("[Auth] New student registered (pending approval): '\(email)'")
+        return .init(token: raw, approvalStatus: "pending")
     }
 
     /// POST /auth/login
@@ -131,7 +165,13 @@ struct AuthController: RouteCollection {
         let uid = try user.requireID()
         req.session.data["userID"] = uid.uuidString   // <-- Sets Set-Cookie: vapor-session=...
 
-        return .init(token: raw)
+        // Return approvalStatus so student app can show pending screen if account not yet approved.
+        // Instructor accounts have no StudentProfile so approvalStatus will be nil (skipped).
+        let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == uid)
+            .first()
+
+        return .init(token: raw, approvalStatus: profile?.approvalStatus)
     }
 
     /// POST /auth/logout
