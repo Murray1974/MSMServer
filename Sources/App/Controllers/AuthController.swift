@@ -130,7 +130,7 @@ struct AuthController: RouteCollection {
         req.session.data["userID"] = userID.uuidString
 
         req.logger.notice("[Auth] New student registered (pending approval): '\(email)'")
-        return .init(token: raw, approvalStatus: "pending")
+        return .init(token: raw, approvalStatus: "pending", profileComplete: true)
     }
 
     /// POST /auth/login
