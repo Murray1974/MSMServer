@@ -167,6 +167,5 @@ public func configure(_ app: Application) throws {
     }
 
     // register routes
-    try app.register(collection: AdminCalendarController())
     try routes(app)
 }
