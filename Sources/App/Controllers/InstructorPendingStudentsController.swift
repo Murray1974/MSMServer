@@ -36,6 +36,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         let dateOfBirth: Date?
         let transmissionPreference: String?
         let previousHours: Int?
+        let provisionalLicenceNumber: String?
     }
 
     struct StatusResponse: Content {
@@ -161,6 +162,9 @@ struct InstructorPendingStudentsController: RouteCollection {
         }
         if let ph = input.previousHours, profile.previousHours == nil {
             profile.previousHours = ph
+        }
+        if let ln = input.provisionalLicenceNumber, !ln.isEmpty, profile.provisionalLicenceNumber == nil {
+            profile.provisionalLicenceNumber = ln
         }
 
         try await profile.save(on: req.db)
