@@ -105,8 +105,8 @@ struct InstructorPendingStudentsController: RouteCollection {
     // MARK: - GET /student/status (student-facing)
 
     func studentStatus(_ req: Request) async throws -> StatusResponse {
-        let token = try req.auth.require(SessionToken.self)
-        let userID = token.$user.id
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
 
         guard let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == userID)
