@@ -45,8 +45,6 @@ jobs:
             set -e
             cd /opt/msm
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            git fetch origin main
-            git checkout origin/main -- docker-compose.yml
             docker compose stop app || true
             docker image rm ghcr.io/murray1974/msmserver:latest || true
             docker pull ghcr.io/murray1974/msmserver:latest
