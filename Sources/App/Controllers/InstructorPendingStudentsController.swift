@@ -163,7 +163,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         if let ph = input.previousHours, profile.previousHours == nil {
             profile.previousHours = ph
         }
-        if let ln = input.provisionalLicenceNumber, !ln.isEmpty, profile.provisionalLicenceNumber == nil {
+        if let ln = input.provisionalLicenceNumber, !ln.isEmpty {
             profile.provisionalLicenceNumber = ln
         }
 
