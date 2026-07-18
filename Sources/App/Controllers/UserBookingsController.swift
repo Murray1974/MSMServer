@@ -29,6 +29,9 @@ struct MeProfileResponse: Content {
         var theoryTestDate: Date?
         var licencePhotoPath: String?
         var licenceVerified: Bool?
+        var dateOfBirth: Date?
+        var transmissionPreference: String?
+        var previousHours: Int?
     }
 
     var id: UUID
@@ -59,6 +62,9 @@ struct UpdateProfileInput: Content {
     var hourlyRatePence: Int?
     var eyesightTestPassed: Bool?
     var medicalConditions: String?
+    var dateOfBirth: Date?
+    var transmissionPreference: String?
+    var previousHours: Int?
 }
 
 struct UserBookingsController: RouteCollection {
@@ -120,7 +126,10 @@ struct UserBookingsController: RouteCollection {
                 theoryTestPassed: p.theoryTestPassed,
                 theoryTestDate: p.theoryTestDate,
                 licencePhotoPath: p.licencePhotoPath,
-                licenceVerified: p.licenceVerified
+                licenceVerified: p.licenceVerified,
+                dateOfBirth: p.dateOfBirth,
+                transmissionPreference: p.transmissionPreference,
+                previousHours: p.previousHours
             )
         } else {
             profilePayload = nil
@@ -235,6 +244,9 @@ struct UserBookingsController: RouteCollection {
             if let v = input.hourlyRatePence { current.hourlyRatePence = v }
             if let v = input.eyesightTestPassed { current.eyesightTestPassed = v }
             if let v = input.medicalConditions { current.medicalConditions = v }
+            if let v = input.dateOfBirth { current.dateOfBirth = v }
+            if let v = input.transmissionPreference { current.transmissionPreference = v }
+            if let v = input.previousHours { current.previousHours = v }
 
             profileModel = current
         } else {
@@ -261,7 +273,10 @@ struct UserBookingsController: RouteCollection {
                 defaultLessonLengthMinutes: input.defaultLessonLengthMinutes ?? 120,
                 hourlyRatePence: input.hourlyRatePence ?? 4500,
                 eyesightTestPassed: input.eyesightTestPassed ?? false,
-                medicalConditions: input.medicalConditions
+                medicalConditions: input.medicalConditions,
+                dateOfBirth: input.dateOfBirth,
+                transmissionPreference: input.transmissionPreference,
+                previousHours: input.previousHours
             )
         }
 
