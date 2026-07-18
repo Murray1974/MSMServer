@@ -22,6 +22,7 @@ struct AuthController: RouteCollection {
         let password: String
         let firstName: String
         let lastName: String
+        let mobile: String?
         // Consents — all must be true except socialMediaOptIn
         let tcVersion: String
         let gdprConsent: Bool
@@ -110,6 +111,7 @@ struct AuthController: RouteCollection {
             userID: userID,
             firstName: user.firstName,
             lastName: user.lastName,
+            mobile: input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email,
             provisionalLicenceNumber: input.provisionalLicenceNumber,
             tcAcceptedAt: now,

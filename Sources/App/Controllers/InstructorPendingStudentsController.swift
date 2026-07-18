@@ -11,6 +11,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         let firstName: String?
         let lastName: String?
         let email: String?
+        let mobile: String?
         let provisionalLicenceNumber: String?
         let dateOfBirth: Date?
         let transmissionPreference: String?
@@ -33,6 +34,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         let dashcamConsent: Bool
         let socialMediaOptIn: Bool
         let eyesightConfirmed: Bool
+        let mobile: String?
         let dateOfBirth: Date?
         let transmissionPreference: String?
         let previousHours: Int?
@@ -59,6 +61,7 @@ struct InstructorPendingStudentsController: RouteCollection {
                 firstName: p.firstName,
                 lastName: p.lastName,
                 email: p.email,
+                mobile: p.mobile,
                 provisionalLicenceNumber: p.provisionalLicenceNumber,
                 dateOfBirth: p.dateOfBirth,
                 transmissionPreference: p.transmissionPreference,
@@ -154,6 +157,9 @@ struct InstructorPendingStudentsController: RouteCollection {
             profile.eyesightConfirmedAt = now
         }
         profile.socialMediaOptIn = input.socialMediaOptIn
+        if let m = input.mobile, !m.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            profile.mobile = m.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if let dob = input.dateOfBirth, profile.dateOfBirth == nil {
             profile.dateOfBirth = dob
         }
