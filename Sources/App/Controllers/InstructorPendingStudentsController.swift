@@ -56,10 +56,10 @@ struct InstructorPendingStudentsController: RouteCollection {
         }
     }
 
-    // MARK: - POST /instructor/students/:profileID/approve
+    // MARK: - POST /instructor/students/:studentID/approve
 
     func approve(_ req: Request) async throws -> HTTPStatus {
-        guard let profileID = req.parameters.get("profileID", as: UUID.self) else {
+        guard let profileID = req.parameters.get("studentID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid profile ID.")
         }
         let input = try? req.content.decode(ApproveRequest.self)
@@ -79,10 +79,10 @@ struct InstructorPendingStudentsController: RouteCollection {
         return .ok
     }
 
-    // MARK: - POST /instructor/students/:profileID/reject
+    // MARK: - POST /instructor/students/:studentID/reject
 
     func reject(_ req: Request) async throws -> HTTPStatus {
-        guard let profileID = req.parameters.get("profileID", as: UUID.self) else {
+        guard let profileID = req.parameters.get("studentID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid profile ID.")
         }
         let input = try req.content.decode(RejectRequest.self)

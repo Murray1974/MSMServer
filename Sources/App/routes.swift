@@ -1288,8 +1288,8 @@ public func routes(_ app: Application) throws {
     // Pending student approval (instructor)
     let pendingController = InstructorPendingStudentsController()
     financeProtected.get("instructor",  "students", "pending",              use: pendingController.listPending)
-    financeProtected.post("instructor", "students", ":profileID", "approve", use: pendingController.approve)
-    financeProtected.post("instructor", "students", ":profileID", "reject",  use: pendingController.reject)
+    financeProtected.post("instructor", "students", ":studentID", "approve", use: pendingController.approve)
+    financeProtected.post("instructor", "students", ":studentID", "reject",  use: pendingController.reject)
 
     // Student approval status check
     studentProtected.get("status", use: pendingController.studentStatus)
