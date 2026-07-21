@@ -1156,6 +1156,51 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/undo-confirm/:bookingID — deletes the ConfirmedLesson, its auto-charge
+    // LedgerEntry, and resets LessonFinance back to charge_pending. Use when a lesson
+    // was accidentally marked as attended before it actually happened.
+    financeProtected.post("admin", "undo-confirm", ":bookingID") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        guard let booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+        let lessonID = booking.$lesson.id
+        let userID   = booking.$user.id
+
+        // 1. Delete the ConfirmedLesson record
+        if let cl = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$booking.$id == bookingID)
+            .first()
+        {
+            try await cl.delete(on: req.db)
+        }
+
+        // 2. Delete the auto-created lesson_charge LedgerEntry for this lesson/student
+        if let sql = req.db as? SQLDatabase {
+            try await sql.raw(
+                "DELETE FROM ledger_entries WHERE lesson_id = \(bind: lessonID) AND student_id = \(bind: userID) AND type = 'lesson_charge'"
+            ).run()
+        }
+
+        // 3. Reset LessonFinance so it can be charged again when the lesson actually happens
+        if let lf = try await LessonFinance.find(lessonID, on: req.db) {
+            lf.chargeStatus    = "not_charged"
+            lf.financeStatus   = "charge_pending"
+            lf.coveredAt       = nil
+            lf.$chargedLedgerEntry.id = nil
+            try await lf.save(on: req.db)
+        }
+
+        req.logger.notice("[Admin] Undid confirmed lesson for booking \(bookingID) by \(instructor.username)")
+        return .ok
+    }
+
     financeProtected.post("finance", "payments", use: finance.addPayment)
     financeProtected.post("finance", "expenses", use: finance.addExpense)
     financeProtected.post("finance", "expenses", ":expenseID", "update", use: finance.updateExpense)
