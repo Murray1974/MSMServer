@@ -1289,10 +1289,35 @@ public func routes(_ app: Application) throws {
     // GET    /instructor/fuel          — full history + stats
     // POST   /instructor/fuel          — log a fill-up
     // DELETE /instructor/fuel/:entryID
+    // GET    /instructor/fuel/nearby   — nearby petrol stations with live prices
     let fuelController = FuelController()
     financeProtected.get("instructor",    "fuel",              use: fuelController.list)
     financeProtected.post("instructor",   "fuel",              use: fuelController.log)
     financeProtected.delete("instructor", "fuel", ":entryID",  use: fuelController.delete)
+
+    financeProtected.get("instructor", "fuel", "nearby") { req async throws -> [FuelPriceService.NearbyStation] in
+        struct Query: Decodable {
+            var lat: Double
+            var lng: Double
+            var radius: Double?
+            var fuelType: String?
+        }
+        let q = try req.query.decode(Query.self)
+        guard let clientID = Environment.get("FUEL_FINDER_CLIENT_ID"),
+              let clientSecret = Environment.get("FUEL_FINDER_CLIENT_SECRET"),
+              !clientID.isEmpty, !clientSecret.isEmpty else {
+            throw Abort(.serviceUnavailable, reason: "Fuel Finder credentials not configured")
+        }
+        return try await FuelPriceService.shared.nearbyStations(
+            lat: q.lat,
+            lng: q.lng,
+            radiusMiles: q.radius ?? 5.0,
+            fuelType: q.fuelType ?? "B7_Standard",
+            clientID: clientID,
+            clientSecret: clientSecret,
+            client: req.client
+        )
+    }
 
     // Chat
     // GET    /student/chat/messages
