@@ -68,6 +68,7 @@ struct InstructorLessonController: RouteCollection {
         var cancellationType: String? // "late_cancellation" | nil
         var dropoffLocation: String?
         var rescheduled: Bool?
+        var hourlyRatePence: Int?
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -194,6 +195,12 @@ struct InstructorLessonController: RouteCollection {
             return (lid, f)
         })
 
+        // 5) Batch fetch student profiles for hourly rate.
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id ~~ studentIDs)
+            .all()
+        let profileByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0) })
+
         var rows: [BookingRangeRow] = []
         rows.reserveCapacity(allBookings.count)
 
@@ -219,7 +226,8 @@ struct InstructorLessonController: RouteCollection {
                     status: isLate ? "late_cancelled" : "active",
                     cancellationType: booking.cancellationType,
                     dropoffLocation: booking.dropoffLocation,
-                    rescheduled: booking.rescheduled
+                    rescheduled: booking.rescheduled,
+                    hourlyRatePence: profileByUserID[booking.$user.id]?.hourlyRatePence
                 )
             )
         }
