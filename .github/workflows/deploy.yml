@@ -36,14 +36,23 @@ jobs:
     steps:
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          FUEL_FINDER_CLIENT_ID: ${{ secrets.FUEL_FINDER_CLIENT_ID }}
+          FUEL_FINDER_CLIENT_SECRET: ${{ secrets.FUEL_FINDER_CLIENT_SECRET }}
         with:
           host:            ${{ secrets.DEPLOY_HOST }}
           username:        ${{ secrets.DEPLOY_USER }}
           key:             ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 10m
+          envs:            FUEL_FINDER_CLIENT_ID,FUEL_FINDER_CLIENT_SECRET
           script: |
             set -e
             cd /opt/msm
+            # Inject Fuel Finder credentials into .env (add or replace)
+            sed -i '/^FUEL_FINDER_CLIENT_ID=/d' .env
+            sed -i '/^FUEL_FINDER_CLIENT_SECRET=/d' .env
+            echo "FUEL_FINDER_CLIENT_ID=${FUEL_FINDER_CLIENT_ID}" >> .env
+            echo "FUEL_FINDER_CLIENT_SECRET=${FUEL_FINDER_CLIENT_SECRET}" >> .env
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker compose stop app || true
             docker image rm ghcr.io/murray1974/msmserver:latest || true
