@@ -631,6 +631,9 @@ struct FinanceController {
         let financeStudentIDs = Set(financeGrouped.keys.compactMap { $0 })
         let allStudentIDs = ledgerStudentIDs.union(financeStudentIDs)
 
+        let allProfiles = try await StudentProfile.query(on: req.db).all()
+        let profileByUserID = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.$user.id, $0) })
+
         var results: [StudentBalanceView] = []
         let now = Date()
 
@@ -708,7 +711,8 @@ struct FinanceController {
                     nextLessonCovered: nextLessonCovered,
                     nextLessonFinanceStatus: nextLessonFinanceStatus,
                     lateCancelFeesCount: lateCancelFeesCount,
-                    lateCancelFeesTotal: lateCancelFeesTotal
+                    lateCancelFeesTotal: lateCancelFeesTotal,
+                    hourlyRatePence: profileByUserID[studentID]?.hourlyRatePence
                 )
             )
         }

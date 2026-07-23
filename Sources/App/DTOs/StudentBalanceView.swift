@@ -13,4 +13,6 @@ struct StudentBalanceView: Content {
     let lateCancelFeesCount: Int
     /// Absolute sum (positive) of all late-cancellation charge amounts for this student.
     let lateCancelFeesTotal: Decimal
+    /// Student's hourly rate in pence (e.g. 4500 = £45.00/hr). Nil if not set on their profile.
+    let hourlyRatePence: Int?
 }
