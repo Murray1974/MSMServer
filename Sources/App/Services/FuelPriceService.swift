@@ -126,6 +126,8 @@ actor FuelPriceService {
         let url = URI(string: "\(baseURL)/api/v1/oauth/generate_secret_token")
         let body = TokenRequest(client_id: clientID, client_secret: clientSecret)
         let response = try await client.post(url) { req in
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
+            req.headers.add(name: "Accept", value: "application/json")
             try req.content.encode(body, as: .json)
         }
         let decoded = try decodeTokenResponse(from: response)
@@ -168,6 +170,8 @@ actor FuelPriceService {
         let url = URI(string: "\(baseURL)/api/v1/pfs")
         let response = try await client.get(url) { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
+            req.headers.add(name: "Accept", value: "application/json")
         }
         let rows = try response.content.decode([PFSStation].self)
         let dict = Dictionary(uniqueKeysWithValues: rows.map { ($0.node_id, $0) })
@@ -185,6 +189,8 @@ actor FuelPriceService {
         let url = URI(string: "\(baseURL)/api/v1/pfs/prices")
         let response = try await client.get(url) { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
+            req.headers.add(name: "Accept", value: "application/json")
         }
         let rows = try response.content.decode([PFSPriceRow].self)
         var dict: [String: [FuelPrice]] = [:]
