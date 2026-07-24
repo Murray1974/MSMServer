@@ -110,13 +110,25 @@ actor FuelPriceService {
         return try await fetchNewToken(clientID: clientID, clientSecret: clientSecret, client: client)
     }
 
+    private func decodeTokenResponse(from response: ClientResponse) throws -> TokenResponse {
+        var body = response.body ?? ByteBuffer()
+        let data = body.readData(length: body.readableBytes) ?? Data()
+        do {
+            return try JSONDecoder().decode(TokenResponse.self, from: data)
+        } catch {
+            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "<binary>"
+            throw Abort(.internalServerError,
+                        reason: "Fuel Finder auth HTTP \(response.status.code): \(preview)")
+        }
+    }
+
     private func fetchNewToken(clientID: String, clientSecret: String, client: Client) async throws -> String {
         let url = URI(string: "\(baseURL)/api/v1/oauth/generate_secret_token")
         let body = TokenRequest(client_id: clientID, client_secret: clientSecret)
         let response = try await client.post(url) { req in
             try req.content.encode(body, as: .json)
         }
-        let decoded = try response.content.decode(TokenResponse.self)
+        let decoded = try decodeTokenResponse(from: response)
         guard let token = decoded.resolvedAccessToken else {
             throw Abort(.internalServerError, reason: "Fuel Finder token response missing access_token")
         }
@@ -137,9 +149,8 @@ actor FuelPriceService {
         let response = try await client.post(url) { req in
             try req.content.encode(body, as: .json)
         }
-        let decoded = try response.content.decode(TokenResponse.self)
+        let decoded = try decodeTokenResponse(from: response)
         guard let token = decoded.resolvedAccessToken else {
-            // Refresh failed — fall back to full re-auth next time
             accessToken = nil; refreshToken = nil; tokenExpiry = nil; refreshTokenExpiry = nil
             throw Abort(.internalServerError, reason: "Fuel Finder token refresh failed")
         }
