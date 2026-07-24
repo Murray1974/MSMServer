@@ -37,6 +37,8 @@ services:
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       CALENDAR_ICS_URL: ${CALENDAR_ICS_URL}
       CALENDAR_TIMEZONE: ${CALENDAR_TIMEZONE:-Europe/London}
+      FUEL_FINDER_CLIENT_ID: ${FUEL_FINDER_CLIENT_ID}
+      FUEL_FINDER_CLIENT_SECRET: ${FUEL_FINDER_CLIENT_SECRET}
       # FCM_SERVICE_ACCOUNT_JSON: for CI/CD — set to the raw JSON string.
       # Locally, prefer dropping the file into .secrets/ (mounted below).
     volumes:
