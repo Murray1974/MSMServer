@@ -161,6 +161,22 @@ actor FuelPriceService {
         return token
     }
 
+    // MARK: - Flexible array decoding (handles both bare array and {"data":[...]} wrapper)
+
+    private struct DataWrapper<T: Decodable>: Decodable {
+        let data: T?
+    }
+
+    private func decodeArray<T: Decodable>(_ type: T.Type, from response: ClientResponse, context: String) throws -> [T] {
+        var body = response.body ?? ByteBuffer()
+        let raw = body.readData(length: body.readableBytes) ?? Data()
+        if let arr = try? JSONDecoder().decode([T].self, from: raw) { return arr }
+        if let wrapped = try? JSONDecoder().decode(DataWrapper<[T]>.self, from: raw),
+           let arr = wrapped.data { return arr }
+        let preview = String(data: raw.prefix(500), encoding: .utf8) ?? "<binary>"
+        throw Abort(.internalServerError, reason: "Fuel Finder \(context) decode failed (HTTP \(response.status.code)): \(preview)")
+    }
+
     // MARK: - Station cache
 
     private func stations(token: String, client: Client) async throws -> [String: PFSStation] {
@@ -173,7 +189,7 @@ actor FuelPriceService {
             req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
             req.headers.add(name: "Accept", value: "application/json")
         }
-        let rows = try response.content.decode([PFSStation].self)
+        let rows = try decodeArray(PFSStation.self, from: response, context: "stations")
         let dict = Dictionary(uniqueKeysWithValues: rows.map { ($0.node_id, $0) })
         stationCache = dict
         stationCacheExpiry = Date().addingTimeInterval(3600)
@@ -186,13 +202,13 @@ actor FuelPriceService {
         if !priceCache.isEmpty, let expiry = priceCacheExpiry, expiry > Date() {
             return priceCache
         }
-        let url = URI(string: "\(baseURL)/api/v1/pfs/prices")
+        let url = URI(string: "\(baseURL)/api/v1/pfs/fuel-prices")
         let response = try await client.get(url) { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
             req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
             req.headers.add(name: "Accept", value: "application/json")
         }
-        let rows = try response.content.decode([PFSPriceRow].self)
+        let rows = try decodeArray(PFSPriceRow.self, from: response, context: "prices")
         var dict: [String: [FuelPrice]] = [:]
         for row in rows {
             dict[row.node_id] = row.fuel_prices ?? []
