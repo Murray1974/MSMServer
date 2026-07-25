@@ -1312,7 +1312,7 @@ public func routes(_ app: Application) throws {
             lat: q.lat,
             lng: q.lng,
             radiusMiles: q.radius ?? 5.0,
-            fuelType: q.fuelType ?? "B7",
+            fuelType: q.fuelType ?? "B7_STANDARD",
             clientID: clientID,
             clientSecret: clientSecret,
             client: req.client
