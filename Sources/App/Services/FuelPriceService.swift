@@ -301,6 +301,34 @@ actor FuelPriceService {
         }
     }
 
+    // MARK: - Raw debug (returns first price batch + first station batch as JSON strings)
+
+    func rawDebug(clientID: String, clientSecret: String, client: Client) async throws -> String {
+        let token = try await validToken(clientID: clientID, clientSecret: clientSecret, client: client)
+
+        let stationURL = URI(string: "\(baseURL)/api/v1/pfs?batch-number=1")
+        let stationResp = try await client.get(stationURL) { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
+            req.headers.add(name: "Accept", value: "application/json")
+        }
+        var sb = stationResp.body ?? ByteBuffer()
+        let stationRaw = String(data: sb.readData(length: min(sb.readableBytes, 2000)) ?? Data(), encoding: .utf8) ?? "<binary>"
+
+        let priceURL = URI(string: "\(baseURL)/api/v1/pfs/fuel-prices?batch-number=1")
+        let priceResp = try await client.get(priceURL) { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
+            req.headers.add(name: "Accept", value: "application/json")
+        }
+        var pb = priceResp.body ?? ByteBuffer()
+        let priceRaw = String(data: pb.readData(length: min(pb.readableBytes, 2000)) ?? Data(), encoding: .utf8) ?? "<binary>"
+
+        return """
+        {"station_http":\(stationResp.status.code),"price_http":\(priceResp.status.code),"station_sample":\(stationRaw.prefix(1000)),"price_sample":\(priceRaw.prefix(1000))}
+        """
+    }
+
     // MARK: - Haversine distance
 
     private func haversineMiles(lat1: Double, lng1: Double, lat2: Double, lng2: Double) -> Double {
