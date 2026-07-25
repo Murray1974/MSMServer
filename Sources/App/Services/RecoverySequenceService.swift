@@ -64,6 +64,7 @@ struct RecoverySequenceService {
     // MARK: - Background job processor (called every 60 seconds)
 
     func processPendingJobs(on db: Database) async {
+        app.logger.notice("[Recovery] processPendingJobs — entering")
         let due: [RecoveryJob]
         do {
             due = try await RecoveryJob.query(on: db)
@@ -75,6 +76,7 @@ struct RecoverySequenceService {
             app.logger.warning("[Recovery] Failed to fetch pending jobs: \(error)")
             return
         }
+        app.logger.notice("[Recovery] processPendingJobs — \(due.count) due job(s)")
 
         for job in due {
             guard let lesson = try? await Lesson.find(job.lessonID, on: db) else {
@@ -110,6 +112,7 @@ struct RecoverySequenceService {
             job.sentAt = Date()
             try? await job.save(on: db)
         }
+        app.logger.notice("[Recovery] processPendingJobs — done")
     }
 
     // MARK: - Cancel pending jobs when a slot is rebooked
@@ -197,8 +200,14 @@ struct RecoverySequenceService {
         // Ensure P2 and P3 are disjoint from higher priority groups
         let p1IDs = Set(p1.compactMap(\.id))
         let p2IDs = Set(p2.compactMap(\.id))
-        let filteredP2 = p2.filter { !p1IDs.contains($0.id!) }
-        let filteredP3 = p3.filter { !p1IDs.contains($0.id!) && !p2IDs.contains($0.id!) }
+        let filteredP2 = p2.filter { u in
+            guard let id = u.id else { return false }
+            return !p1IDs.contains(id)
+        }
+        let filteredP3 = p3.filter { u in
+            guard let id = u.id else { return false }
+            return !p1IDs.contains(id) && !p2IDs.contains(id)
+        }
 
         return (p1, filteredP2, filteredP3)
     }

@@ -18,7 +18,7 @@ struct PaymentEnforcementService {
 
     func runCycle() async {
         let now = Date()
-        logger.info("[PaymentEnforcement] Cycle started at \(now)")
+        logger.notice("[PaymentEnforcement] Cycle started at \(now)")
 
         // Find lessons starting within the next 50 hours (48h + 2h buffer).
         let windowEnd = now.addingTimeInterval(50 * 3_600)
@@ -54,7 +54,7 @@ struct PaymentEnforcementService {
             await processBooking(booking, now: now)
         }
 
-        logger.info("[PaymentEnforcement] Cycle complete — processed \(bookings.count) booking(s).")
+        logger.notice("[PaymentEnforcement] Cycle complete — processed \(bookings.count) booking(s).")
     }
 
     // MARK: - Per-booking logic
@@ -95,11 +95,14 @@ struct PaymentEnforcementService {
         // First-lesson students get an extra 24 hours (enforcement moves to the next day).
         var enforcementDay = cal.startOfDay(for: threshold)
         if isFirst {
-            enforcementDay = cal.date(byAdding: .day, value: 1, to: enforcementDay)!
+            guard let nextDay = cal.date(byAdding: .day, value: 1, to: enforcementDay) else { return }
+            enforcementDay = nextDay
         }
 
-        let warningTime = cal.date(bySettingHour: 19, minute: 0, second: 0, of: enforcementDay)!
-        let cancelTime  = cal.date(bySettingHour: 20, minute: 0, second: 0, of: enforcementDay)!
+        guard let warningTime = cal.date(bySettingHour: 19, minute: 0, second: 0, of: enforcementDay),
+              let cancelTime  = cal.date(bySettingHour: 20, minute: 0, second: 0, of: enforcementDay) else {
+            return
+        }
 
         // ── Auto-cancel at 8pm ────────────────────────────────────────────────
         // If the cancel deadline has already passed but this booking was created
