@@ -98,16 +98,25 @@ actor FuelPriceService {
     // MARK: - Token management
 
     private func validToken(clientID: String, clientSecret: String, client: Client) async throws -> String {
-        // Use existing access token if still valid (with 60s buffer)
         if let token = accessToken, let expiry = tokenExpiry, expiry > Date().addingTimeInterval(60) {
             return token
         }
-        // Use refresh token if valid
         if let rt = refreshToken, let rtExpiry = refreshTokenExpiry, rtExpiry > Date().addingTimeInterval(60) {
             return try await refreshAccessToken(clientID: clientID, refreshToken: rt, client: client)
         }
-        // Full re-auth
-        return try await fetchNewToken(clientID: clientID, clientSecret: clientSecret, client: client)
+        // Full re-auth with up to 3 retries (CloudFront WAF blocks are often transient)
+        var lastError: Error = Abort(.internalServerError, reason: "Token fetch failed")
+        for attempt in 1...3 {
+            do {
+                return try await fetchNewToken(clientID: clientID, clientSecret: clientSecret, client: client)
+            } catch {
+                lastError = error
+                if attempt < 3 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
+                }
+            }
+        }
+        throw lastError
     }
 
     private func decodeTokenResponse(from response: ClientResponse) throws -> TokenResponse {
@@ -126,8 +135,10 @@ actor FuelPriceService {
         let url = URI(string: "\(baseURL)/api/v1/oauth/generate_access_token")
         let body = TokenRequest(client_id: clientID, client_secret: clientSecret)
         let response = try await client.post(url) { req in
-            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
-            req.headers.add(name: "Accept", value: "application/json")
+            req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+            req.headers.add(name: "Accept", value: "application/json, text/plain, */*")
+            req.headers.add(name: "Accept-Language", value: "en-GB,en;q=0.9")
+            req.headers.add(name: "Referer", value: "https://www.fuel-finder.uk/")
             try req.content.encode(body, as: .json)
         }
         let decoded = try decodeTokenResponse(from: response)
@@ -181,8 +192,10 @@ actor FuelPriceService {
             let url = URI(string: "\(baseURL)\(endpoint)?batch-number=\(batch)")
             let response = try await client.get(url) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
-                req.headers.add(name: "Accept", value: "application/json")
+                req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+                req.headers.add(name: "Accept", value: "application/json, text/plain, */*")
+                req.headers.add(name: "Accept-Language", value: "en-GB,en;q=0.9")
+                req.headers.add(name: "Referer", value: "https://www.fuel-finder.uk/")
             }
             // 404 after the first batch signals end-of-pages
             if batch > 1 && response.status == .notFound { break }
