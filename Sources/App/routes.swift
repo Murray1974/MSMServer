@@ -465,13 +465,18 @@ public func routes(_ app: Application) throws {
             var slots: [SlotIn]
         }
 
+        let t0 = Date()
         let input = try req.content.decode(SyncIn.self)
+        let t1 = Date()
+        req.logger.notice("[SYNC] decoded \(input.slots.count) slots in \(String(format: "%.3f", t1.timeIntervalSince(t0)))s")
 
         // Load all future lessons once — used for in-memory lookups to avoid N+1 DB queries.
         let now = Date()
         let futureLessons = try await Lesson.query(on: req.db)
             .filter(\.$startsAt >= now)
             .all()
+        let t2 = Date()
+        req.logger.notice("[SYNC] loaded \(futureLessons.count) future lessons in \(String(format: "%.3f", t2.timeIntervalSince(t1)))s")
 
         // Build lookup maps so each slot can be matched in O(1) without extra DB queries.
         var futureByID: [UUID: Lesson] = [:]
@@ -570,6 +575,9 @@ public func routes(_ app: Application) throws {
             if let id = lesson.id { keepIDs.insert(id) }
         }
 
+        let t3 = Date()
+        req.logger.notice("[SYNC] processed slots in \(String(format: "%.3f", t3.timeIntervalSince(t2)))s — upserted=\(upsertedCount)")
+
         var prunedCount = 0
         if input.prune == true {
             let toPrune = futureLessons.filter { l in
@@ -601,6 +609,8 @@ public func routes(_ app: Application) throws {
             }
         }
 
+        let t4 = Date()
+        req.logger.notice("[SYNC] prune done in \(String(format: "%.3f", t4.timeIntervalSince(t3)))s — pruned=\(prunedCount) total=\(String(format: "%.3f", t4.timeIntervalSince(t0)))s")
         return SyncResult(upserted: upsertedCount, pruned: prunedCount, links: links)
     }
 
