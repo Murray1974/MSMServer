@@ -465,6 +465,7 @@ public func routes(_ app: Application) throws {
             var slots: [SlotIn]
         }
 
+        req.logger.notice("[SYNC] ▶ handler entered — body=\(req.body.data?.readableBytes ?? -1) bytes")
         let t0 = Date()
         let input = try req.content.decode(SyncIn.self)
         let t1 = Date()
