@@ -1320,16 +1320,15 @@ public func routes(_ app: Application) throws {
     }
 
     // Fuel Finder raw debug (returns first batch of price rows as raw JSON string)
-    financeProtected.get("instructor", "fuel", "raw-debug") { req async throws -> Response in
+    financeProtected.get("instructor", "fuel", "raw-debug") { req async throws -> FuelPriceService.RawDebugResponse in
         guard let clientID = Environment.get("FUEL_FINDER_CLIENT_ID"),
               let clientSecret = Environment.get("FUEL_FINDER_CLIENT_SECRET"),
               !clientID.isEmpty, !clientSecret.isEmpty else {
             throw Abort(.serviceUnavailable, reason: "Fuel Finder credentials not configured")
         }
-        let rawJSON = try await FuelPriceService.shared.rawDebug(
+        return try await FuelPriceService.shared.rawDebug(
             clientID: clientID, clientSecret: clientSecret, client: req.client
         )
-        return Response(status: .ok, headers: ["Content-Type": "application/json"], body: .init(string: rawJSON))
     }
 
     // Chat

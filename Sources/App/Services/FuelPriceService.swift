@@ -303,7 +303,14 @@ actor FuelPriceService {
 
     // MARK: - Raw debug (returns first price batch + first station batch as JSON strings)
 
-    func rawDebug(clientID: String, clientSecret: String, client: Client) async throws -> String {
+    struct RawDebugResponse: Content {
+        let stationHTTP: Int
+        let priceHTTP: Int
+        let stationSample: String
+        let priceSample: String
+    }
+
+    func rawDebug(clientID: String, clientSecret: String, client: Client) async throws -> RawDebugResponse {
         let token = try await validToken(clientID: clientID, clientSecret: clientSecret, client: client)
 
         let stationURL = URI(string: "\(baseURL)/api/v1/pfs?batch-number=1")
@@ -313,7 +320,7 @@ actor FuelPriceService {
             req.headers.add(name: "Accept", value: "application/json")
         }
         var sb = stationResp.body ?? ByteBuffer()
-        let stationRaw = String(data: sb.readData(length: min(sb.readableBytes, 2000)) ?? Data(), encoding: .utf8) ?? "<binary>"
+        let stationRaw = String(data: sb.readData(length: min(sb.readableBytes, 3000)) ?? Data(), encoding: .utf8) ?? "<binary>"
 
         let priceURL = URI(string: "\(baseURL)/api/v1/pfs/fuel-prices?batch-number=1")
         let priceResp = try await client.get(priceURL) { req in
@@ -322,11 +329,14 @@ actor FuelPriceService {
             req.headers.add(name: "Accept", value: "application/json")
         }
         var pb = priceResp.body ?? ByteBuffer()
-        let priceRaw = String(data: pb.readData(length: min(pb.readableBytes, 2000)) ?? Data(), encoding: .utf8) ?? "<binary>"
+        let priceRaw = String(data: pb.readData(length: min(pb.readableBytes, 3000)) ?? Data(), encoding: .utf8) ?? "<binary>"
 
-        return """
-        {"station_http":\(stationResp.status.code),"price_http":\(priceResp.status.code),"station_sample":\(stationRaw.prefix(1000)),"price_sample":\(priceRaw.prefix(1000))}
-        """
+        return RawDebugResponse(
+            stationHTTP: Int(stationResp.status.code),
+            priceHTTP: Int(priceResp.status.code),
+            stationSample: stationRaw,
+            priceSample: priceRaw
+        )
     }
 
     // MARK: - Haversine distance
