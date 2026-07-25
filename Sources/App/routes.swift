@@ -490,13 +490,12 @@ public func routes(_ app: Application) throws {
 
             // Only accept MSM calendars (strict)
             guard let cal = s.calendarName,
-                  cal == "MSM Available" || cal == "MSM Lessons" ||
-                  cal == "Untitled" || cal == "Mike work"
+                  cal == "MSM Available" || cal == "MSM Lessons"
             else {
                 continue
             }
 
-            let syncedState = (cal == "MSM Available" || cal == "Untitled") ? "available" : "booked"
+            let syncedState = (cal == "MSM Available") ? "available" : "booked"
             guard let start = parseISO8601(s.startsAt),
                   let end = parseISO8601(s.endsAt) else {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
