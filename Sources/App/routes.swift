@@ -708,6 +708,53 @@ public func routes(_ app: Application) throws {
     }
 
     // GET /admin/recovery-events?lessonID=...&limit=50
+    // GET /admin/lesson-stats — lesson table health check (counts by state/calendar)
+    adminProtected.get("lesson-stats") { req async throws -> Response in
+        struct LessonStats: Content {
+            var totalFuture: Int
+            var byState: [String: Int]
+            var byCalendar: [String: Int]
+            var duplicateTimeslots: Int
+        }
+        let now = Date()
+        let all = try await Lesson.query(on: req.db).filter(\.$startsAt >= now).all()
+        var byState: [String: Int] = [:]
+        var byCalendar: [String: Int] = [:]
+        var seenTimes = Set<String>()
+        var dupes = 0
+        for l in all {
+            byState[l.state, default: 0] += 1
+            byCalendar[l.calendarName ?? "nil", default: 0] += 1
+            let key = "\(l.startsAt.timeIntervalSince1970)_\(l.endsAt.timeIntervalSince1970)"
+            if !seenTimes.insert(key).inserted { dupes += 1 }
+        }
+        let stats = LessonStats(totalFuture: all.count, byState: byState, byCalendar: byCalendar, duplicateTimeslots: dupes)
+        return try await stats.encodeResponse(for: req)
+    }
+
+    // POST /admin/prune-duplicate-lessons — removes duplicate available lessons (same startsAt/endsAt, no bookings)
+    adminProtected.post("prune-duplicate-lessons") { req async throws -> Response in
+        struct PruneResult: Content { var deleted: Int }
+        let now = Date()
+        let all = try await Lesson.query(on: req.db).filter(\.$startsAt >= now).filter(\.$state == "available").all()
+        var seen: [String: UUID] = [:]
+        var toDelete: [UUID] = []
+        for l in all {
+            guard let id = l.id else { continue }
+            let key = "\(l.startsAt.timeIntervalSince1970)_\(l.endsAt.timeIntervalSince1970)"
+            if let firstID = seen[key] {
+                let _ = firstID
+                toDelete.append(id)
+            } else {
+                seen[key] = id
+            }
+        }
+        if !toDelete.isEmpty {
+            try await Lesson.query(on: req.db).filter(\.$id ~~ toDelete).delete()
+        }
+        return try await PruneResult(deleted: toDelete.count).encodeResponse(for: req)
+    }
+
     adminProtected.get("recovery-events") { req async throws -> [RecoveryEventView] in
         struct Filter: Decodable {
             var lessonID: UUID?
