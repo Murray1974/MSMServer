@@ -123,7 +123,7 @@ actor FuelPriceService {
     }
 
     private func fetchNewToken(clientID: String, clientSecret: String, client: Client) async throws -> String {
-        let url = URI(string: "\(baseURL)/api/v1/oauth/generate_secret_token")
+        let url = URI(string: "\(baseURL)/api/v1/oauth/generate_access_token")
         let body = TokenRequest(client_id: clientID, client_secret: clientSecret)
         let response = try await client.post(url) { req in
             req.headers.add(name: "User-Agent", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
