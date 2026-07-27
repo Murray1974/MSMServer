@@ -544,7 +544,16 @@ public func routes(_ app: Application) throws {
 
             // Only save when state changes (available ↔ booked). Title/calendarName drift
             // is cosmetic and not worth a DB write on every sync — avoid N+1 saves.
-            let stateChanged = lesson.state != syncedState
+            var stateChanged = lesson.state != syncedState
+            // Block available→booked via sync when no active booking exists: prevents a
+            // stale MSMAgent calendar event from reverting a student's cancellation.
+            if stateChanged && lesson.state == "available" && syncedState == "booked" {
+                let hasBooking = (try? await Booking.query(on: req.db)
+                    .filter(\.$lesson.$id == lesson.requireID())
+                    .filter(\.$deletedAt == nil)
+                    .count()) ?? 0
+                if hasBooking == 0 { stateChanged = false }
+            }
             if stateChanged {
                 if let t = s.title { lesson.title = t }
                 if let c = s.capacity { lesson.capacity = c }
@@ -594,20 +603,34 @@ public func routes(_ app: Application) throws {
             }
             if !toPrune.isEmpty {
                 let pruneIDs = toPrune.compactMap { $0.id }
-                try await Lesson.query(on: req.db)
-                    .filter(\.$id ~~ pruneIDs)
-                    .delete()
-                prunedCount = toPrune.count
-                for l in toPrune {
-                    let update = AvailabilityUpdate(
-                        action: AvailabilityAction.slotUnavailable,
-                        id: try l.requireID(),
-                        title: l.title,
-                        startsAt: l.startsAt,
-                        endsAt: l.endsAt,
-                        capacity: l.capacity
-                    )
-                    broadcastAvailability(update, req.application)
+                // Exclude lessons that have any booking history (including soft-deleted
+                // cancellations) — deleting them would break finance/audit records.
+                let withHistoryIDs = Set(
+                    try await Booking.query(on: req.db)
+                        .withDeleted()
+                        .filter(\.$lesson.$id ~~ pruneIDs)
+                        .all()
+                        .compactMap { $0.$lesson.id }
+                )
+                let safeIDs = pruneIDs.filter { !withHistoryIDs.contains($0) }
+                let safeIDSet = Set(safeIDs)
+                let toActuallyPrune = toPrune.filter { $0.id.map { safeIDSet.contains($0) } ?? false }
+                if !safeIDs.isEmpty {
+                    try await Lesson.query(on: req.db)
+                        .filter(\.$id ~~ safeIDs)
+                        .delete()
+                    prunedCount = safeIDs.count
+                    for l in toActuallyPrune {
+                        let update = AvailabilityUpdate(
+                            action: AvailabilityAction.slotUnavailable,
+                            id: try l.requireID(),
+                            title: l.title,
+                            startsAt: l.startsAt,
+                            endsAt: l.endsAt,
+                            capacity: l.capacity
+                        )
+                        broadcastAvailability(update, req.application)
+                    }
                 }
             }
         }
@@ -761,9 +784,21 @@ public func routes(_ app: Application) throws {
             }
         }
         if !toDelete.isEmpty {
-            try await Lesson.query(on: req.db).filter(\.$id ~~ toDelete).delete()
+            // Exclude any lesson with booking history (including soft-deleted cancellations).
+            let withHistoryIDs = Set(
+                try await Booking.query(on: req.db)
+                    .withDeleted()
+                    .filter(\.$lesson.$id ~~ toDelete)
+                    .all()
+                    .compactMap { $0.$lesson.id }
+            )
+            let safeToDelete = toDelete.filter { !withHistoryIDs.contains($0) }
+            if !safeToDelete.isEmpty {
+                try await Lesson.query(on: req.db).filter(\.$id ~~ safeToDelete).delete()
+            }
+            return try await PruneResult(deleted: safeToDelete.count).encodeResponse(for: req)
         }
-        return try await PruneResult(deleted: toDelete.count).encodeResponse(for: req)
+        return try await PruneResult(deleted: 0).encodeResponse(for: req)
     }
 
     adminProtected.get("recovery-events") { req async throws -> [RecoveryEventView] in

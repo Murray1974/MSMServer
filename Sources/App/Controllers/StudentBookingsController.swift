@@ -875,6 +875,15 @@ struct StudentBookingsController: RouteCollection {
             return RecoverAndPayResponse(available: false, clientSecret: nil, bookingID: nil, amountPence: nil)
         }
 
+        // Guard against concurrent double-tap: bail if a booking already exists.
+        if let existing = try await Booking.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .filter(\.$lesson.$id == input.lessonID)
+            .filter(\.$deletedAt == nil)
+            .first() {
+            return RecoverAndPayResponse(available: false, clientSecret: nil, bookingID: existing.id?.uuidString, amountPence: nil)
+        }
+
         // Create a new booking in pending_recovery state.
         let booking = Booking(
             userID: studentID,
