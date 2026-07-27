@@ -172,6 +172,13 @@ struct ConfirmedLessonController: RouteCollection {
             return
         }
 
+        // Guard against concurrent double-confirm: bail if a charge entry already exists.
+        let existingCharge = try await LedgerEntry.query(on: db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$type == "lesson_charge")
+            .first()
+        guard existingCharge == nil else { return }
+
         guard let lesson = try await Lesson.find(lessonID, on: db) else {
             return
         }

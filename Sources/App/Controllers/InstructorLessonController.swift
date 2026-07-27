@@ -486,6 +486,15 @@ struct InstructorLessonController: RouteCollection {
         }
 
         try await booking.save(on: req.db)
+
+        // Free the old slot and mark the new slot as booked.
+        oldLesson.state = "available"
+        oldLesson.calendarName = "MSM Available"
+        try await oldLesson.save(on: req.db)
+        newLesson.state = "booked"
+        newLesson.calendarName = "MSM Lessons"
+        try await newLesson.save(on: req.db)
+
         req.broadcastRescheduled(old: oldLesson, new: newLesson, explicitStudent: student)
 
         if let fcmToken = student.fcmToken, let fcm = FCMNotificationService(req: req) {
@@ -561,6 +570,15 @@ struct InstructorLessonController: RouteCollection {
         if existing != nil {
             // Idempotent: return the existing booking ID rather than erroring
             return InstructorCreateBookingResponse(bookingID: try existing!.requireID())
+        }
+
+        // Capacity check — mirrors the student-facing route.
+        let activeBookingCount = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == input.lessonID)
+            .filter(\.$deletedAt == nil)
+            .count()
+        if activeBookingCount >= lesson.capacity {
+            throw Abort(.conflict, reason: "Lesson is full")
         }
 
         let booking = Booking(

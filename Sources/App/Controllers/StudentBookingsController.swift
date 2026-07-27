@@ -352,6 +352,12 @@ struct StudentBookingsController: RouteCollection {
             }
 
             if let lid = lessonID, let instructorID {
+                // Guard against race with auto-cancel service: skip if charge already written.
+                let existingCharge = try await LedgerEntry.query(on: req.db)
+                    .filter(\.$lesson.$id == lid)
+                    .filter(\.$type == "late_cancellation_charge")
+                    .first()
+                if existingCharge == nil {
                 let chargeEntry = LedgerEntry(
                     studentID: userID,
                     instructorID: instructorID,
@@ -372,6 +378,7 @@ struct StudentBookingsController: RouteCollection {
                         body: "A late cancellation fee has been applied to your account per our 48h policy."
                     )
                 }
+                } // end existingCharge == nil guard
             }
         } else {
             // Non-late path: no save() has been called yet, so persist cancellationSource now.

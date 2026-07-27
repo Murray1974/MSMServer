@@ -391,18 +391,6 @@ struct BookingsController: RouteCollection {
             }
         }
 
-        // Coverage sweep after sync
-        let allFinance = try await LessonFinance.query(on: req.db)
-            .with(\.$student)
-            .all()
-
-        let financeController = FinanceController()
-
-        for lf in allFinance {
-            try await financeController.evaluateCoverage(for: lf, on: req.db)
-        }
-
-
         let out = WorkBookingsSyncOut(ok: true, upserted: upserted)
         let data = try JSONEncoder().encode(out)
         let res = Response(status: .ok)

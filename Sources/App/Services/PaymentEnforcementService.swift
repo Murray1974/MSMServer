@@ -174,6 +174,16 @@ struct PaymentEnforcementService {
                 try await lf.save(on: db)
             }
 
+            // Guard against race with student's own cancel: skip if charge already written.
+            let existingCharge = try await LedgerEntry.query(on: db)
+                .filter(\.$lesson.$id == lessonID)
+                .filter(\.$type == "late_cancellation_charge")
+                .first()
+            guard existingCharge == nil else {
+                logger.notice("[PaymentEnforcement] Late-cancel charge already exists for lessonID=\(lessonID) — skipping duplicate.")
+                return
+            }
+
             // Debit ledger.
             let charge = LedgerEntry(
                 studentID: studentID,
