@@ -472,9 +472,11 @@ public func routes(_ app: Application) throws {
         req.logger.notice("[SYNC] decoded \(input.slots.count) slots in \(String(format: "%.3f", t1.timeIntervalSince(t0)))s")
 
         // Load all future lessons once — used for in-memory lookups to avoid N+1 DB queries.
+        // Use endsAt >= now so currently-in-progress lessons are included in the dedup map;
+        // without this, syncing while a lesson is active creates a duplicate record.
         let now = Date()
         let futureLessons = try await Lesson.query(on: req.db)
-            .filter(\.$startsAt >= now)
+            .filter(\.$endsAt >= now)
             .all()
         let t2 = Date()
         req.logger.notice("[SYNC] loaded \(futureLessons.count) future lessons in \(String(format: "%.3f", t2.timeIntervalSince(t1)))s")
@@ -628,7 +630,6 @@ public func routes(_ app: Application) throws {
             var studentCount: Int
         }
 
-        let now = Date()
         let bookings = try await Booking.query(on: req.db)
             .filter(\.$deletedAt == nil)
             .with(\.$lesson)

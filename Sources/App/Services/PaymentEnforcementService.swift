@@ -188,6 +188,7 @@ struct PaymentEnforcementService {
 
             // Release lesson slot back to available.
             lesson.state = "available"
+            lesson.calendarName = "MSM Available"
             try await lesson.save(on: db)
 
             // Set account hold on StudentProfile.
