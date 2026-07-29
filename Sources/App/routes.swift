@@ -1355,6 +1355,8 @@ public func routes(_ app: Application) throws {
     financeProtected.get("instructor",  "vehicle", "expenses",           use: vehicleController.listExpenses)
     financeProtected.get("instructor",  "vehicle", "expenses", "summary",use: vehicleController.expenseSummary)
     financeProtected.get("instructor",  "vehicle", "expenses", ":expenseID", "receipt", use: vehicleController.getReceipt)
+    financeProtected.patch("instructor", "vehicle", "expenses", ":expenseID", use: vehicleController.updateExpense)
+    financeProtected.delete("instructor", "vehicle", "expenses", ":expenseID", use: vehicleController.deleteExpense)
 
     // Mileage log (HMRC per-trip)
     // GET    /instructor/mileage          — summary + all entries

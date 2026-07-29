@@ -264,6 +264,65 @@ struct VehicleController: RouteCollection {
         )
     }
 
+    // ── PATCH /instructor/vehicle/expenses/:expenseID ────────────────────────────
+
+    func updateExpense(req: Request) async throws -> ExpenseRow {
+        struct UpdateExpenseInput: Content {
+            let amount: Double
+            let category: String
+            let vendor: String?
+            let note: String?
+            let expenseDate: Date
+            let businessUsePercent: Double
+            let mileage: Int?
+        }
+
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let expenseID = req.parameters.get("expenseID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid expenseID")
+        }
+        guard let entry = try await ExpenseEntry.find(expenseID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        guard entry.$instructor.id == instructorID else { throw Abort(.forbidden) }
+
+        let input = try req.content.decode(UpdateExpenseInput.self)
+        guard input.amount > 0 else {
+            throw Abort(.badRequest, reason: "Invalid amount")
+        }
+
+        entry.amount             = Decimal(input.amount)
+        entry.category            = input.category.lowercased()
+        entry.vendor              = input.vendor?.isEmpty == true ? nil : input.vendor
+        entry.note                = input.note?.isEmpty == true ? nil : input.note
+        entry.expenseDate         = input.expenseDate
+        entry.businessUsePercent  = input.businessUsePercent
+        entry.isBusinessUse       = input.businessUsePercent > 0
+        entry.mileage             = input.mileage
+
+        try await entry.save(on: req.db)
+        return try toExpenseRow(entry)
+    }
+
+    // ── DELETE /instructor/vehicle/expenses/:expenseID ───────────────────────────
+
+    func deleteExpense(req: Request) async throws -> HTTPStatus {
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let expenseID = req.parameters.get("expenseID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid expenseID")
+        }
+        guard let entry = try await ExpenseEntry.find(expenseID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        guard entry.$instructor.id == instructorID else { throw Abort(.forbidden) }
+
+        if let path = entry.receiptPath, FileManager.default.fileExists(atPath: path) {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        try await entry.delete(on: req.db)
+        return .noContent
+    }
+
     // ── GET /instructor/vehicle/expenses/:expenseID/receipt ──────────────────────
 
     func getReceipt(req: Request) async throws -> Response {
