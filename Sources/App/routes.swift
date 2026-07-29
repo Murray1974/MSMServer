@@ -1386,6 +1386,7 @@ public func routes(_ app: Application) throws {
     let fuelController = FuelController()
     financeProtected.get("instructor",    "fuel",              use: fuelController.list)
     financeProtected.post("instructor",   "fuel",              use: fuelController.log)
+    financeProtected.patch("instructor",  "fuel", ":entryID",  use: fuelController.update)
     financeProtected.delete("instructor", "fuel", ":entryID",  use: fuelController.delete)
 
     financeProtected.get("instructor", "fuel", "nearby") { req async throws -> [FuelPriceService.NearbyStation] in

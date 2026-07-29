@@ -89,30 +89,6 @@ struct FuelController: RouteCollection {
     func log(_ req: Request) async throws -> FuelEntryDTO {
         let body = try req.content.decode(LogFuelRequest.self)
 
-        // Find previous fill-up for derived calculations
-        let previous = try await FuelEntry.query(on: req.db)
-            .sort(\.$date, .descending)
-            .first()
-
-        var milesSinceLastFill: Double? = nil
-        var mpg: Double? = nil
-        var costPerMile: Double? = nil
-
-        if let prev = previous {
-            let miles = body.odometerReading - prev.odometerReading
-            if miles > 0 {
-                milesSinceLastFill = miles
-                costPerMile = (body.totalCost * 100) / miles
-
-                // MPG only reliable if both this fill and the previous were full tanks
-                if body.isFullTank && prev.isFullTank {
-                    let litresPerGallon = 4.54609
-                    let gallons = body.litres / litresPerGallon
-                    mpg = gallons > 0 ? miles / gallons : nil
-                }
-            }
-        }
-
         let entry = FuelEntry(
             date: body.date,
             vendor: body.vendor,
@@ -121,12 +97,44 @@ struct FuelController: RouteCollection {
             litres: body.litres,
             odometerReading: body.odometerReading,
             isFullTank: body.isFullTank,
-            milesSinceLastFill: milesSinceLastFill,
-            mpg: mpg,
-            costPerMile: costPerMile
+            milesSinceLastFill: nil,
+            mpg: nil,
+            costPerMile: nil
         )
         try await entry.save(on: req.db)
-        return toDTO(entry)
+        try await recalculateAll(on: req.db)
+
+        guard let saved = try await FuelEntry.find(entry.id, on: req.db) else {
+            throw Abort(.internalServerError)
+        }
+        return toDTO(saved)
+    }
+
+    // MARK: - PATCH /instructor/fuel/:entryID
+
+    func update(_ req: Request) async throws -> FuelEntryDTO {
+        guard let entryID = req.parameters.get("entryID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid entry ID")
+        }
+        guard let entry = try await FuelEntry.find(entryID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        let body = try req.content.decode(LogFuelRequest.self)
+
+        entry.date = body.date
+        entry.vendor = body.vendor
+        entry.totalCost = body.totalCost
+        entry.pencePerLitre = body.pencePerLitre
+        entry.litres = body.litres
+        entry.odometerReading = body.odometerReading
+        entry.isFullTank = body.isFullTank
+        try await entry.save(on: req.db)
+        try await recalculateAll(on: req.db)
+
+        guard let saved = try await FuelEntry.find(entryID, on: req.db) else {
+            throw Abort(.internalServerError)
+        }
+        return toDTO(saved)
     }
 
     // MARK: - DELETE /instructor/fuel/:entryID
@@ -139,10 +147,50 @@ struct FuelController: RouteCollection {
             throw Abort(.notFound)
         }
         try await entry.delete(on: req.db)
+        try await recalculateAll(on: req.db)
         return .noContent
     }
 
     // MARK: - Helpers
+
+    /// Recomputes milesSinceLastFill/mpg/costPerMile for every entry in chronological
+    /// (date-ascending) order. Runs after any insert/update/delete so backdated or
+    /// out-of-order entries don't leave stale stats on their new neighbors.
+    private func recalculateAll(on db: Database) async throws {
+        let all = try await FuelEntry.query(on: db)
+            .sort(\.$date, .ascending)
+            .all()
+
+        var previous: FuelEntry?
+        for entry in all {
+            var milesSinceLastFill: Double? = nil
+            var mpg: Double? = nil
+            var costPerMile: Double? = nil
+
+            if let prev = previous {
+                let miles = entry.odometerReading - prev.odometerReading
+                if miles > 0 {
+                    milesSinceLastFill = miles
+                    costPerMile = (entry.totalCost * 100) / miles
+
+                    if entry.isFullTank && prev.isFullTank {
+                        let litresPerGallon = 4.54609
+                        let gallons = entry.litres / litresPerGallon
+                        mpg = gallons > 0 ? miles / gallons : nil
+                    }
+                }
+            }
+
+            if entry.milesSinceLastFill != milesSinceLastFill || entry.mpg != mpg || entry.costPerMile != costPerMile {
+                entry.milesSinceLastFill = milesSinceLastFill
+                entry.mpg = mpg
+                entry.costPerMile = costPerMile
+                try await entry.save(on: db)
+            }
+
+            previous = entry
+        }
+    }
 
     private func toDTO(_ e: FuelEntry) -> FuelEntryDTO {
         FuelEntryDTO(
