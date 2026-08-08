@@ -245,6 +245,11 @@ struct InstructorLessonController: RouteCollection {
             var title: String?
         }
 
+        let caller = try req.auth.require(User.self)
+        guard caller.role == "instructor" || caller.role == "family" else {
+            throw Abort(.forbidden)
+        }
+
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "lessonID missing or invalid")
         }
@@ -338,6 +343,11 @@ struct InstructorLessonController: RouteCollection {
     func markLessonAvailable(_ req: Request) async throws -> HTTPStatus {
         struct Body: Content {
             var title: String?
+        }
+
+        let caller = try req.auth.require(User.self)
+        guard caller.role == "instructor" || caller.role == "family" else {
+            throw Abort(.forbidden)
         }
 
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
