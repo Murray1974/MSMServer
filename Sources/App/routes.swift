@@ -1295,9 +1295,6 @@ public func routes(_ app: Application) throws {
     }
 
     financeProtected.post("finance", "payments", use: finance.addPayment)
-    financeProtected.post("finance", "expenses", use: finance.addExpense)
-    financeProtected.post("finance", "expenses", ":expenseID", "update", use: finance.updateExpense)
-    financeProtected.delete("finance", "expenses", ":expenseID", use: finance.deleteExpense)
     financeProtected.get("finance", "expenses", "export", use: finance.exportExpensesCSV)
     financeProtected.get("finance", "ledger", "export", use: finance.exportLedgerCSV)
     financeProtected.post("finance", "lessons", ":lessonID", "charge", use: finance.chargeLesson)

@@ -89,14 +89,25 @@ struct FinanceController {
             .all()
 
         let incomeEntries = entries.filter { $0.type == "payment" }
-        let expenseEntries = entries.filter { $0.type == "expense" || $0.type.hasPrefix("expense_") }
+
+        let expenseEntries = try await ExpenseEntry.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .filter(\.$expenseDate >= startDate)
+            .filter(\.$expenseDate <= endDate)
+            .all()
 
         let income = incomeEntries.reduce(Decimal.zero) { partial, entry in
             partial + entry.amount
         }
 
-        let expenses = expenseEntries.reduce(Decimal.zero) { partial, entry in
-            partial + abs(entry.amount)
+        var categoryTotals: [String: Decimal] = [:]
+        var expenses = Decimal.zero
+
+        for entry in expenseEntries {
+            guard entry.isBusinessUse else { continue }
+            let claimable = entry.amount * Decimal(entry.businessUsePercent) / 100
+            categoryTotals[entry.category, default: 0] += claimable
+            expenses += claimable
         }
 
         let net = income - expenses
@@ -110,7 +121,7 @@ struct FinanceController {
 
         // Cash view (actual money movement)
         let cashIn = incomeEntries.reduce(Decimal.zero) { $0 + $1.amount }
-        let cashOut = expenseEntries.reduce(Decimal.zero) { $0 + abs($1.amount) }
+        let cashOut = expenses
         let cashBalance = cashIn - cashOut
 
         // Outstanding student credit (liability)
@@ -118,20 +129,6 @@ struct FinanceController {
         let outstandingCredit = studentBalances.reduce(Decimal.zero) { $0 + max($1.currentBalance, 0) }
 
         let trueAvailableCash = cashBalance - outstandingCredit
-
-        var categoryTotals: [String: Decimal] = [:]
-
-        for entry in expenseEntries {
-            let rawType = entry.type
-            let category: String
-            if rawType.hasPrefix("expense_") {
-                category = String(rawType.dropFirst("expense_".count))
-            } else {
-                category = "other"
-            }
-
-            categoryTotals[category, default: 0] += abs(entry.amount)
-        }
 
         let recentEntries = entries
             .sorted {
@@ -180,20 +177,27 @@ struct FinanceController {
         let monthFormatter = DateFormatter()
         monthFormatter.dateFormat = "MMM yyyy"
 
-        let groupedByMonth = Dictionary(grouping: entries) { entry -> Date in
-            let comps = calendar.dateComponents([.year, .month], from: entry.effectiveDate)
-            return calendar.date(from: comps) ?? entry.effectiveDate
+        func monthKey(_ date: Date) -> Date {
+            let comps = calendar.dateComponents([.year, .month], from: date)
+            return calendar.date(from: comps) ?? date
         }
 
-        let monthlyBreakdown = groupedByMonth
-            .map { (date, entries) -> BusinessMonthlyView in
-                let income = entries
-                    .filter { $0.type == "payment" }
-                    .reduce(Decimal.zero) { $0 + $1.amount }
+        let incomeByMonth = Dictionary(grouping: incomeEntries) { monthKey($0.effectiveDate) }
+            .mapValues { $0.reduce(Decimal.zero) { $0 + $1.amount } }
 
-                let expenses = entries
-                    .filter { $0.type == "expense" || $0.type.hasPrefix("expense_") }
-                    .reduce(Decimal.zero) { $0 + abs($1.amount) }
+        let expensesByMonth = Dictionary(grouping: expenseEntries.filter { $0.isBusinessUse }) { monthKey($0.expenseDate) }
+            .mapValues { monthEntries -> Decimal in
+                monthEntries.reduce(Decimal.zero) { partial, entry in
+                    partial + entry.amount * Decimal(entry.businessUsePercent) / 100
+                }
+            }
+
+        let allMonths = Set(incomeByMonth.keys).union(expensesByMonth.keys)
+
+        let monthlyBreakdown = allMonths
+            .map { date -> BusinessMonthlyView in
+                let income = incomeByMonth[date] ?? 0
+                let expenses = expensesByMonth[date] ?? 0
 
                 return BusinessMonthlyView(
                     month: monthFormatter.string(from: date),
@@ -246,26 +250,18 @@ struct FinanceController {
             endDate = rawEndDate
         }
 
-        let entries = try await LedgerEntry.query(on: req.db)
+        let entries = try await ExpenseEntry.query(on: req.db)
             .filter(\.$instructor.$id == instructorID)
-            .filter(\.$effectiveDate >= startDate)
-            .filter(\.$effectiveDate <= endDate)
+            .filter(\.$expenseDate >= startDate)
+            .filter(\.$expenseDate <= endDate)
             .all()
-            .filter { $0.type == "expense" || $0.type.hasPrefix("expense_") }
-            .sorted { $0.effectiveDate > $1.effectiveDate }
+            .sorted { $0.expenseDate > $1.expenseDate }
 
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = Calendar(identifier: .gregorian)
         dateFormatter.locale = Locale(identifier: "en_GB")
         dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
         dateFormatter.dateFormat = "yyyy-MM-dd"
-
-        func categoryName(for type: String) -> String {
-            if type.hasPrefix("expense_") {
-                return String(type.dropFirst("expense_".count))
-            }
-            return "other"
-        }
 
         func csvEscape(_ value: String) -> String {
             let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
@@ -274,10 +270,10 @@ struct FinanceController {
 
         let header = "Date,Category,Note,Amount"
         let rows = entries.map { entry in
-            let date = dateFormatter.string(from: entry.effectiveDate)
-            let category = categoryName(for: entry.type)
+            let date = dateFormatter.string(from: entry.expenseDate)
+            let category = entry.category
             let note = entry.note ?? ""
-            let amount = NSDecimalNumber(decimal: abs(entry.amount)).stringValue
+            let amount = NSDecimalNumber(decimal: entry.amount).stringValue
             return [
                 csvEscape(date),
                 csvEscape(category),
@@ -479,112 +475,6 @@ struct FinanceController {
         let financeStatus: String
         let bookingID: UUID?
         let isAttended: Bool
-    }
-
-    func addExpense(req: Request) async throws -> LedgerEntry {
-        struct AddExpenseInput: Content {
-            let amount: Decimal
-            let category: String?
-            let note: String?
-            let effectiveDate: Date
-        }
-
-        let input = try req.content.decode(AddExpenseInput.self)
-        let instructorID = try req.auth.require(User.self).requireID()
-
-        // Always store expenses as negative values
-        let amount = -abs(input.amount)
-
-        let type: String
-        if let category = input.category, category.isEmpty == false {
-            type = "expense_\(category.lowercased())"
-        } else {
-            type = "expense"
-        }
-
-        let entry = LedgerEntry(
-            studentID: nil,
-            instructorID: instructorID,
-            lessonID: nil,
-            type: type,
-            amount: amount,
-            paymentMethod: nil,
-            note: input.note,
-            effectiveDate: input.effectiveDate,
-            createdByUserID: instructorID
-        )
-
-        try await entry.save(on: req.db)
-
-        return entry
-    }
-
-    func deleteExpense(req: Request) async throws -> HTTPStatus {
-        let instructorID = try req.auth.require(User.self).requireID()
-
-        guard let expenseID = req.parameters.get("expenseID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Missing or invalid expenseID")
-        }
-
-        guard let entry = try await LedgerEntry.find(expenseID, on: req.db) else {
-            throw Abort(.notFound, reason: "Expense not found")
-        }
-
-        guard entry.$instructor.id == instructorID else {
-            throw Abort(.forbidden, reason: "You can only delete your own expense entries")
-        }
-
-        guard entry.type == "expense" || entry.type.hasPrefix("expense_") else {
-            throw Abort(.badRequest, reason: "Selected ledger entry is not an expense")
-        }
-
-        try await entry.delete(on: req.db)
-        return .ok
-    }
-
-    func updateExpense(req: Request) async throws -> LedgerEntry {
-        struct UpdateExpenseInput: Content {
-            let amount: Decimal
-            let category: String?
-            let note: String?
-            let effectiveDate: Date
-        }
-
-        let instructorID = try req.auth.require(User.self).requireID()
-
-        guard let expenseID = req.parameters.get("expenseID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Missing or invalid expenseID")
-        }
-
-        guard let entry = try await LedgerEntry.find(expenseID, on: req.db) else {
-            throw Abort(.notFound, reason: "Expense not found")
-        }
-
-        guard entry.$instructor.id == instructorID else {
-            throw Abort(.forbidden, reason: "You can only update your own expense entries")
-        }
-
-        guard entry.type == "expense" || entry.type.hasPrefix("expense_") else {
-            throw Abort(.badRequest, reason: "Selected ledger entry is not an expense")
-        }
-
-        let input = try req.content.decode(UpdateExpenseInput.self)
-
-        // Always store expenses as negative values
-        entry.amount = -abs(input.amount)
-
-        if let category = input.category, category.isEmpty == false {
-            entry.type = "expense_\(category.lowercased())"
-        } else {
-            entry.type = "expense"
-        }
-
-        entry.note = input.note
-        entry.effectiveDate = input.effectiveDate
-
-        try await entry.save(on: req.db)
-
-        return entry
     }
 
     func studentTransactions(req: Request) async throws -> [StudentTransactionView] {
