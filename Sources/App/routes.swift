@@ -1294,6 +1294,39 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/users/delete-orphan — deletes a bare User account (no attached StudentProfile).
+    // Use when a client account was created (e.g. via /admin/users) but never completed proper
+    // registration, leaving an orphaned login that blocks /auth/register with "already exists"
+    // and can't be approved via the normal pending-student flow. Refuses to touch any account
+    // that actually has a StudentProfile, to avoid ever deleting a real client by mistake.
+    financeProtected.post("admin", "users", "delete-orphan") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let email: String }
+        let input = try req.content.decode(Input.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$username == email)
+            .first()
+        else { throw Abort(.notFound, reason: "No account found for that email") }
+
+        let userID = try user.requireID()
+
+        guard try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .count() == 0
+        else { throw Abort(.conflict, reason: "This account has a StudentProfile attached — refusing to delete a real client.") }
+
+        try await SessionToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await PasswordResetToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await user.delete(on: req.db)
+
+        req.logger.notice("[Admin] Deleted orphaned account '\(email)' by \(instructor.username)")
+        return .ok
+    }
+
     financeProtected.post("finance", "payments", use: finance.addPayment)
     financeProtected.get("finance", "expenses", "export", use: finance.exportExpensesCSV)
     financeProtected.get("finance", "ledger", "export", use: finance.exportLedgerCSV)
