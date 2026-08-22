@@ -1301,6 +1301,46 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/users/update-email — corrects a typo'd email on an existing account. Updates
+    // both User.username (the login) and StudentProfile.email (if a profile exists) together so
+    // they never drift out of sync. Refuses if the new email is already taken by another account.
+    financeProtected.post("admin", "users", "update-email") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let oldEmail: String; let newEmail: String }
+        let input = try req.content.decode(Input.self)
+        let oldEmail = input.oldEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let newEmail = input.newEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !newEmail.isEmpty, newEmail.contains("@") else {
+            throw Abort(.unprocessableEntity, reason: "Please provide a valid new email address.")
+        }
+
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$username == oldEmail)
+            .first()
+        else { throw Abort(.notFound, reason: "No account found for that email") }
+
+        guard try await User.query(on: req.db).filter(\.$username == newEmail).count() == 0
+        else { throw Abort(.conflict, reason: "An account with the new email already exists.") }
+
+        let userID = try user.requireID()
+
+        user.username = newEmail
+        try await user.save(on: req.db)
+
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() {
+            profile.email = newEmail
+            try await profile.save(on: req.db)
+        }
+
+        req.logger.notice("[Admin] Updated email '\(oldEmail)' -> '\(newEmail)' by \(instructor.username)")
+        return .ok
+    }
+
     // POST /admin/users/delete-orphan — deletes a bare User account (no attached StudentProfile).
     // Use when a client account was created (e.g. via /admin/users) but never completed proper
     // registration, leaving an orphaned login that blocks /auth/register with "already exists"
