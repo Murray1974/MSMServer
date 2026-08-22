@@ -14,6 +14,13 @@ private struct SyncResult: Content {
     let links: [SlotLink]
 }
 
+private struct AdminUserCheckResult: Content {
+    let email: String
+    let accountExists: Bool
+    let hasProfile: Bool
+    let approvalStatus: String?
+}
+
 private struct RecoveryNotificationRequest: Content {
     let clients: [String]
     let message: String
@@ -1325,6 +1332,42 @@ public func routes(_ app: Application) throws {
 
         req.logger.notice("[Admin] Deleted orphaned account '\(email)' by \(instructor.username)")
         return .ok
+    }
+
+    // POST /admin/users/check — bulk, read-only lookup of account status by email. Used to audit
+    // whether client-side "add contact" entries (which never touch the server) have a matching
+    // real server account. Never creates or modifies anything.
+    financeProtected.post("admin", "users", "check") { req async throws -> [AdminUserCheckResult] in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let emails: [String] }
+        let input = try req.content.decode(Input.self)
+        let emails = input.emails.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let users = try await User.query(on: req.db)
+            .filter(\.$username ~~ emails)
+            .all()
+        let userByEmail = Dictionary(uniqueKeysWithValues: users.map { ($0.username, $0) })
+
+        let userIDs = users.compactMap { $0.id }
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id ~~ userIDs)
+            .all()
+        let profileByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0) })
+
+        return emails.map { email in
+            guard let user = userByEmail[email], let userID = user.id else {
+                return AdminUserCheckResult(email: email, accountExists: false, hasProfile: false, approvalStatus: nil)
+            }
+            let profile = profileByUserID[userID]
+            return AdminUserCheckResult(
+                email: email,
+                accountExists: true,
+                hasProfile: profile != nil,
+                approvalStatus: profile?.approvalStatus
+            )
+        }
     }
 
     financeProtected.post("finance", "payments", use: finance.addPayment)
