@@ -21,6 +21,15 @@ private struct AdminUserCheckResult: Content {
     let approvalStatus: String?
 }
 
+private struct AdminUserListRow: Content {
+    let id: UUID
+    let email: String
+    let firstName: String?
+    let lastName: String?
+    let role: String
+    let approvalStatus: String?
+}
+
 private struct RecoveryNotificationRequest: Content {
     let clients: [String]
     let message: String
@@ -1406,6 +1415,39 @@ public func routes(_ app: Application) throws {
                 accountExists: true,
                 hasProfile: profile != nil,
                 approvalStatus: profile?.approvalStatus
+            )
+        }
+    }
+
+    // GET /admin/users?role=student — bulk, read-only listing of every account for a role
+    // (defaults to "student"). Server-only utility, not called from any app UI — added to let
+    // the instructor pull a full email roster in one shot instead of checking one at a time.
+    financeProtected.get("admin", "users") { req async throws -> [AdminUserListRow] in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        let role = (try? req.query.get(String.self, at: "role")) ?? "student"
+
+        let users = try await User.query(on: req.db)
+            .filter(\.$role == role)
+            .sort(\.$username)
+            .all()
+
+        let userIDs = users.compactMap { $0.id }
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id ~~ userIDs)
+            .all()
+        let profileByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0) })
+
+        return try users.map { user in
+            let id = try user.requireID()
+            return AdminUserListRow(
+                id: id,
+                email: user.username,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+                approvalStatus: profileByUserID[id]?.approvalStatus
             )
         }
     }
