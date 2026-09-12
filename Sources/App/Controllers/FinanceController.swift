@@ -195,6 +195,7 @@ struct FinanceController {
         let allMonths = Set(incomeByMonth.keys).union(expensesByMonth.keys)
 
         let monthlyBreakdown = allMonths
+            .sorted()
             .map { date -> BusinessMonthlyView in
                 let income = incomeByMonth[date] ?? 0
                 let expenses = expensesByMonth[date] ?? 0
@@ -206,7 +207,6 @@ struct FinanceController {
                     net: income - expenses
                 )
             }
-            .sorted { $0.month < $1.month }
 
         return BusinessSummaryView(
             startDate: startDate,
