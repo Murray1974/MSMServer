@@ -167,6 +167,10 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "approval_notes")
     var approvalNotes: String?
 
+    /// "active" | "inactive" — student self-service status, independent of accountHold/approvalStatus
+    @Field(key: "account_status")
+    var accountStatus: String
+
     // MARK: - Timestamps
 
     @Timestamp(key: "created_at", on: .create)
@@ -220,7 +224,8 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         transmissionPreference: String? = nil,
         previousHours: Int? = nil,
         approvalStatus: String = "approved",
-        approvalNotes: String? = nil
+        approvalNotes: String? = nil,
+        accountStatus: String = "active"
     ) {
         self.id = id
         self.$user.id = userID
@@ -262,5 +267,6 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.previousHours = previousHours
         self.approvalStatus = approvalStatus
         self.approvalNotes = approvalNotes
+        self.accountStatus = accountStatus
     }
 }

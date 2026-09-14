@@ -198,4 +198,27 @@ struct InstructorPendingStudentsController: RouteCollection {
 
         return StatusResponse(approvalStatus: profile.approvalStatus, profileComplete: profileComplete)
     }
+
+    // MARK: - POST /student/account-status (student-facing self-service Active/Inactive toggle)
+
+    struct UpdateAccountStatusInput: Content {
+        let status: String
+    }
+
+    func updateAccountStatus(_ req: Request) async throws -> HTTPStatus {
+        let userID = try req.auth.require(User.self).requireID()
+        let input = try req.content.decode(UpdateAccountStatusInput.self)
+        guard input.status == "active" || input.status == "inactive" else {
+            throw Abort(.badRequest, reason: "status must be 'active' or 'inactive'")
+        }
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Profile not found.")
+        }
+        profile.accountStatus = input.status
+        try await profile.save(on: req.db)
+        return .ok
+    }
 }

@@ -88,6 +88,12 @@ struct StudentBookingsController: RouteCollection {
         let userID = try user.requireID()
         req.logger.info("student.createBooking: userID=\(userID) username=\(user.username) displayName=\(user.displayName) lessonID_param=pending")
 
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first(), profile.accountStatus == "inactive" {
+            throw Abort(.forbidden, reason: "Your account is currently inactive. Reactivate your account in the app to book new lessons.")
+        }
+
         let input = try req.content.decode(CreateBookingInput.self)
         req.logger.info("student.createBooking: requested lessonID=\(input.lessonID.uuidString) offset=\(input.startOffsetMinutes ?? 0) duration=\(input.durationMinutes ?? -1)")
         let offsetMinutes = input.startOffsetMinutes ?? 0

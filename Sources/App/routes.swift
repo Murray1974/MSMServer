@@ -971,6 +971,7 @@ public func routes(_ app: Application) throws {
             transactions: transactions,
             accountHold: profile?.accountHold ?? false,
             accountHoldReason: profile?.accountHoldReason,
+            accountStatus: profile?.accountStatus ?? "active",
             pendingPaymentBooking: pendingPaymentBooking,
             holdLessonID: holdLessonID,
             holdLessonStartsAt: holdLessonStartsAt,
@@ -1627,6 +1628,7 @@ public func routes(_ app: Application) throws {
     // Student approval status check + profile completion
     studentProtected.get("status",            use: pendingController.studentStatus)
     studentProtected.post("complete-profile", use: pendingController.completeProfile)
+    studentProtected.post("account-status",   use: pendingController.updateAccountStatus)
 
     // controllers
     try app.register(collection: AuthController())

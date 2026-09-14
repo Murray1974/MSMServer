@@ -7,6 +7,7 @@ struct StudentSelfBalanceView: Content {
     let transactions: [StudentTransactionView]
     let accountHold: Bool
     let accountHoldReason: String?
+    let accountStatus: String
     /// Non-nil when the student has an active upcoming booking that is not yet covered
     /// and the lesson starts within the next 50 hours. Triggers the persistent payment modal.
     let pendingPaymentBooking: PendingPaymentView?

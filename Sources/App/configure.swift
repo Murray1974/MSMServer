@@ -121,6 +121,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddPaymentEnforcementFieldsToBooking())
     app.migrations.add(AddRegistrationFieldsToStudentProfile())
     app.migrations.add(AddLessonStartsAtIndex())
+    app.migrations.add(AddAccountStatusToStudentProfile())
 
     try app.autoMigrate().wait()
 
