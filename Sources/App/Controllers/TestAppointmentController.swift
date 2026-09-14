@@ -162,15 +162,21 @@ struct TestAppointmentController: RouteCollection {
         var id: UUID
         var username: String
         var displayName: String?
+        var dateOfBirth: Date?
     }
 
     func listStudents(_ req: Request) async throws -> [StudentPickerRow] {
         let students = try await User.query(on: req.db)
             .filter(\.$role == "student")
             .all()
+        let userIDs = students.compactMap { $0.id }
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id ~~ userIDs)
+            .all()
+        let dobByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.dateOfBirth) })
         return students.compactMap { u in
             guard let id = u.id else { return nil }
-            return StudentPickerRow(id: id, username: u.username, displayName: u.displayName)
+            return StudentPickerRow(id: id, username: u.username, displayName: u.displayName, dateOfBirth: dobByUserID[id] ?? nil)
         }
         .sorted { ($0.displayName ?? $0.username) < ($1.displayName ?? $1.username) }
     }
