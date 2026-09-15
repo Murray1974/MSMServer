@@ -11,6 +11,8 @@ struct TestAppointmentController: RouteCollection {
         instructor.get("students", use: listStudents)
         // All tests for a specific student
         instructor.get("students", ":userID", "tests", use: studentTestHistory)
+        // Instructor-supplied DOB (e.g. from a licence scan) for students who predate self-registration
+        instructor.patch("students", ":studentID", "date-of-birth", use: updateStudentDateOfBirth)
 
         let tests = instructor.grouped("tests")
         tests.post(use: createTest)
@@ -179,6 +181,26 @@ struct TestAppointmentController: RouteCollection {
             return StudentPickerRow(id: id, username: u.username, displayName: u.displayName, dateOfBirth: dobByUserID[id] ?? nil)
         }
         .sorted { ($0.displayName ?? $0.username) < ($1.displayName ?? $1.username) }
+    }
+
+    struct UpdateDateOfBirthInput: Content {
+        var dateOfBirth: Date
+    }
+
+    func updateStudentDateOfBirth(_ req: Request) async throws -> HTTPStatus {
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid student ID")
+        }
+        let input = try req.content.decode(UpdateDateOfBirthInput.self)
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Student profile not found.")
+        }
+        profile.dateOfBirth = input.dateOfBirth
+        try await profile.save(on: req.db)
+        return .ok
     }
 
     // MARK: - POST /instructor/tests
