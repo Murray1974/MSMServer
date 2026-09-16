@@ -165,6 +165,7 @@ struct TestAppointmentController: RouteCollection {
         var username: String
         var displayName: String?
         var dateOfBirth: Date?
+        var accountStatus: String
     }
 
     func listStudents(_ req: Request) async throws -> [StudentPickerRow] {
@@ -176,9 +177,16 @@ struct TestAppointmentController: RouteCollection {
             .filter(\.$user.$id ~~ userIDs)
             .all()
         let dobByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.dateOfBirth) })
+        let statusByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.accountStatus) })
         return students.compactMap { u in
             guard let id = u.id else { return nil }
-            return StudentPickerRow(id: id, username: u.username, displayName: u.displayName, dateOfBirth: dobByUserID[id] ?? nil)
+            return StudentPickerRow(
+                id: id,
+                username: u.username,
+                displayName: u.displayName,
+                dateOfBirth: dobByUserID[id] ?? nil,
+                accountStatus: statusByUserID[id] ?? "active"
+            )
         }
         .sorted { ($0.displayName ?? $0.username) < ($1.displayName ?? $1.username) }
     }
