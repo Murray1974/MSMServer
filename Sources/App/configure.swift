@@ -122,6 +122,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddRegistrationFieldsToStudentProfile())
     app.migrations.add(AddLessonStartsAtIndex())
     app.migrations.add(AddAccountStatusToStudentProfile())
+    app.migrations.add(AddInactivityFieldsToStudentProfile())
 
     try app.autoMigrate().wait()
 
@@ -130,6 +131,9 @@ public func configure(_ app: Application) throws {
 
     // Payment enforcement — reminds, warns, and auto-cancels unpaid bookings in 48h window.
     app.lifecycle.use(PaymentEnforcementLifecycle())
+
+    // Inactivity enforcement — nudges students at 14/21 days since last lesson, auto-archives at 28.
+    app.lifecycle.use(InactivityEnforcementLifecycle())
 
     // WebSocket keepalive — pings all connected clients every 30s to prevent
     // Nginx from closing idle connections (default proxy_read_timeout = 60s).

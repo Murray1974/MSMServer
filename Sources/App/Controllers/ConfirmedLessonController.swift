@@ -79,6 +79,9 @@ struct ConfirmedLessonController: RouteCollection {
                     on: req.db
                 )
             }
+            if desiredStatus == .attended {
+                try await stampAttendedLesson(userID: userID, at: now, on: req.db)
+            }
 
             // Note: confirming a lesson does not broadcast booking/slot changes.
 
@@ -107,10 +110,31 @@ struct ConfirmedLessonController: RouteCollection {
                 on: req.db
             )
         }
+        if desiredStatus == .attended {
+            try await stampAttendedLesson(userID: userID, at: now, on: req.db)
+        }
 
         // Note: confirming a lesson does not broadcast booking/slot changes.
 
         return try confirmation.asPublic()
+    }
+
+    /// Stamps `lastAttendedLessonAt` (always) and `firstLessonConfirmedAt` (first time only) on the
+    /// student's profile, and clears the inactivity nudge stage fields — a fresh attended lesson
+    /// means the inactivity clock restarts from here.
+    private func stampAttendedLesson(userID: UUID, at now: Date, on db: Database) async throws {
+        guard let profile = try await StudentProfile.query(on: db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else { return }
+        profile.lastAttendedLessonAt = now
+        if profile.firstLessonConfirmedAt == nil {
+            profile.firstLessonConfirmedAt = now
+        }
+        profile.inactivityStage14SentAt = nil
+        profile.inactivityStage21SentAt = nil
+        profile.inactivityAutoDeactivatedAt = nil
+        try await profile.save(on: db)
     }
 
     // MARK: - GET /instructor/users/:userID/confirmed-lessons

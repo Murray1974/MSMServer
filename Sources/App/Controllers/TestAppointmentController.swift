@@ -235,8 +235,27 @@ struct TestAppointmentController: RouteCollection {
             throw Abort(.notFound, reason: "Student profile not found.")
         }
         profile.accountStatus = input.status
+        if input.status == "active" {
+            // Reactivating always starts a fresh inactivity clock.
+            profile.inactivityStage14SentAt = nil
+            profile.inactivityStage21SentAt = nil
+            profile.inactivityAutoDeactivatedAt = nil
+        }
         try await profile.save(on: req.db)
         req.application.broadcastAccountStatusUpdated(studentID: studentID, status: input.status, to: .students)
+
+        if let user = try? await User.find(studentID, on: req.db),
+           let fcmToken = user.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            try? await fcm.send(
+                to: fcmToken,
+                title: input.status == "active" ? "Account reactivated" : "Account set to inactive",
+                body: input.status == "active"
+                    ? "Your instructor has reactivated your account."
+                    : "Your instructor has set your account to inactive. You can reactivate any time in the app."
+            )
+        }
+
         return .ok
     }
 

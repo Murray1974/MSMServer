@@ -218,8 +218,26 @@ struct InstructorPendingStudentsController: RouteCollection {
             throw Abort(.notFound, reason: "Profile not found.")
         }
         profile.accountStatus = input.status
+        if input.status == "active" {
+            // Reactivating always starts a fresh inactivity clock.
+            profile.inactivityStage14SentAt = nil
+            profile.inactivityStage21SentAt = nil
+            profile.inactivityAutoDeactivatedAt = nil
+        }
         try await profile.save(on: req.db)
         req.application.broadcastAccountStatusUpdated(studentID: userID, status: input.status)
+
+        if let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),
+           let fcmToken = instructor.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
+            try? await fcm.send(
+                to: fcmToken,
+                title: "Student status changed",
+                body: "\(name.isEmpty ? "A student" : name) set their account to \(input.status == "active" ? "Active" : "Inactive")."
+            )
+        }
+
         return .ok
     }
 }

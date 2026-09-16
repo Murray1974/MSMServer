@@ -171,6 +171,30 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @Field(key: "account_status")
     var accountStatus: String
 
+    // MARK: - Inactivity nudge / auto-archive system
+
+    /// Set once, the first time ever an "attended" ConfirmedLesson is saved for this student.
+    /// Gates whether the inactivity system applies at all — students who haven't had a first
+    /// lesson yet (still onboarding) are out of scope.
+    @OptionalField(key: "first_lesson_confirmed_at")
+    var firstLessonConfirmedAt: Date?
+
+    /// Overwritten every time an "attended" ConfirmedLesson is saved. The day-count anchor
+    /// for the 14/21/28-day inactivity clock.
+    @OptionalField(key: "last_attended_lesson_at")
+    var lastAttendedLessonAt: Date?
+
+    /// Staged, idempotent nudge timestamps — set once each, reset to nil whenever the student
+    /// has a new attended lesson or books a future lesson.
+    @OptionalField(key: "inactivity_stage14_sent_at")
+    var inactivityStage14SentAt: Date?
+
+    @OptionalField(key: "inactivity_stage21_sent_at")
+    var inactivityStage21SentAt: Date?
+
+    @OptionalField(key: "inactivity_auto_deactivated_at")
+    var inactivityAutoDeactivatedAt: Date?
+
     // MARK: - Timestamps
 
     @Timestamp(key: "created_at", on: .create)
@@ -225,7 +249,12 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         previousHours: Int? = nil,
         approvalStatus: String = "approved",
         approvalNotes: String? = nil,
-        accountStatus: String = "active"
+        accountStatus: String = "active",
+        firstLessonConfirmedAt: Date? = nil,
+        lastAttendedLessonAt: Date? = nil,
+        inactivityStage14SentAt: Date? = nil,
+        inactivityStage21SentAt: Date? = nil,
+        inactivityAutoDeactivatedAt: Date? = nil
     ) {
         self.id = id
         self.$user.id = userID
@@ -268,5 +297,10 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.approvalStatus = approvalStatus
         self.approvalNotes = approvalNotes
         self.accountStatus = accountStatus
+        self.firstLessonConfirmedAt = firstLessonConfirmedAt
+        self.lastAttendedLessonAt = lastAttendedLessonAt
+        self.inactivityStage14SentAt = inactivityStage14SentAt
+        self.inactivityStage21SentAt = inactivityStage21SentAt
+        self.inactivityAutoDeactivatedAt = inactivityAutoDeactivatedAt
     }
 }

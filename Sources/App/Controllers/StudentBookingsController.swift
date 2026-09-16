@@ -181,6 +181,17 @@ struct StudentBookingsController: RouteCollection {
 
         try await booking.save(on: req.db)
 
+        // A future lesson now exists — clear any pending inactivity nudge stages so the
+        // 14/21/28-day clock doesn't fire while this booking is upcoming.
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() {
+            profile.inactivityStage14SentAt = nil
+            profile.inactivityStage21SentAt = nil
+            profile.inactivityAutoDeactivatedAt = nil
+            try await profile.save(on: req.db)
+        }
+
         lesson.state = "booked"
         lesson.calendarName = "MSM Lessons"
         try await lesson.save(on: req.db)
