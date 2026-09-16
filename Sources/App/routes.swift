@@ -726,6 +726,59 @@ public func routes(_ app: Application) throws {
             .encodeResponse(status: .ok, for: req)
     }
 
+    // POST /admin/backfill-inactivity-fields
+    // One-time fix: the 14/21/28-day inactivity auto-archive system only stamps
+    // StudentProfile.firstLessonConfirmedAt / lastAttendedLessonAt going forward, from new
+    // ConfirmedLesson confirms. Existing students with lesson history that predates that change
+    // would otherwise never enter the inactivity system at all. This derives both fields from
+    // each student's existing "attended" ConfirmedLesson records. Idempotent — safe to re-run;
+    // skips any profile that already has firstLessonConfirmedAt set.
+    adminProtected.post("backfill-inactivity-fields") { req async throws -> Response in
+        struct BackfillResult: Content {
+            var updated: Int
+            var skippedAlreadySet: Int
+            var skippedNoAttendedLesson: Int
+        }
+
+        let attended = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$status == ConfirmedLesson.Status.attended.rawValue)
+            .all()
+
+        var firstByStudent: [UUID: Date] = [:]
+        var lastByStudent: [UUID: Date] = [:]
+        for record in attended {
+            guard let confirmedAt = record.confirmedAt else { continue }
+            let studentID = record.$user.id
+            firstByStudent[studentID] = min(firstByStudent[studentID] ?? confirmedAt, confirmedAt)
+            lastByStudent[studentID] = max(lastByStudent[studentID] ?? confirmedAt, confirmedAt)
+        }
+
+        var updated = 0
+        var skippedAlreadySet = 0
+        var skippedNoAttendedLesson = 0
+
+        let profiles = try await StudentProfile.query(on: req.db).all()
+        for profile in profiles {
+            let studentID = profile.$user.id
+            guard profile.firstLessonConfirmedAt == nil else {
+                skippedAlreadySet += 1
+                continue
+            }
+            guard let first = firstByStudent[studentID], let last = lastByStudent[studentID] else {
+                skippedNoAttendedLesson += 1
+                continue
+            }
+            profile.firstLessonConfirmedAt = first
+            profile.lastAttendedLessonAt = last
+            try await profile.save(on: req.db)
+            updated += 1
+        }
+
+        req.logger.notice("[backfill] inactivity fields: updated=\(updated) alreadySet=\(skippedAlreadySet) noAttendedLesson=\(skippedNoAttendedLesson)")
+        return try await BackfillResult(updated: updated, skippedAlreadySet: skippedAlreadySet, skippedNoAttendedLesson: skippedNoAttendedLesson)
+            .encodeResponse(status: .ok, for: req)
+    }
+
     // GET /admin/booking-events?type=admin.cancelled&bookingID=...&userID=...
     adminProtected.get("booking-events") { req async throws -> [BookingEvent] in
         struct Filter: Decodable {
