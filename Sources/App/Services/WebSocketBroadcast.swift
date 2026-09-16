@@ -264,6 +264,23 @@ extension Application {
         logger.debug("[WS] test_updated broadcast → \(audience) status=\(status) studentID=\(studentID)")
     }
 
+    /// Notifies connected instructor clients that a student flipped their own active/inactive
+    /// status. Instructor apps react by re-running their local archive reconciliation
+    /// immediately, without waiting for the next tab switch / view reload.
+    func broadcastAccountStatusUpdated(studentID: UUID, status: String) {
+        let payload = BroadcastEvent(
+            type: "account_status_updated",
+            title: "Account status updated",
+            message: status,
+            userID: studentID,
+            status: status
+        )
+        guard let data = try? JSONEncoder().encode(payload),
+              let text = String(data: data, encoding: .utf8) else { return }
+        instructorHub.broadcast(text)
+        logger.debug("[WS] account_status_updated broadcast → instructors studentID=\(studentID) status=\(status)")
+    }
+
     func broadcastBalanceUpdated(studentID: UUID, creditPounds: Decimal) {
         let payload = BroadcastEvent(
             type: "balance_updated",

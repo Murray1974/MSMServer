@@ -219,6 +219,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         }
         profile.accountStatus = input.status
         try await profile.save(on: req.db)
+        req.application.broadcastAccountStatusUpdated(studentID: userID, status: input.status)
         return .ok
     }
 }
