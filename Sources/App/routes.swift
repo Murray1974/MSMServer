@@ -734,10 +734,16 @@ public func routes(_ app: Application) throws {
     // each student's existing "attended" ConfirmedLesson records. Idempotent — safe to re-run;
     // skips any profile that already has firstLessonConfirmedAt set.
     adminProtected.post("backfill-inactivity-fields") { req async throws -> Response in
+        struct NoHistoryStudent: Content {
+            var studentID: UUID
+            var name: String
+            var accountStatus: String
+        }
         struct BackfillResult: Content {
             var updated: Int
             var skippedAlreadySet: Int
             var skippedNoAttendedLesson: Int
+            var noAttendedLessonStudents: [NoHistoryStudent]
         }
 
         let attended = try await ConfirmedLesson.query(on: req.db)
@@ -756,8 +762,9 @@ public func routes(_ app: Application) throws {
         var updated = 0
         var skippedAlreadySet = 0
         var skippedNoAttendedLesson = 0
+        var noAttendedLessonStudents: [NoHistoryStudent] = []
 
-        let profiles = try await StudentProfile.query(on: req.db).all()
+        let profiles = try await StudentProfile.query(on: req.db).with(\.$user).all()
         for profile in profiles {
             let studentID = profile.$user.id
             guard profile.firstLessonConfirmedAt == nil else {
@@ -766,6 +773,12 @@ public func routes(_ app: Application) throws {
             }
             guard let first = firstByStudent[studentID], let last = lastByStudent[studentID] else {
                 skippedNoAttendedLesson += 1
+                let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
+                noAttendedLessonStudents.append(NoHistoryStudent(
+                    studentID: studentID,
+                    name: name.isEmpty ? profile.user.username : name,
+                    accountStatus: profile.accountStatus
+                ))
                 continue
             }
             profile.firstLessonConfirmedAt = first
@@ -775,8 +788,12 @@ public func routes(_ app: Application) throws {
         }
 
         req.logger.notice("[backfill] inactivity fields: updated=\(updated) alreadySet=\(skippedAlreadySet) noAttendedLesson=\(skippedNoAttendedLesson)")
-        return try await BackfillResult(updated: updated, skippedAlreadySet: skippedAlreadySet, skippedNoAttendedLesson: skippedNoAttendedLesson)
-            .encodeResponse(status: .ok, for: req)
+        return try await BackfillResult(
+            updated: updated,
+            skippedAlreadySet: skippedAlreadySet,
+            skippedNoAttendedLesson: skippedNoAttendedLesson,
+            noAttendedLessonStudents: noAttendedLessonStudents
+        ).encodeResponse(status: .ok, for: req)
     }
 
     // GET /admin/booking-events?type=admin.cancelled&bookingID=...&userID=...
