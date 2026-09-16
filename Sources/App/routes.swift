@@ -764,7 +764,7 @@ public func routes(_ app: Application) throws {
         var skippedNoAttendedLesson = 0
         var noAttendedLessonStudents: [NoHistoryStudent] = []
 
-        let profiles = try await StudentProfile.query(on: req.db).with(\.$user).all()
+        let profiles = try await StudentProfile.query(on: req.db).all()
         for profile in profiles {
             let studentID = profile.$user.id
             guard profile.firstLessonConfirmedAt == nil else {
@@ -776,7 +776,7 @@ public func routes(_ app: Application) throws {
                 let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
                 noAttendedLessonStudents.append(NoHistoryStudent(
                     studentID: studentID,
-                    name: name.isEmpty ? profile.user.username : name,
+                    name: name.isEmpty ? (profile.email ?? "Unknown") : name,
                     accountStatus: profile.accountStatus
                 ))
                 continue
