@@ -13,6 +13,8 @@ struct TestAppointmentController: RouteCollection {
         instructor.get("students", ":userID", "tests", use: studentTestHistory)
         // Instructor-supplied DOB (e.g. from a licence scan) for students who predate self-registration
         instructor.patch("students", ":studentID", "date-of-birth", use: updateStudentDateOfBirth)
+        // Instructor archives/restores a client → mirrors that into the student's own active/inactive status
+        instructor.patch("students", ":studentID", "account-status", use: updateStudentAccountStatus)
 
         let tests = instructor.grouped("tests")
         tests.post(use: createTest)
@@ -208,6 +210,33 @@ struct TestAppointmentController: RouteCollection {
         }
         profile.dateOfBirth = input.dateOfBirth
         try await profile.save(on: req.db)
+        return .ok
+    }
+
+    struct UpdateAccountStatusInput: Content {
+        var status: String
+    }
+
+    /// Instructor-driven counterpart to the student's own `POST /student/account-status` toggle —
+    /// archiving a client (Passed Test / Archive) sets them inactive; restoring to Students sets
+    /// them active. Broadcasts to the student hub so the student app reflects it live.
+    func updateStudentAccountStatus(_ req: Request) async throws -> HTTPStatus {
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid student ID")
+        }
+        let input = try req.content.decode(UpdateAccountStatusInput.self)
+        guard input.status == "active" || input.status == "inactive" else {
+            throw Abort(.badRequest, reason: "status must be 'active' or 'inactive'")
+        }
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Student profile not found.")
+        }
+        profile.accountStatus = input.status
+        try await profile.save(on: req.db)
+        req.application.broadcastAccountStatusUpdated(studentID: studentID, status: input.status, to: .students)
         return .ok
     }
 

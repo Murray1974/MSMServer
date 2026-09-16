@@ -264,10 +264,12 @@ extension Application {
         logger.debug("[WS] test_updated broadcast → \(audience) status=\(status) studentID=\(studentID)")
     }
 
-    /// Notifies connected instructor clients that a student flipped their own active/inactive
-    /// status. Instructor apps react by re-running their local archive reconciliation
-    /// immediately, without waiting for the next tab switch / view reload.
-    func broadcastAccountStatusUpdated(studentID: UUID, status: String) {
+    /// Bidirectional account-status broadcast.
+    /// - `to: .instructors` — a student flipped their own active/inactive status; instructor
+    ///   apps react by re-running their local archive reconciliation immediately.
+    /// - `to: .students` — the instructor archived/restored a client; the student app reacts
+    ///   by refreshing its own status card immediately.
+    func broadcastAccountStatusUpdated(studentID: UUID, status: String, to audience: BroadcastAudience = .instructors) {
         let payload = BroadcastEvent(
             type: "account_status_updated",
             title: "Account status updated",
@@ -277,8 +279,14 @@ extension Application {
         )
         guard let data = try? JSONEncoder().encode(payload),
               let text = String(data: data, encoding: .utf8) else { return }
-        instructorHub.broadcast(text)
-        logger.debug("[WS] account_status_updated broadcast → instructors studentID=\(studentID) status=\(status)")
+        switch audience {
+        case .instructors: instructorHub.broadcast(text)
+        case .students:    studentHub.broadcast(text)
+        case .all:
+            instructorHub.broadcast(text)
+            studentHub.broadcast(text)
+        }
+        logger.debug("[WS] account_status_updated broadcast → \(audience) studentID=\(studentID) status=\(status)")
     }
 
     func broadcastBalanceUpdated(studentID: UUID, creditPounds: Decimal) {
