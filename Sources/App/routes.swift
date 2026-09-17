@@ -796,6 +796,71 @@ public func routes(_ app: Application) throws {
         ).encodeResponse(status: .ok, for: req)
     }
 
+    // GET /admin/inactivity-preview
+    // Read-only. Mirrors InactivityEnforcementService.process()'s exact logic without mutating
+    // anything, so we can see what the next scheduled cycle would do before it does it —
+    // specifically useful right after backfilling lastAttendedLessonAt from historical data, since
+    // that can put students who were never evaluated before straight past the 14/21/28-day marks.
+    adminProtected.get("inactivity-preview") { req async throws -> Response in
+        struct PreviewRow: Content {
+            var studentID: UUID
+            var name: String
+            var lastAttendedLessonAt: Date
+            var daysSinceLastLesson: Int
+            var hasFutureLesson: Bool
+            var wouldTrigger: String
+        }
+        struct PreviewResult: Content {
+            var evaluated: Int
+            var rows: [PreviewRow]
+        }
+
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$accountStatus == "active")
+            .filter(\.$firstLessonConfirmedAt != nil)
+            .all()
+
+        var rows: [PreviewRow] = []
+        for profile in profiles {
+            guard let lastLesson = profile.lastAttendedLessonAt else { continue }
+            let studentID = profile.$user.id
+
+            let now = Date()
+            let bookings = try await Booking.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .filter(\.$deletedAt == .null)
+                .with(\.$lesson)
+                .all()
+            let hasFuture = bookings.contains { $0.lesson.startsAt > now }
+
+            let days = Calendar.current.dateComponents([.day], from: lastLesson, to: now).day ?? 0
+
+            var wouldTrigger = "none"
+            if !hasFuture {
+                if days >= 28 && profile.inactivityAutoDeactivatedAt == nil {
+                    wouldTrigger = "AUTO-DEACTIVATE"
+                } else if days >= 21 && profile.inactivityStage21SentAt == nil {
+                    wouldTrigger = "stage21_push"
+                } else if days >= 14 && profile.inactivityStage14SentAt == nil {
+                    wouldTrigger = "stage14_push"
+                }
+            }
+
+            let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
+            rows.append(PreviewRow(
+                studentID: studentID,
+                name: name.isEmpty ? (profile.email ?? "Unknown") : name,
+                lastAttendedLessonAt: lastLesson,
+                daysSinceLastLesson: days,
+                hasFutureLesson: hasFuture,
+                wouldTrigger: wouldTrigger
+            ))
+        }
+
+        return try await PreviewResult(evaluated: profiles.count, rows: rows)
+            .encodeResponse(status: .ok, for: req)
+    }
+
     // GET /admin/booking-events?type=admin.cancelled&bookingID=...&userID=...
     adminProtected.get("booking-events") { req async throws -> [BookingEvent] in
         struct Filter: Decodable {
