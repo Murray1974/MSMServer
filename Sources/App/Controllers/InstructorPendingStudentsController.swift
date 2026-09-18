@@ -203,6 +203,10 @@ struct InstructorPendingStudentsController: RouteCollection {
 
     struct UpdateAccountStatusInput: Content {
         let status: String
+        /// "temporary" | "permanent" — only meaningful when status == "inactive". Missing
+        /// (older client versions) defaults to "temporary" for metrics purposes — see
+        /// StudentStatusEvent.
+        var reason: String?
     }
 
     func updateAccountStatus(_ req: Request) async throws -> HTTPStatus {
@@ -217,6 +221,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "Profile not found.")
         }
+        let previousStatus = profile.accountStatus
         profile.accountStatus = input.status
         if input.status == "active" {
             // Reactivating always starts a fresh inactivity clock.
@@ -225,6 +230,17 @@ struct InstructorPendingStudentsController: RouteCollection {
             profile.inactivityAutoDeactivatedAt = nil
         }
         try await profile.save(on: req.db)
+
+        if previousStatus != input.status {
+            let event = StudentStatusEvent(
+                studentID: userID,
+                fromStatus: previousStatus,
+                toStatus: input.status,
+                reason: input.status == "inactive" ? (input.reason ?? "temporary") : nil
+            )
+            try? await event.save(on: req.db)
+        }
+
         req.application.broadcastAccountStatusUpdated(studentID: userID, status: input.status)
 
         if let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),

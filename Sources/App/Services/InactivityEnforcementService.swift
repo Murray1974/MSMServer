@@ -75,6 +75,7 @@ struct InactivityEnforcementService {
     // MARK: - Auto-deactivate at day 28
 
     private func autoDeactivate(profile: StudentProfile, studentID: UUID, lastLesson: Date) async {
+        let previousStatus = profile.accountStatus
         profile.accountStatus = "inactive"
         profile.inactivityAutoDeactivatedAt = Date()
         do {
@@ -83,6 +84,15 @@ struct InactivityEnforcementService {
             logger.error("[InactivityEnforcement] Failed to auto-deactivate student \(studentID): \(error)")
             return
         }
+
+        // Counts as an immediate loss for turnover metrics — no human declared this a hold.
+        let event = StudentStatusEvent(
+            studentID: studentID,
+            fromStatus: previousStatus,
+            toStatus: "inactive",
+            reason: "auto_archive"
+        )
+        try? await event.save(on: db)
 
         logger.notice("[InactivityEnforcement] Auto-deactivated student \(studentID) — no lesson since \(lastLesson), no future lesson booked.")
 

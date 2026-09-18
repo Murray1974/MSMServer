@@ -15,6 +15,8 @@ struct TestAppointmentController: RouteCollection {
         instructor.patch("students", ":studentID", "date-of-birth", use: updateStudentDateOfBirth)
         // Instructor archives/restores a client → mirrors that into the student's own active/inactive status
         instructor.patch("students", ":studentID", "account-status", use: updateStudentAccountStatus)
+        // Month-by-month turnover/retention metrics (Loss, Regained, Completions, retention rate)
+        instructor.get("students", "metrics", "turnover", use: getTurnoverMetrics)
 
         let tests = instructor.grouped("tests")
         tests.post(use: createTest)
@@ -215,6 +217,9 @@ struct TestAppointmentController: RouteCollection {
 
     struct UpdateAccountStatusInput: Content {
         var status: String
+        /// "temporary" | "permanent" | "passed_test" — only meaningful when status == "inactive".
+        /// Missing defaults to "temporary" for metrics purposes — see StudentStatusEvent.
+        var reason: String?
     }
 
     /// Instructor-driven counterpart to the student's own `POST /student/account-status` toggle —
@@ -234,6 +239,7 @@ struct TestAppointmentController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "Student profile not found.")
         }
+        let previousStatus = profile.accountStatus
         profile.accountStatus = input.status
         if input.status == "active" {
             // Reactivating always starts a fresh inactivity clock.
@@ -242,6 +248,17 @@ struct TestAppointmentController: RouteCollection {
             profile.inactivityAutoDeactivatedAt = nil
         }
         try await profile.save(on: req.db)
+
+        if previousStatus != input.status {
+            let event = StudentStatusEvent(
+                studentID: studentID,
+                fromStatus: previousStatus,
+                toStatus: input.status,
+                reason: input.status == "inactive" ? (input.reason ?? "temporary") : nil
+            )
+            try? await event.save(on: req.db)
+        }
+
         req.application.broadcastAccountStatusUpdated(studentID: studentID, status: input.status, to: .students)
 
         if let user = try? await User.find(studentID, on: req.db),
@@ -257,6 +274,19 @@ struct TestAppointmentController: RouteCollection {
         }
 
         return .ok
+    }
+
+    // MARK: - GET /instructor/students/metrics/turnover
+
+    struct TurnoverMetricsQuery: Content {
+        var months: Int?
+    }
+
+    func getTurnoverMetrics(_ req: Request) async throws -> StudentMetricsService.TurnoverMetrics {
+        let query = try? req.query.decode(TurnoverMetricsQuery.self)
+        let months = min(max(query?.months ?? 12, 1), 36)
+        let service = StudentMetricsService(db: req.db)
+        return try await service.turnoverMetrics(months: months)
     }
 
     // MARK: - POST /instructor/tests
