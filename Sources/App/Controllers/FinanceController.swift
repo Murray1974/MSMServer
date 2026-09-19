@@ -115,7 +115,17 @@ struct FinanceController {
         // Simple UK tax model (basic version)
         let personalAllowance = Decimal(12570)
         let taxableIncome = max(Decimal(0), net - personalAllowance)
-        let estimatedTax = taxableIncome * Decimal(0.20)
+        let incomeTax = taxableIncome * Decimal(0.20)
+
+        // Class 4 National Insurance (self-employed), 2024/25 rates: 6% on profits between the
+        // Lower Profits Limit (£12,570) and Upper Profits Limit (£50,270), 2% above that.
+        let lowerProfitsLimit = Decimal(12570)
+        let upperProfitsLimit = Decimal(50270)
+        let class4Basic = max(Decimal(0), min(net, upperProfitsLimit) - lowerProfitsLimit) * Decimal(0.06)
+        let class4Upper = max(Decimal(0), net - upperProfitsLimit) * Decimal(0.02)
+        let class4NI = class4Basic + class4Upper
+
+        let estimatedTax = incomeTax + class4NI
 
         let takeHome = net - estimatedTax
 
