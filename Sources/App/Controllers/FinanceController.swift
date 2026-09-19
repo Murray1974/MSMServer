@@ -916,7 +916,7 @@ struct FinanceController {
             instructorID: instructorID,
             lessonID: original.$lesson.id,
             type: "refund",
-            amount: refundAmount,
+            amount: -refundAmount,
             paymentMethod: isStripePayment ? "stripe" : nil,
             note: input.reason,
             effectiveDate: Date(),
