@@ -88,6 +88,7 @@ struct FinanceController {
             .filter(\.$instructor.$id == instructorID)
             .filter(\.$effectiveDate >= startDate)
             .filter(\.$effectiveDate <= endDate)
+            .filter(\.$voidedAt == nil)
             .all()
 
         let incomeEntries = entries.filter { $0.type == "payment" }
@@ -329,6 +330,7 @@ struct FinanceController {
             .filter(\.$instructor.$id == instructorID)
             .filter(\.$effectiveDate >= startDate)
             .filter(\.$effectiveDate <= endDate)
+            .filter(\.$voidedAt == nil)
             .all()
             .sorted { lhs, rhs in
                 if lhs.effectiveDate == rhs.effectiveDate {
