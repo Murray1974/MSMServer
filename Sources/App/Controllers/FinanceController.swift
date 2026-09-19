@@ -31,6 +31,8 @@ struct BusinessSummaryView: Content {
     let expenses: Decimal
     let net: Decimal
     let estimatedTax: Decimal
+    let incomeTax: Decimal
+    let class4NI: Decimal
     let takeHome: Decimal
     let cashIn: Decimal
     let cashOut: Decimal
@@ -225,6 +227,8 @@ struct FinanceController {
             expenses: expenses,
             net: net,
             estimatedTax: estimatedTax,
+            incomeTax: incomeTax,
+            class4NI: class4NI,
             takeHome: takeHome,
             cashIn: cashIn,
             cashOut: cashOut,
