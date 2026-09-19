@@ -46,6 +46,19 @@ struct InstructorPendingStudentsController: RouteCollection {
         let profileComplete: Bool
     }
 
+    struct CreateStudentAccountRequest: Content {
+        let email: String
+        let password: String
+        let firstName: String
+        let lastName: String
+        let mobile: String?
+    }
+
+    struct CreateStudentAccountResponse: Content {
+        let userID: UUID
+        let email: String
+    }
+
     // MARK: - GET /instructor/students/pending
 
     func listPending(_ req: Request) async throws -> [PendingStudentRow] {
@@ -255,5 +268,65 @@ struct InstructorPendingStudentsController: RouteCollection {
         }
 
         return .ok
+    }
+
+    // MARK: - POST /instructor/students/create (instructor-created student account)
+
+    /// Instructor-facing account creation. Creates a real, immediately-usable login
+    /// (User + StudentProfile) so the instructor no longer has to ask for one to be
+    /// created manually. `approvalStatus` defaults to "approved" (no pending-approval
+    /// wait, since the instructor is vouching for the student directly), but no consent
+    /// timestamps are set — `profileComplete` will compute false on first login, which
+    /// routes the student straight to the existing CompleteRegistrationScreen so they
+    /// accept GDPR/dashcam/T&Cs themselves rather than having those ticked on their behalf.
+    func createStudentAccount(_ req: Request) async throws -> CreateStudentAccountResponse {
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        let input = try req.content.decode(CreateStudentAccountRequest.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstName = input.firstName.trimmingCharacters(in: .whitespaces)
+        let lastName = input.lastName.trimmingCharacters(in: .whitespaces)
+        let mobile = input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !email.isEmpty, email.contains("@") else {
+            throw Abort(.unprocessableEntity, reason: "Please enter a valid email address.")
+        }
+        guard !firstName.isEmpty else {
+            throw Abort(.unprocessableEntity, reason: "First name is required.")
+        }
+        guard input.password.count >= 8 else {
+            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
+        }
+
+        if try await User.query(on: req.db).filter(\.$username == email).first() != nil {
+            throw Abort(.conflict, reason: "An account with this email already exists.")
+        }
+        if try await StudentProfile.query(on: req.db).filter(\.$email == email).first() != nil {
+            throw Abort(.conflict, reason: "An account with this email already exists.")
+        }
+
+        let hash = try Bcrypt.hash(input.password)
+        let user = User(
+            username: email,
+            passwordHash: hash,
+            firstName: firstName,
+            lastName: lastName.isEmpty ? nil : lastName,
+            role: "student"
+        )
+        try await user.save(on: req.db)
+        let userID = try user.requireID()
+
+        let profile = StudentProfile(
+            userID: userID,
+            firstName: firstName,
+            lastName: lastName.isEmpty ? nil : lastName,
+            mobile: (mobile?.isEmpty ?? true) ? nil : mobile,
+            email: email
+        )
+        try await profile.save(on: req.db)
+
+        req.logger.notice("[Students] Instructor-created account: '\(email)'")
+        return CreateStudentAccountResponse(userID: userID, email: email)
     }
 }
