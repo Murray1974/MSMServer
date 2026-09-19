@@ -21,7 +21,7 @@ struct VehicleController: RouteCollection {
     }
 
     struct VehicleAlert: Content {
-        let type: String      // "mot" | "service_date" | "service_mileage"
+        let type: String      // "mot" | "service_date" | "service_mileage" | "road_tax" | "insurance"
         let severity: String  // "urgent" | "warning"
         let message: String
         let daysUntil: Int?
@@ -62,6 +62,54 @@ struct VehicleController: RouteCollection {
         let totalPersonal: Double
         let grandTotal: Double
         let expenseCount: Int
+    }
+
+    struct ServiceRecordRow: Content {
+        let id: UUID
+        let serviceDate: Date
+        let odometer: Int?
+        let serviceType: String
+        let cost: Double?
+        let whatWasCovered: String?
+        let advisories: String?
+        let notes: String?
+        let createdAt: Date?
+    }
+
+    struct MOTRecordRow: Content {
+        let id: UUID
+        let testDate: Date
+        let odometer: Int?
+        let cost: Double?
+        let result: String
+        let expiryDate: Date?
+        let advisories: String?
+        let essentialRepairs: String?
+        let notes: String?
+        let createdAt: Date?
+    }
+
+    struct VehicleDocumentRow: Content {
+        let roadTaxDueDate: Date?
+        let roadTaxCost: Double?
+        let roadTaxReminderDaysBefore: Int
+        let insuranceProvider: String?
+        let insurancePolicyNumber: String?
+        let insuranceRenewalDate: Date?
+        let insuranceAnnualCost: Double?
+        let insuranceReminderDaysBefore: Int
+    }
+
+    struct InsuranceClaimRow: Content {
+        let id: UUID
+        let claimDate: Date
+        let description: String
+        let amountClaimed: Double?
+        let excessPaid: Double?
+        let excessExpenseEntryID: UUID?
+        let status: String
+        let notes: String?
+        let createdAt: Date?
     }
 
     // ── POST /instructor/vehicle/log ─────────────────────────────────────────────
@@ -340,6 +388,320 @@ struct VehicleController: RouteCollection {
         return req.fileio.streamFile(at: path)
     }
 
+    // ── Service records ──────────────────────────────────────────────────────────
+
+    func createServiceRecord(req: Request) async throws -> ServiceRecordRow {
+        struct Input: Content {
+            let serviceDate: Date?
+            let odometer: Int?
+            let serviceType: String
+            let cost: Double?
+            let whatWasCovered: String?
+            let advisories: String?
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        let input = try req.content.decode(Input.self)
+        let record = ServiceRecord(
+            instructorID:   instructorID,
+            serviceDate:    input.serviceDate ?? Date(),
+            odometer:       input.odometer,
+            serviceType:    input.serviceType,
+            cost:           input.cost.map { Decimal($0) },
+            whatWasCovered: input.whatWasCovered?.isEmpty == true ? nil : input.whatWasCovered,
+            advisories:     input.advisories?.isEmpty == true ? nil : input.advisories,
+            notes:          input.notes?.isEmpty == true ? nil : input.notes
+        )
+        try await record.save(on: req.db)
+        return try toServiceRow(record)
+    }
+
+    func listServiceRecords(req: Request) async throws -> [ServiceRecordRow] {
+        let instructorID = try req.auth.require(User.self).requireID()
+        let records = try await ServiceRecord.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .sort(\.$serviceDate, .descending)
+            .all()
+        return try records.map { try toServiceRow($0) }
+    }
+
+    func updateServiceRecord(req: Request) async throws -> ServiceRecordRow {
+        struct Input: Content {
+            let serviceDate: Date
+            let odometer: Int?
+            let serviceType: String
+            let cost: Double?
+            let whatWasCovered: String?
+            let advisories: String?
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("serviceID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid serviceID")
+        }
+        guard let record = try await ServiceRecord.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard record.$instructor.id == instructorID else { throw Abort(.forbidden) }
+
+        let input = try req.content.decode(Input.self)
+        record.serviceDate = input.serviceDate
+        record.odometer = input.odometer
+        record.serviceType = input.serviceType
+        record.cost = input.cost.map { Decimal($0) }
+        record.whatWasCovered = input.whatWasCovered?.isEmpty == true ? nil : input.whatWasCovered
+        record.advisories = input.advisories?.isEmpty == true ? nil : input.advisories
+        record.notes = input.notes?.isEmpty == true ? nil : input.notes
+        try await record.save(on: req.db)
+        return try toServiceRow(record)
+    }
+
+    func deleteServiceRecord(req: Request) async throws -> HTTPStatus {
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("serviceID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid serviceID")
+        }
+        guard let record = try await ServiceRecord.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard record.$instructor.id == instructorID else { throw Abort(.forbidden) }
+        try await record.delete(on: req.db)
+        return .noContent
+    }
+
+    // ── MOT records ───────────────────────────────────────────────────────────────
+
+    func createMOTRecord(req: Request) async throws -> MOTRecordRow {
+        struct Input: Content {
+            let testDate: Date?
+            let odometer: Int?
+            let cost: Double?
+            let result: String
+            let expiryDate: Date?
+            let advisories: String?
+            let essentialRepairs: String?
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        let input = try req.content.decode(Input.self)
+        let testDate = input.testDate ?? Date()
+        let result = input.result.lowercased()
+        let expiryDate = input.expiryDate
+            ?? (result == "pass" ? Calendar.current.date(byAdding: .year, value: 1, to: testDate) : nil)
+
+        let record = MOTRecord(
+            instructorID:     instructorID,
+            testDate:         testDate,
+            odometer:         input.odometer,
+            cost:             input.cost.map { Decimal($0) },
+            result:           result,
+            expiryDate:       expiryDate,
+            advisories:       input.advisories?.isEmpty == true ? nil : input.advisories,
+            essentialRepairs: input.essentialRepairs?.isEmpty == true ? nil : input.essentialRepairs,
+            notes:            input.notes?.isEmpty == true ? nil : input.notes
+        )
+        try await record.save(on: req.db)
+        return try toMOTRow(record)
+    }
+
+    func listMOTRecords(req: Request) async throws -> [MOTRecordRow] {
+        let instructorID = try req.auth.require(User.self).requireID()
+        let records = try await MOTRecord.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .sort(\.$testDate, .descending)
+            .all()
+        return try records.map { try toMOTRow($0) }
+    }
+
+    func updateMOTRecord(req: Request) async throws -> MOTRecordRow {
+        struct Input: Content {
+            let testDate: Date
+            let odometer: Int?
+            let cost: Double?
+            let result: String
+            let expiryDate: Date?
+            let advisories: String?
+            let essentialRepairs: String?
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("motID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid motID")
+        }
+        guard let record = try await MOTRecord.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard record.$instructor.id == instructorID else { throw Abort(.forbidden) }
+
+        let input = try req.content.decode(Input.self)
+        let result = input.result.lowercased()
+        record.testDate = input.testDate
+        record.odometer = input.odometer
+        record.cost = input.cost.map { Decimal($0) }
+        record.result = result
+        record.expiryDate = input.expiryDate
+            ?? (result == "pass" ? Calendar.current.date(byAdding: .year, value: 1, to: input.testDate) : nil)
+        record.advisories = input.advisories?.isEmpty == true ? nil : input.advisories
+        record.essentialRepairs = input.essentialRepairs?.isEmpty == true ? nil : input.essentialRepairs
+        record.notes = input.notes?.isEmpty == true ? nil : input.notes
+        try await record.save(on: req.db)
+        return try toMOTRow(record)
+    }
+
+    func deleteMOTRecord(req: Request) async throws -> HTTPStatus {
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("motID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid motID")
+        }
+        guard let record = try await MOTRecord.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard record.$instructor.id == instructorID else { throw Abort(.forbidden) }
+        try await record.delete(on: req.db)
+        return .noContent
+    }
+
+    // ── Vehicle documents (road tax / insurance — single row per instructor) ───────
+
+    func getVehicleDocument(req: Request) async throws -> VehicleDocumentRow {
+        let instructorID = try req.auth.require(User.self).requireID()
+        let doc = try await VehicleDocument.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .first()
+        return toDocumentRow(doc)
+    }
+
+    func updateVehicleDocument(req: Request) async throws -> VehicleDocumentRow {
+        struct Input: Content {
+            let roadTaxDueDate: Date?
+            let roadTaxCost: Double?
+            let roadTaxReminderDaysBefore: Int?
+            let insuranceProvider: String?
+            let insurancePolicyNumber: String?
+            let insuranceRenewalDate: Date?
+            let insuranceAnnualCost: Double?
+            let insuranceReminderDaysBefore: Int?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        let input = try req.content.decode(Input.self)
+        let doc = try await findOrCreateDocument(instructorID: instructorID, db: req.db)
+
+        doc.roadTaxDueDate = input.roadTaxDueDate
+        doc.roadTaxCost = input.roadTaxCost.map { Decimal($0) }
+        doc.roadTaxReminderDaysBefore = input.roadTaxReminderDaysBefore ?? doc.roadTaxReminderDaysBefore
+        doc.insuranceProvider = input.insuranceProvider?.isEmpty == true ? nil : input.insuranceProvider
+        doc.insurancePolicyNumber = input.insurancePolicyNumber?.isEmpty == true ? nil : input.insurancePolicyNumber
+        doc.insuranceRenewalDate = input.insuranceRenewalDate
+        doc.insuranceAnnualCost = input.insuranceAnnualCost.map { Decimal($0) }
+        doc.insuranceReminderDaysBefore = input.insuranceReminderDaysBefore ?? doc.insuranceReminderDaysBefore
+        try await doc.save(on: req.db)
+        return toDocumentRow(doc)
+    }
+
+    private func findOrCreateDocument(instructorID: UUID, db: Database) async throws -> VehicleDocument {
+        if let existing = try await VehicleDocument.query(on: db)
+            .filter(\.$instructor.$id == instructorID)
+            .first() {
+            return existing
+        }
+        let doc = VehicleDocument(instructorID: instructorID)
+        try await doc.save(on: db)
+        return doc
+    }
+
+    // ── Insurance claims ─────────────────────────────────────────────────────────
+
+    func createInsuranceClaim(req: Request) async throws -> InsuranceClaimRow {
+        struct Input: Content {
+            let claimDate: Date?
+            let description: String
+            let amountClaimed: Double?
+            let excessPaid: Double?
+            let excessExpenseEntryID: UUID?
+            let status: String?
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        let input = try req.content.decode(Input.self)
+
+        let resolvedExcess = try await resolveExcess(
+            instructorID: instructorID, manual: input.excessPaid,
+            linkedExpenseID: input.excessExpenseEntryID, db: req.db
+        )
+
+        let claim = InsuranceClaim(
+            instructorID:         instructorID,
+            claimDate:            input.claimDate ?? Date(),
+            claimDescription:     input.description,
+            amountClaimed:        input.amountClaimed.map { Decimal($0) },
+            excessPaid:           resolvedExcess,
+            excessExpenseEntryID: input.excessExpenseEntryID,
+            status:               input.status ?? "open",
+            notes:                input.notes?.isEmpty == true ? nil : input.notes
+        )
+        try await claim.save(on: req.db)
+        return try toClaimRow(claim)
+    }
+
+    func listInsuranceClaims(req: Request) async throws -> [InsuranceClaimRow] {
+        let instructorID = try req.auth.require(User.self).requireID()
+        let claims = try await InsuranceClaim.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .sort(\.$claimDate, .descending)
+            .all()
+        return try claims.map { try toClaimRow($0) }
+    }
+
+    func updateInsuranceClaim(req: Request) async throws -> InsuranceClaimRow {
+        struct Input: Content {
+            let claimDate: Date
+            let description: String
+            let amountClaimed: Double?
+            let excessPaid: Double?
+            let excessExpenseEntryID: UUID?
+            let status: String
+            let notes: String?
+        }
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("claimID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid claimID")
+        }
+        guard let claim = try await InsuranceClaim.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard claim.$instructor.id == instructorID else { throw Abort(.forbidden) }
+
+        let input = try req.content.decode(Input.self)
+        let resolvedExcess = try await resolveExcess(
+            instructorID: instructorID, manual: input.excessPaid,
+            linkedExpenseID: input.excessExpenseEntryID, db: req.db
+        )
+
+        claim.claimDate = input.claimDate
+        claim.claimDescription = input.description
+        claim.amountClaimed = input.amountClaimed.map { Decimal($0) }
+        claim.excessPaid = resolvedExcess
+        claim.$excessExpenseEntry.id = input.excessExpenseEntryID
+        claim.status = input.status
+        claim.notes = input.notes?.isEmpty == true ? nil : input.notes
+        try await claim.save(on: req.db)
+        return try toClaimRow(claim)
+    }
+
+    func deleteInsuranceClaim(req: Request) async throws -> HTTPStatus {
+        let instructorID = try req.auth.require(User.self).requireID()
+        guard let id = req.parameters.get("claimID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid claimID")
+        }
+        guard let claim = try await InsuranceClaim.find(id, on: req.db) else { throw Abort(.notFound) }
+        guard claim.$instructor.id == instructorID else { throw Abort(.forbidden) }
+        try await claim.delete(on: req.db)
+        return .noContent
+    }
+
+    /// When a claim links to a real logged expense, the excess amount is sourced from
+    /// that expense rather than re-typed — falls back to the manual figure otherwise.
+    private func resolveExcess(
+        instructorID: UUID, manual: Double?, linkedExpenseID: UUID?, db: Database
+    ) async throws -> Decimal? {
+        guard let linkedID = linkedExpenseID else { return manual.map { Decimal($0) } }
+        guard let expense = try await ExpenseEntry.find(linkedID, on: db),
+              expense.$instructor.id == instructorID else {
+            throw Abort(.badRequest, reason: "Linked expense not found")
+        }
+        return expense.amount
+    }
+
     // ── Shared status builder ────────────────────────────────────────────────────
 
     private func buildStatus(instructorID: UUID, db: Database) async throws -> VehicleStatusResponse {
@@ -347,10 +709,19 @@ struct VehicleController: RouteCollection {
             .filter(\.$instructor.$id == instructorID)
             .sort(\.$logDate, .descending)
             .all()
+        let latestLog = logs.first
 
-        let latestLog      = logs.first
-        let lastServiceLog = logs.first(where: { $0.serviceDate != nil })
-        let lastMOTLog     = logs.first(where: { $0.motExpiryDate != nil })
+        let lastService = try await ServiceRecord.query(on: db)
+            .filter(\.$instructor.$id == instructorID)
+            .sort(\.$serviceDate, .descending)
+            .first()
+        let lastMOT = try await MOTRecord.query(on: db)
+            .filter(\.$instructor.$id == instructorID)
+            .sort(\.$testDate, .descending)
+            .first()
+        let document = try await VehicleDocument.query(on: db)
+            .filter(\.$instructor.$id == instructorID)
+            .first()
 
         var nextServiceDate: Date?
         var nextServiceMileage: Int?
@@ -359,10 +730,10 @@ struct VehicleController: RouteCollection {
 
         let cal = Calendar.current
 
-        if let svcLog = lastServiceLog, let svcDate = svcLog.serviceDate {
-            nextServiceDate = cal.date(byAdding: .year, value: 1, to: svcDate)
-            daysSinceLastService = cal.dateComponents([.day], from: svcDate, to: Date()).day
-            if let svcOdo = svcLog.odometer {
+        if let svc = lastService {
+            nextServiceDate = cal.date(byAdding: .year, value: 1, to: svc.serviceDate)
+            daysSinceLastService = cal.dateComponents([.day], from: svc.serviceDate, to: Date()).day
+            if let svcOdo = svc.odometer {
                 nextServiceMileage = svcOdo + 10_000
                 if let currentOdo = latestLog?.odometer {
                     milesSinceLastService = currentOdo - svcOdo
@@ -370,20 +741,22 @@ struct VehicleController: RouteCollection {
             }
         }
 
-        let motExpiryDate = lastMOTLog?.motExpiryDate
-        let lastMOTDate   = lastMOTLog?.lastMOTDate
+        let motExpiryDate = lastMOT?.expiryDate
+        let lastMOTDate   = lastMOT?.testDate
         let currentOdo    = latestLog?.odometer
 
         let alerts = calculateAlerts(
-            motExpiryDate:      motExpiryDate,
-            nextServiceDate:    nextServiceDate,
-            nextServiceMileage: nextServiceMileage,
-            currentOdometer:    currentOdo
+            motExpiryDate:          motExpiryDate,
+            nextServiceDate:        nextServiceDate,
+            nextServiceMileage:     nextServiceMileage,
+            currentOdometer:        currentOdo,
+            roadTaxDueDate:         document?.roadTaxDueDate,
+            insuranceRenewalDate:   document?.insuranceRenewalDate
         )
 
         return VehicleStatusResponse(
-            latestLog:            try latestLog.map    { try toLogRow($0) },
-            lastServiceLog:       try lastServiceLog.map { try toLogRow($0) },
+            latestLog:            try latestLog.map { try toLogRow($0) },
+            lastServiceLog:       nil,
             nextServiceDate:      nextServiceDate,
             nextServiceMileage:   nextServiceMileage,
             daysSinceLastService: daysSinceLastService,
@@ -400,7 +773,9 @@ struct VehicleController: RouteCollection {
         motExpiryDate: Date?,
         nextServiceDate: Date?,
         nextServiceMileage: Int?,
-        currentOdometer: Int?
+        currentOdometer: Int?,
+        roadTaxDueDate: Date? = nil,
+        insuranceRenewalDate: Date? = nil
     ) -> [VehicleAlert] {
         var alerts: [VehicleAlert] = []
         let today = Date()
@@ -469,6 +844,48 @@ struct VehicleController: RouteCollection {
             }
         }
 
+        // Road tax alert (urgent ≤30 days or overdue, warning 31–60 days)
+        if let dueDate = roadTaxDueDate {
+            let days = cal.dateComponents([.day], from: today, to: dueDate).day ?? 0
+            if days <= 0 {
+                alerts.append(VehicleAlert(
+                    type: "road_tax", severity: "urgent",
+                    message: "Road tax expired \(abs(days)) day\(abs(days) == 1 ? "" : "s") ago",
+                    daysUntil: days, milesUntil: nil))
+            } else if days <= 30 {
+                alerts.append(VehicleAlert(
+                    type: "road_tax", severity: "urgent",
+                    message: "Road tax due in \(days) day\(days == 1 ? "" : "s")",
+                    daysUntil: days, milesUntil: nil))
+            } else if days <= 60 {
+                alerts.append(VehicleAlert(
+                    type: "road_tax", severity: "warning",
+                    message: "Road tax due in \(days) days",
+                    daysUntil: days, milesUntil: nil))
+            }
+        }
+
+        // Insurance renewal alert (urgent ≤30 days or overdue, warning 31–60 days)
+        if let renewalDate = insuranceRenewalDate {
+            let days = cal.dateComponents([.day], from: today, to: renewalDate).day ?? 0
+            if days <= 0 {
+                alerts.append(VehicleAlert(
+                    type: "insurance", severity: "urgent",
+                    message: "Insurance expired \(abs(days)) day\(abs(days) == 1 ? "" : "s") ago",
+                    daysUntil: days, milesUntil: nil))
+            } else if days <= 30 {
+                alerts.append(VehicleAlert(
+                    type: "insurance", severity: "urgent",
+                    message: "Insurance renewal due in \(days) day\(days == 1 ? "" : "s")",
+                    daysUntil: days, milesUntil: nil))
+            } else if days <= 60 {
+                alerts.append(VehicleAlert(
+                    type: "insurance", severity: "warning",
+                    message: "Insurance renewal due in \(days) days",
+                    daysUntil: days, milesUntil: nil))
+            }
+        }
+
         return alerts
     }
 
@@ -505,6 +922,62 @@ struct VehicleController: RouteCollection {
             mileage:            entry.mileage,
             hasReceipt:         entry.receiptPath != nil,
             createdAt:          entry.createdAt
+        )
+    }
+
+    private func toServiceRow(_ record: ServiceRecord) throws -> ServiceRecordRow {
+        ServiceRecordRow(
+            id:              try record.requireID(),
+            serviceDate:     record.serviceDate,
+            odometer:        record.odometer,
+            serviceType:     record.serviceType,
+            cost:            record.cost.map { ($0 as NSDecimalNumber).doubleValue },
+            whatWasCovered:  record.whatWasCovered,
+            advisories:      record.advisories,
+            notes:           record.notes,
+            createdAt:       record.createdAt
+        )
+    }
+
+    private func toMOTRow(_ record: MOTRecord) throws -> MOTRecordRow {
+        MOTRecordRow(
+            id:                try record.requireID(),
+            testDate:          record.testDate,
+            odometer:          record.odometer,
+            cost:              record.cost.map { ($0 as NSDecimalNumber).doubleValue },
+            result:            record.result,
+            expiryDate:        record.expiryDate,
+            advisories:        record.advisories,
+            essentialRepairs:  record.essentialRepairs,
+            notes:             record.notes,
+            createdAt:         record.createdAt
+        )
+    }
+
+    private func toDocumentRow(_ doc: VehicleDocument?) -> VehicleDocumentRow {
+        VehicleDocumentRow(
+            roadTaxDueDate:              doc?.roadTaxDueDate,
+            roadTaxCost:                 doc?.roadTaxCost.map { ($0 as NSDecimalNumber).doubleValue },
+            roadTaxReminderDaysBefore:   doc?.roadTaxReminderDaysBefore ?? 14,
+            insuranceProvider:           doc?.insuranceProvider,
+            insurancePolicyNumber:       doc?.insurancePolicyNumber,
+            insuranceRenewalDate:        doc?.insuranceRenewalDate,
+            insuranceAnnualCost:         doc?.insuranceAnnualCost.map { ($0 as NSDecimalNumber).doubleValue },
+            insuranceReminderDaysBefore: doc?.insuranceReminderDaysBefore ?? 14
+        )
+    }
+
+    private func toClaimRow(_ claim: InsuranceClaim) throws -> InsuranceClaimRow {
+        InsuranceClaimRow(
+            id:                    try claim.requireID(),
+            claimDate:             claim.claimDate,
+            description:           claim.claimDescription,
+            amountClaimed:         claim.amountClaimed.map { ($0 as NSDecimalNumber).doubleValue },
+            excessPaid:            claim.excessPaid.map { ($0 as NSDecimalNumber).doubleValue },
+            excessExpenseEntryID:  claim.$excessExpenseEntry.id,
+            status:                claim.status,
+            notes:                 claim.notes,
+            createdAt:             claim.createdAt
         )
     }
 }

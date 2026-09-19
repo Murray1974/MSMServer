@@ -124,6 +124,10 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddAccountStatusToStudentProfile())
     app.migrations.add(AddInactivityFieldsToStudentProfile())
     app.migrations.add(CreateStudentStatusEvent())
+    app.migrations.add(CreateServiceRecord())
+    app.migrations.add(CreateMOTRecord())
+    app.migrations.add(CreateVehicleDocument())
+    app.migrations.add(CreateInsuranceClaim())
 
     try app.autoMigrate().wait()
 

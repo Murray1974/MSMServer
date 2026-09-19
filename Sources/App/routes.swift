@@ -1649,6 +1649,25 @@ public func routes(_ app: Application) throws {
     financeProtected.patch("instructor", "vehicle", "expenses", ":expenseID", use: vehicleController.updateExpense)
     financeProtected.delete("instructor", "vehicle", "expenses", ":expenseID", use: vehicleController.deleteExpense)
 
+    // Vehicle — service history / MOT history / road tax & insurance / insurance claims
+    financeProtected.post("instructor",   "vehicle", "services",              use: vehicleController.createServiceRecord)
+    financeProtected.get("instructor",    "vehicle", "services",              use: vehicleController.listServiceRecords)
+    financeProtected.patch("instructor",  "vehicle", "services", ":serviceID",use: vehicleController.updateServiceRecord)
+    financeProtected.delete("instructor", "vehicle", "services", ":serviceID",use: vehicleController.deleteServiceRecord)
+
+    financeProtected.post("instructor",   "vehicle", "mot",                   use: vehicleController.createMOTRecord)
+    financeProtected.get("instructor",    "vehicle", "mot",                   use: vehicleController.listMOTRecords)
+    financeProtected.patch("instructor",  "vehicle", "mot", ":motID",         use: vehicleController.updateMOTRecord)
+    financeProtected.delete("instructor", "vehicle", "mot", ":motID",         use: vehicleController.deleteMOTRecord)
+
+    financeProtected.get("instructor",    "vehicle", "documents",             use: vehicleController.getVehicleDocument)
+    financeProtected.put("instructor",    "vehicle", "documents",             use: vehicleController.updateVehicleDocument)
+
+    financeProtected.post("instructor",   "vehicle", "claims",                use: vehicleController.createInsuranceClaim)
+    financeProtected.get("instructor",    "vehicle", "claims",                use: vehicleController.listInsuranceClaims)
+    financeProtected.patch("instructor",  "vehicle", "claims", ":claimID",    use: vehicleController.updateInsuranceClaim)
+    financeProtected.delete("instructor", "vehicle", "claims", ":claimID",    use: vehicleController.deleteInsuranceClaim)
+
     // Mileage log (HMRC per-trip)
     // GET    /instructor/mileage          — summary + all entries
     // POST   /instructor/mileage          — add entry
