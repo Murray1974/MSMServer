@@ -464,6 +464,7 @@ struct TestAppointmentController: RouteCollection {
         var ekEventID: String?
         var startsAt: Date?
         var endsAt: Date?
+        var status: String?
     }
 
     func updateTest(_ req: Request) async throws -> TestAppointmentDTO {
@@ -493,6 +494,7 @@ struct TestAppointmentController: RouteCollection {
         if let v = body.ekEventID    { appt.ekEventID    = v }
         if let v = body.startsAt     { appt.startsAt     = v }
         if let v = body.endsAt       { appt.endsAt       = v }
+        if let v = body.status       { appt.status       = v }
         try await appt.save(on: req.db)
         return dto(from: appt)
     }
