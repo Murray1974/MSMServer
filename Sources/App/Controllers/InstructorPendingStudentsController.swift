@@ -105,6 +105,17 @@ struct InstructorPendingStudentsController: RouteCollection {
         try await profile.save(on: req.db)
 
         req.logger.notice("[Students] Approved pending student: \(profile.email ?? profileID.uuidString)")
+
+        if let student = try? await User.find(profile.$user.id, on: req.db),
+           let fcmToken = student.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            try? await fcm.send(
+                to: fcmToken,
+                title: "You're approved!",
+                body: "Your account has been approved. You can now book lessons."
+            )
+        }
+
         return .ok
     }
 
