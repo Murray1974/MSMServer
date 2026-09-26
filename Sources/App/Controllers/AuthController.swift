@@ -132,6 +132,22 @@ struct AuthController: RouteCollection {
         req.session.data["userID"] = userID.uuidString
 
         req.logger.notice("[Auth] New student registered (pending approval): '\(email)'")
+
+        if let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),
+           let fcmToken = instructor.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
+            let pendingCount = try? await StudentProfile.query(on: req.db)
+                .filter(\.$approvalStatus == "pending")
+                .count()
+            try? await fcm.send(
+                to: fcmToken,
+                title: "New client to confirm",
+                body: "\(name.isEmpty ? "A new student" : name) just registered and is waiting for approval.",
+                badge: pendingCount
+            )
+        }
+
         return .init(token: raw, approvalStatus: "pending", profileComplete: true)
     }
 

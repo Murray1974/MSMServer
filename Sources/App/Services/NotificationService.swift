@@ -49,9 +49,9 @@ struct FCMNotificationService: Sendable {
 
     // MARK: - Public API
 
-    func send(to fcmToken: String, title: String, body: String) async throws {
+    func send(to fcmToken: String, title: String, body: String, badge: Int? = nil) async throws {
         let accessToken = try await fetchAccessToken()
-        try await sendMessage(to: fcmToken, title: title, body: body, accessToken: accessToken)
+        try await sendMessage(to: fcmToken, title: title, body: body, badge: badge, accessToken: accessToken)
     }
 
     // MARK: - Private
@@ -125,6 +125,7 @@ struct FCMNotificationService: Sendable {
                         struct Alert: Encodable { let title: String; let body: String }
                         let alert: Alert
                         let sound: String
+                        let badge: Int?
                     }
                     let aps: APS
                 }
@@ -139,14 +140,14 @@ struct FCMNotificationService: Sendable {
         let message: Message
     }
 
-    private func sendMessage(to fcmToken: String, title: String, body: String, accessToken: String) async throws {
+    private func sendMessage(to fcmToken: String, title: String, body: String, badge: Int?, accessToken: String) async throws {
         let payload = FCMPayload(message: .init(
             token: fcmToken,
             notification: .init(title: title, body: body),
             android: .init(notification: .init(sound: "default")),
             apns: .init(
                 headers: .init(apnsPushType: "alert", apnsPriority: "10"),
-                payload: .init(aps: .init(alert: .init(title: title, body: body), sound: "default"))
+                payload: .init(aps: .init(alert: .init(title: title, body: body), sound: "default", badge: badge))
             )
         ))
 
