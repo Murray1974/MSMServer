@@ -41,6 +41,20 @@ struct StudentLessonController: RouteCollection {
     }
 
     func availableLessons(_ req: Request) async throws -> [Lesson.Public] {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() {
+            if profile.approvalStatus == "rejected" {
+                throw Abort(.forbidden, reason: "Your account application was not approved. Please contact your instructor for more information.")
+            }
+            if profile.approvalStatus == "pending" {
+                throw Abort(.forbidden, reason: "Your account is still awaiting approval. You'll be able to browse lessons once your instructor has approved your account.")
+            }
+        }
+
         let now = Date()
 
         // 1) Start with all future lessons that are explicitly available.

@@ -90,8 +90,16 @@ struct StudentBookingsController: RouteCollection {
 
         if let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == userID)
-            .first(), profile.accountStatus == "inactive" {
-            throw Abort(.forbidden, reason: "Your account is currently inactive. Reactivate your account in the app to book new lessons.")
+            .first() {
+            if profile.accountStatus == "inactive" {
+                throw Abort(.forbidden, reason: "Your account is currently inactive. Reactivate your account in the app to book new lessons.")
+            }
+            if profile.approvalStatus == "rejected" {
+                throw Abort(.forbidden, reason: "Your account application was not approved. Please contact your instructor for more information.")
+            }
+            if profile.approvalStatus == "pending" {
+                throw Abort(.forbidden, reason: "Your account is still awaiting approval. You'll be able to book lessons once your instructor has approved your account.")
+            }
         }
 
         let input = try req.content.decode(CreateBookingInput.self)
@@ -448,6 +456,21 @@ struct StudentBookingsController: RouteCollection {
 
     func rescheduleBooking(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() {
+            if profile.accountStatus == "inactive" {
+                throw Abort(.forbidden, reason: "Your account is currently inactive. Reactivate your account in the app to book new lessons.")
+            }
+            if profile.approvalStatus == "rejected" {
+                throw Abort(.forbidden, reason: "Your account application was not approved. Please contact your instructor for more information.")
+            }
+            if profile.approvalStatus == "pending" {
+                throw Abort(.forbidden, reason: "Your account is still awaiting approval. You'll be able to book lessons once your instructor has approved your account.")
+            }
+        }
 
         guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Missing bookingID")
@@ -457,7 +480,7 @@ struct StudentBookingsController: RouteCollection {
 
         guard let booking = try await Booking.query(on: req.db)
             .filter(\.$id == bookingID)
-            .filter(\.$user.$id == user.requireID())
+            .filter(\.$user.$id == userID)
             .filter(\.$deletedAt == nil)
             .with(\.$lesson)
             .first()
@@ -480,7 +503,6 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.forbidden, reason: "Cancellations must be made at least 48 hours in advance.")
         }
 
-        let userID = try user.requireID()
         let oldLessonID = try oldLesson.requireID()
         let newLessonID = try newLesson.requireID()
 
