@@ -1519,6 +1519,56 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/users/delete-rejected — fully deletes a student account that was registered and
+    // then explicitly rejected via POST /instructor/students/:studentID/reject. Unlike delete-orphan
+    // (which only handles bare Users with no StudentProfile), this cascades through every
+    // StudentProfile-linked table so throwaway/rejected registrations can be purged completely.
+    // Refuses unless approvalStatus == "rejected", and refuses if any real financial history
+    // (LedgerEntry or ConfirmedLesson) exists for the account, to avoid ever deleting a real
+    // client or real money records by mistake.
+    financeProtected.post("admin", "users", "delete-rejected") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let email: String }
+        let input = try req.content.decode(Input.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$username == email)
+            .first()
+        else { throw Abort(.notFound, reason: "No account found for that email") }
+
+        let userID = try user.requireID()
+
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else { throw Abort(.conflict, reason: "This account has no StudentProfile — use delete-orphan instead.") }
+
+        guard profile.approvalStatus == "rejected" else {
+            throw Abort(.conflict, reason: "This account's approvalStatus is '\(profile.approvalStatus)', not 'rejected' — refusing to delete.")
+        }
+
+        guard try await LedgerEntry.query(on: req.db).filter(\.$student.$id == userID).count() == 0,
+              try await ConfirmedLesson.query(on: req.db).filter(\.$user.$id == userID).count() == 0
+        else { throw Abort(.conflict, reason: "This account has real financial history — refusing to delete.") }
+
+        try await Booking.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await TestAppointment.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await StudentSafetyProgress.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await StudentProgress.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await StudentStatusEvent.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await LessonFinance.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await SessionToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await PasswordResetToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await profile.delete(on: req.db)
+        try await user.delete(on: req.db)
+
+        req.logger.notice("[Admin] Deleted rejected account '\(email)' by \(instructor.username)")
+        return .ok
+    }
+
     // POST /admin/users/check — bulk, read-only lookup of account status by email. Used to audit
     // whether client-side "add contact" entries (which never touch the server) have a matching
     // real server account. Never creates or modifies anything.
