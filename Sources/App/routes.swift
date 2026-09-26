@@ -1569,6 +1569,53 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/users/delete-confirmed — force-deletes a student account regardless of its
+    // approvalStatus, for leftover/test registrations the instructor has explicitly confirmed
+    // (out-of-band) are not real clients. Requires `confirm: true` as a deliberate extra step
+    // and still refuses if any real financial history (LedgerEntry or ConfirmedLesson) exists,
+    // so even an explicit confirm can't destroy real money records.
+    financeProtected.post("admin", "users", "delete-confirmed") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let email: String; let confirm: Bool }
+        let input = try req.content.decode(Input.self)
+        guard input.confirm else {
+            throw Abort(.badRequest, reason: "Must set confirm: true to force-delete this account.")
+        }
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$username == email)
+            .first()
+        else { throw Abort(.notFound, reason: "No account found for that email") }
+
+        let userID = try user.requireID()
+
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else { throw Abort(.conflict, reason: "This account has no StudentProfile — use delete-orphan instead.") }
+
+        guard try await LedgerEntry.query(on: req.db).filter(\.$student.$id == userID).count() == 0,
+              try await ConfirmedLesson.query(on: req.db).filter(\.$user.$id == userID).count() == 0
+        else { throw Abort(.conflict, reason: "This account has real financial history — refusing to delete.") }
+
+        try await Booking.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await TestAppointment.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await StudentSafetyProgress.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await StudentProgress.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await StudentStatusEvent.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await LessonFinance.query(on: req.db).filter(\.$student.$id == userID).delete()
+        try await SessionToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await PasswordResetToken.query(on: req.db).filter(\.$user.$id == userID).delete()
+        try await profile.delete(on: req.db)
+        try await user.delete(on: req.db)
+
+        req.logger.notice("[Admin] Force-deleted confirmed-leftover account '\(email)' by \(instructor.username)")
+        return .ok
+    }
+
     // POST /admin/users/check — bulk, read-only lookup of account status by email. Used to audit
     // whether client-side "add contact" entries (which never touch the server) have a matching
     // real server account. Never creates or modifies anything.
