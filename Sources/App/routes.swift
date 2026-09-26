@@ -1597,10 +1597,11 @@ public func routes(_ app: Application) throws {
             .first()
         else { throw Abort(.conflict, reason: "This account has no StudentProfile — use delete-orphan instead.") }
 
-        guard try await LedgerEntry.query(on: req.db).filter(\.$student.$id == userID).count() == 0,
+        guard try await LedgerEntry.query(on: req.db).filter(\.$student.$id == userID).filter(\.$voidedAt == nil).count() == 0,
               try await ConfirmedLesson.query(on: req.db).filter(\.$user.$id == userID).count() == 0
-        else { throw Abort(.conflict, reason: "This account has real financial history — refusing to delete.") }
+        else { throw Abort(.conflict, reason: "This account has real (non-voided) financial history — refusing to delete.") }
 
+        try await LedgerEntry.query(on: req.db).filter(\.$student.$id == userID).delete()
         try await Booking.query(on: req.db).filter(\.$user.$id == userID).delete()
         try await TestAppointment.query(on: req.db).filter(\.$user.$id == userID).delete()
         try await StudentSafetyProgress.query(on: req.db).filter(\.$student.$id == userID).delete()
