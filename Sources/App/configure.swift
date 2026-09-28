@@ -123,6 +123,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddLessonStartsAtIndex())
     app.migrations.add(AddAccountStatusToStudentProfile())
     app.migrations.add(AddInactivityFieldsToStudentProfile())
+    app.migrations.add(AddTheoryReminderFieldToStudentProfile())
+    app.migrations.add(AddTcBodyTextToStudentProfile())
     app.migrations.add(CreateStudentStatusEvent())
     app.migrations.add(CreateServiceRecord())
     app.migrations.add(CreateMOTRecord())
@@ -140,6 +142,7 @@ public func configure(_ app: Application) throws {
     // Inactivity enforcement — nudges students at 14/21 days since last lesson, auto-archives at 28.
     app.lifecycle.use(InactivityEnforcementLifecycle())
     app.lifecycle.use(TempHoldReclassificationLifecycle())
+    app.lifecycle.use(TheoryTestReminderLifecycle())
 
     // WebSocket keepalive — pings all connected clients every 30s to prevent
     // Nginx from closing idle connections (default proxy_read_timeout = 60s).

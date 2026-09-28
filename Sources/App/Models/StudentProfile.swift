@@ -112,6 +112,10 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "theory_test_date")
     var theoryTestDate: Date?
 
+    /// Set (now + 14 days) after each theory-test reminder push; nil/expired means one is due.
+    @OptionalField(key: "theory_reminder_dismissed_until")
+    var theoryReminderDismissedUntil: Date?
+
     @OptionalField(key: "licence_photo_path")
     var licencePhotoPath: String?
 
@@ -133,6 +137,12 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
 
     @OptionalField(key: "tc_version")
     var tcVersion: String?
+
+    /// Verbatim copy of the T&C text rendered to the student at registration time — a
+    /// stronger compliance record than a shared per-version table since it's proof of
+    /// exactly what this student was shown.
+    @OptionalField(key: "tc_body_text")
+    var tcBodyText: String?
 
     @OptionalField(key: "gdpr_consent_at")
     var gdprConsentAt: Date?
@@ -234,12 +244,14 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         medicalConditions: String? = nil,
         theoryTestPassed: Bool = false,
         theoryTestDate: Date? = nil,
+        theoryReminderDismissedUntil: Date? = nil,
         licencePhotoPath: String? = nil,
         licenceVerified: Bool = false,
         accountHold: Bool = false,
         accountHoldReason: String? = nil,
         tcAcceptedAt: Date? = nil,
         tcVersion: String? = nil,
+        tcBodyText: String? = nil,
         gdprConsentAt: Date? = nil,
         dashcamConsentAt: Date? = nil,
         socialMediaOptIn: Bool = false,
@@ -281,12 +293,14 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.medicalConditions = medicalConditions
         self.theoryTestPassed = theoryTestPassed
         self.theoryTestDate = theoryTestDate
+        self.theoryReminderDismissedUntil = theoryReminderDismissedUntil
         self.licencePhotoPath = licencePhotoPath
         self.licenceVerified = licenceVerified
         self.accountHold = accountHold
         self.accountHoldReason = accountHoldReason
         self.tcAcceptedAt = tcAcceptedAt
         self.tcVersion = tcVersion
+        self.tcBodyText = tcBodyText
         self.gdprConsentAt = gdprConsentAt
         self.dashcamConsentAt = dashcamConsentAt
         self.socialMediaOptIn = socialMediaOptIn

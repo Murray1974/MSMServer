@@ -32,6 +32,9 @@ struct MeProfileResponse: Content {
         var dateOfBirth: Date?
         var transmissionPreference: String?
         var previousHours: Int?
+        var tcVersion: String?
+        var tcAcceptedAt: Date?
+        var tcBodyText: String?
     }
 
     var id: UUID
@@ -129,7 +132,10 @@ struct UserBookingsController: RouteCollection {
                 licenceVerified: p.licenceVerified,
                 dateOfBirth: p.dateOfBirth,
                 transmissionPreference: p.transmissionPreference,
-                previousHours: p.previousHours
+                previousHours: p.previousHours,
+                tcVersion: p.tcVersion,
+                tcAcceptedAt: p.tcAcceptedAt,
+                tcBodyText: p.tcBodyText
             )
         } else {
             profilePayload = nil

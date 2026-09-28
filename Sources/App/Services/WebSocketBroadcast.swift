@@ -289,6 +289,31 @@ extension Application {
         logger.debug("[WS] account_status_updated broadcast → \(audience) studentID=\(studentID) status=\(status)")
     }
 
+    /// Delivers a real-time "you're approved" notification directly to a pending student's
+    /// live socket, if one is open (e.g. they're sitting on PendingScreen when the instructor
+    /// approves). Targeted delivery, not a broadcast — this is meaningful only to the one
+    /// student in question. Returns false if no live socket existed, so callers know the FCM
+    /// push is the only remaining delivery path.
+    @discardableResult
+    func deliverApprovalToStudent(studentID: UUID) -> Bool {
+        let payload: [String: Any] = [
+            "type": "student_approved",
+            "userID": studentID.uuidString,
+            "title": "You're approved!",
+            "message": "Welcome to Murray School of Motoring! Your driving instructor is Mike."
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        let live = (msmStudentSockets[studentID] ?? []).filter { !$0.isClosed }
+        guard !live.isEmpty else {
+            logger.debug("[WS] student_approved: no live socket for \(studentID)")
+            return false
+        }
+        for ws in live { ws.send(text) }
+        logger.debug("[WS] student_approved delivered → student \(studentID) (\(live.count) socket(s))")
+        return true
+    }
+
     func broadcastBalanceUpdated(studentID: UUID, creditPounds: Decimal) {
         let payload = BroadcastEvent(
             type: "balance_updated",

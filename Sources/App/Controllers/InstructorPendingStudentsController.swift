@@ -39,11 +39,13 @@ struct InstructorPendingStudentsController: RouteCollection {
         let transmissionPreference: String?
         let previousHours: Int?
         let provisionalLicenceNumber: String?
+        let licenceExpiryDate: Date?
     }
 
     struct StatusResponse: Content {
         let approvalStatus: String
         let profileComplete: Bool
+        let tcBodyText: String?
     }
 
     struct CreateStudentAccountRequest: Content {
@@ -106,13 +108,22 @@ struct InstructorPendingStudentsController: RouteCollection {
 
         req.logger.notice("[Students] Approved pending student: \(profile.email ?? profileID.uuidString)")
 
-        if let student = try? await User.find(profile.$user.id, on: req.db),
+        let studentID = profile.$user.id
+        let deliveredLive = req.application.deliverApprovalToStudent(studentID: studentID)
+
+        // FCM push covers the case where the student isn't in the app right now — send it
+        // regardless of whether the live socket delivery above succeeded, since the phone
+        // could background a second after the WS message lands.
+        if !deliveredLive {
+            req.logger.debug("[Students] No live socket for \(studentID) — relying on FCM push.")
+        }
+        if let student = try? await User.find(studentID, on: req.db),
            let fcmToken = student.fcmToken,
            let fcm = FCMNotificationService(app: req.application) {
             try? await fcm.send(
                 to: fcmToken,
                 title: "You're approved!",
-                body: "Your account has been approved. You can now book lessons."
+                body: "Welcome to Murray School of Motoring! Your driving instructor is Mike — you can now book lessons."
             )
         }
 
@@ -196,6 +207,9 @@ struct InstructorPendingStudentsController: RouteCollection {
         if let ln = input.provisionalLicenceNumber, !ln.isEmpty {
             profile.provisionalLicenceNumber = ln
         }
+        if let exp = input.licenceExpiryDate, profile.licenceExpiryDate == nil {
+            profile.licenceExpiryDate = exp
+        }
 
         try await profile.save(on: req.db)
         req.logger.notice("[Students] Profile completed for user \(userID)")
@@ -220,7 +234,11 @@ struct InstructorPendingStudentsController: RouteCollection {
             && profile.tcAcceptedAt != nil
             && profile.eyesightConfirmedAt != nil
 
-        return StatusResponse(approvalStatus: profile.approvalStatus, profileComplete: profileComplete)
+        return StatusResponse(
+            approvalStatus: profile.approvalStatus,
+            profileComplete: profileComplete,
+            tcBodyText: profile.tcBodyText
+        )
     }
 
     // MARK: - POST /student/account-status (student-facing self-service Active/Inactive toggle)

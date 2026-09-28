@@ -7,6 +7,7 @@ struct StudentDocumentsDTO: Content {
     let theoryTestDate: Date?
     let licencePhotoPath: String?
     let licenceVerified: Bool
+    let provisionalLicenceNumber: String?
 }
 
 struct DocumentController: RouteCollection {
@@ -88,7 +89,8 @@ struct DocumentController: RouteCollection {
             theoryTestPassed: profile?.theoryTestPassed ?? false,
             theoryTestDate: profile?.theoryTestDate,
             licencePhotoPath: profile?.licencePhotoPath,
-            licenceVerified: profile?.licenceVerified ?? false
+            licenceVerified: profile?.licenceVerified ?? false,
+            provisionalLicenceNumber: profile?.provisionalLicenceNumber
         )
     }
 

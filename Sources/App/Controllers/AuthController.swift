@@ -25,15 +25,22 @@ struct AuthController: RouteCollection {
         let mobile: String?
         // Consents — all must be true except socialMediaOptIn
         let tcVersion: String
+        let tcBodyText: String?
         let gdprConsent: Bool
         let dashcamConsent: Bool
         let socialMediaOptIn: Bool
         let eyesightConfirmed: Bool
         // Driving background
         let provisionalLicenceNumber: String?
+        let licenceExpiryDate: Date?
         let dateOfBirth: Date?
         let transmissionPreference: String?
         let previousHours: Int?
+        // Medical & theory
+        let medicalConditions: String?
+        let theoryTestPassed: Bool?
+        let theoryTestDate: Date?
+        let theoryCertificateNumber: String?
     }
 
     struct LoginResponse: Content {
@@ -114,8 +121,14 @@ struct AuthController: RouteCollection {
             mobile: input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email,
             provisionalLicenceNumber: input.provisionalLicenceNumber,
+            licenceExpiryDate: input.licenceExpiryDate,
+            theoryCertificateNumber: input.theoryCertificateNumber,
+            medicalConditions: input.medicalConditions,
+            theoryTestPassed: input.theoryTestPassed ?? false,
+            theoryTestDate: input.theoryTestDate,
             tcAcceptedAt: now,
             tcVersion: input.tcVersion,
+            tcBodyText: input.tcBodyText,
             gdprConsentAt: input.gdprConsent ? now : nil,
             dashcamConsentAt: input.dashcamConsent ? now : nil,
             socialMediaOptIn: input.socialMediaOptIn,
