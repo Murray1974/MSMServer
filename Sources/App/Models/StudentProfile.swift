@@ -49,6 +49,9 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "postcode")
     var postcode: String?
 
+    @OptionalField(key: "county")
+    var county: String?
+
     // MARK: - Saved pickup locations
 
     /// Optional saved pickup locations used by the student app.
@@ -229,6 +232,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         addressLine2: String? = nil,
         city: String? = nil,
         postcode: String? = nil,
+        county: String? = nil,
         pickupHome: String? = nil,
         pickupWork: String? = nil,
         pickupCollege: String? = nil,
@@ -278,6 +282,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.addressLine2 = addressLine2
         self.city = city
         self.postcode = postcode
+        self.county = county
         self.pickupHome = pickupHome
         self.pickupWork = pickupWork
         self.pickupCollege = pickupCollege

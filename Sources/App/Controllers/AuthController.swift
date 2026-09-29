@@ -36,6 +36,11 @@ struct AuthController: RouteCollection {
         let dateOfBirth: Date?
         let transmissionPreference: String?
         let previousHours: Int?
+        let addressLine1: String?
+        let addressLine2: String?
+        let city: String?
+        let county: String?
+        let postcode: String?
         // Medical & theory
         let medicalConditions: String?
         let theoryTestPassed: Bool?
@@ -120,6 +125,11 @@ struct AuthController: RouteCollection {
             lastName: user.lastName,
             mobile: input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email,
+            addressLine1: input.addressLine1,
+            addressLine2: input.addressLine2,
+            city: input.city,
+            postcode: input.postcode,
+            county: input.county,
             provisionalLicenceNumber: input.provisionalLicenceNumber,
             licenceExpiryDate: input.licenceExpiryDate,
             theoryCertificateNumber: input.theoryCertificateNumber,

@@ -130,6 +130,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateMOTRecord())
     app.migrations.add(CreateVehicleDocument())
     app.migrations.add(CreateInsuranceClaim())
+    app.migrations.add(AddCountyToStudentProfile())
 
     try app.autoMigrate().wait()
 
