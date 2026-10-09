@@ -144,8 +144,11 @@ struct BookingsController: RouteCollection {
             lessonFinance = existingLessonFinance
         } else {
             let durationMinutes = max(0, Int(input.endsAt.timeIntervalSince(input.startsAt) / 60))
-            let defaultHourlyRate = Decimal(45)
-            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
 
             let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
 
@@ -154,7 +157,7 @@ struct BookingsController: RouteCollection {
                 studentID: userID,
                 instructorID: resolvedInstructorID,
                 durationMinutes: durationMinutes,
-                hourlyRateSnapshot: defaultHourlyRate,
+                hourlyRateSnapshot: hourlyRate,
                 priceSnapshot: priceSnapshot,
                 chargeStatus: "not_charged",
                 chargedLedgerEntryID: nil,
@@ -317,8 +320,11 @@ struct BookingsController: RouteCollection {
                     lessonFinance = existingLessonFinance
                 } else {
                     let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                    let defaultHourlyRate = Decimal(45)
-                    let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+                    let studentProfile = try await StudentProfile.query(on: req.db)
+                        .filter(\.$user.$id == userID)
+                        .first()
+                    let hourlyRate = studentProfile?.hourlyRate ?? 45
+                    let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
                     let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
 
                     let newLessonFinance = LessonFinance(
@@ -326,7 +332,7 @@ struct BookingsController: RouteCollection {
                         studentID: userID,
                         instructorID: resolvedInstructorID,
                         durationMinutes: durationMinutes,
-                        hourlyRateSnapshot: defaultHourlyRate,
+                        hourlyRateSnapshot: hourlyRate,
                         priceSnapshot: priceSnapshot,
                         chargeStatus: "not_charged",
                         chargedLedgerEntryID: nil,
@@ -360,8 +366,11 @@ struct BookingsController: RouteCollection {
                     lessonFinance = existingLessonFinance
                 } else {
                     let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                    let defaultHourlyRate = Decimal(45)
-                    let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+                    let studentProfile = try await StudentProfile.query(on: req.db)
+                        .filter(\.$user.$id == userID)
+                        .first()
+                    let hourlyRate = studentProfile?.hourlyRate ?? 45
+                    let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
                     let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
 
                     let newLessonFinance = LessonFinance(
@@ -369,7 +378,7 @@ struct BookingsController: RouteCollection {
                         studentID: userID,
                         instructorID: resolvedInstructorID,
                         durationMinutes: durationMinutes,
-                        hourlyRateSnapshot: defaultHourlyRate,
+                        hourlyRateSnapshot: hourlyRate,
                         priceSnapshot: priceSnapshot,
                         chargeStatus: "not_charged",
                         chargedLedgerEntryID: nil,

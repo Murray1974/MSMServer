@@ -69,6 +69,9 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "pickup_school")
     var pickupSchool: String?
 
+    @OptionalField(key: "default_pickup_location")
+    var defaultPickupLocation: String?
+
     // MARK: - Licence & theory
 
     /// "learner" or "full" (can be extended later if needed).
@@ -97,6 +100,11 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @Field(key: "hourly_rate_pence")
     var hourlyRatePence: Int
 
+    /// `hourlyRatePence` expressed in pounds, for use in lesson-price calculations.
+    var hourlyRate: Decimal {
+        Decimal(hourlyRatePence) / 100
+    }
+
     // MARK: - Safety / medical
 
     /// Whether the eyesight test has been passed (at 20.5m number plate).
@@ -124,6 +132,9 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
 
     @Field(key: "licence_verified")
     var licenceVerified: Bool
+
+    @OptionalField(key: "profile_photo_path")
+    var profilePhotoPath: String?
 
     // MARK: - Account hold
 
@@ -237,6 +248,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         pickupWork: String? = nil,
         pickupCollege: String? = nil,
         pickupSchool: String? = nil,
+        defaultPickupLocation: String? = nil,
         licenceType: String? = nil,
         provisionalLicenceNumber: String? = nil,
         fullLicenceNumber: String? = nil,
@@ -251,6 +263,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         theoryReminderDismissedUntil: Date? = nil,
         licencePhotoPath: String? = nil,
         licenceVerified: Bool = false,
+        profilePhotoPath: String? = nil,
         accountHold: Bool = false,
         accountHoldReason: String? = nil,
         tcAcceptedAt: Date? = nil,
@@ -287,6 +300,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.pickupWork = pickupWork
         self.pickupCollege = pickupCollege
         self.pickupSchool = pickupSchool
+        self.defaultPickupLocation = defaultPickupLocation
         self.licenceType = licenceType
         self.provisionalLicenceNumber = provisionalLicenceNumber
         self.fullLicenceNumber = fullLicenceNumber
@@ -301,6 +315,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.theoryReminderDismissedUntil = theoryReminderDismissedUntil
         self.licencePhotoPath = licencePhotoPath
         self.licenceVerified = licenceVerified
+        self.profilePhotoPath = profilePhotoPath
         self.accountHold = accountHold
         self.accountHoldReason = accountHoldReason
         self.tcAcceptedAt = tcAcceptedAt

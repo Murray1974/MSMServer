@@ -15,6 +15,7 @@ struct LessonsController: RouteCollection {
         let protected = lessons.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
         protected.post(":id", "book", use: book)
         protected.get("capacity", "remaining-this-week", use: remainingCapacityThisWeek)
+        protected.get("capacity", "week-performance", use: weekPerformance)
         protected.get("slot", "availability", use: slotAvailability)
     }
 
@@ -228,6 +229,122 @@ struct LessonsController: RouteCollection {
         }
 
         return RemainingCapacityResponse(from: start, to: end, availableSlots: availableSlots)
+    }
+
+    struct WeekPerformanceResponse: Content {
+        var from: Date
+        var to: Date
+        var deliveredCount: Int
+        var deliveredValue: Decimal
+        var upcomingCount: Int
+        var upcomingValue: Decimal
+        var openCount: Int
+        var openValue: Decimal
+    }
+
+    // MARK: GET /lessons/capacity/week-performance
+    //
+    // Full Mon-Sun breakdown of this week's lessons for the Business Finance
+    // weekly-performance chart: delivered (confirmed, via ConfirmedLesson),
+    // upcoming (actively booked, not yet confirmed), and open (still unbooked
+    // capacity). Delivered/upcoming values come from each lesson's real
+    // LessonFinance.priceSnapshot (per-student rate, set at booking time —
+    // see LessonFinance.calculatedPrice). Open-slot value is necessarily an
+    // estimate at the default rate, since there's no student yet to resolve
+    // a real rate for a slot nobody has booked.
+    func weekPerformance(_ req: Request) async throws -> WeekPerformanceResponse {
+        _ = try req.auth.require(User.self)
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        calendar.firstWeekday = 2 // Monday
+
+        let now = Date()
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
+        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now
+
+        let lessons = try await Lesson.query(on: req.db)
+            .filter(\.$startsAt >= weekStart)
+            .filter(\.$startsAt < weekEnd)
+            .sort(\.$startsAt, .ascending)
+            .all()
+
+        guard !lessons.isEmpty else {
+            return WeekPerformanceResponse(
+                from: weekStart, to: weekEnd,
+                deliveredCount: 0, deliveredValue: 0,
+                upcomingCount: 0, upcomingValue: 0,
+                openCount: 0, openValue: 0
+            )
+        }
+
+        let lessonIDs = lessons.compactMap { $0.id }
+
+        let activeBookings = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id ~~ lessonIDs)
+            .filter(\.$deletedAt == nil)
+            .all()
+        let bookingIDs = activeBookings.compactMap { $0.id }
+
+        let confirmedLessons = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$booking.$id ~~ bookingIDs)
+            .filter(\.$status ~~ ["attended", "noShow"])
+            .all()
+        let confirmedBookingIDs = Set(confirmedLessons.compactMap { $0.$booking.id })
+
+        let financeRows = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ lessonIDs)
+            .all()
+        var financeByLesson: [UUID: LessonFinance] = [:]
+        for finance in financeRows {
+            if let id = finance.id { financeByLesson[id] = finance }
+        }
+
+        var deliveredCount = 0
+        var deliveredValue: Decimal = 0
+        var upcomingCount = 0
+        var upcomingValue: Decimal = 0
+
+        for booking in activeBookings {
+            guard let bookingID = booking.id else { continue }
+            let value = financeByLesson[booking.$lesson.id]?.priceSnapshot ?? 0
+            if confirmedBookingIDs.contains(bookingID) {
+                deliveredCount += 1
+                deliveredValue += value
+            } else {
+                upcomingCount += 1
+                upcomingValue += value
+            }
+        }
+
+        // Open capacity: mirrors remainingCapacityThisWeek's capacity-minus-booked
+        // logic so a lesson with capacity > 1 is handled correctly.
+        var bookingCountByLesson: [UUID: Int] = [:]
+        for booking in activeBookings {
+            bookingCountByLesson[booking.$lesson.id, default: 0] += 1
+        }
+
+        var openCount = 0
+        var openValue: Decimal = 0
+        let openSlotEstimateHourlyRate = Decimal(45)
+
+        for lesson in lessons where lesson.state == "available" {
+            guard let lessonID = lesson.id else { continue }
+            let bookedCount = bookingCountByLesson[lessonID, default: 0]
+            let spare = max(lesson.capacity - bookedCount, 0)
+            guard spare > 0 else { continue }
+            let durationHours = Decimal(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 3600.0)
+            openCount += spare
+            openValue += durationHours * openSlotEstimateHourlyRate * Decimal(spare)
+        }
+
+        return WeekPerformanceResponse(
+            from: weekStart, to: weekEnd,
+            deliveredCount: deliveredCount, deliveredValue: deliveredValue,
+            upcomingCount: upcomingCount, upcomingValue: upcomingValue,
+            openCount: openCount, openValue: openValue
+        )
     }
 
     // MARK: GET /lessons/slot/availability?weekday=1&startHour=16&endHour=18&lessonID=UUID

@@ -48,6 +48,14 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
+    /// Shared pricing formula — the single source of truth for converting a lesson's
+    /// duration and an hourly rate into a price, used at booking time and by every
+    /// cancellation/charge fallback. Centralized specifically so a rate correction
+    /// never again has to be copy-pasted across call sites.
+    static func calculatedPrice(durationMinutes: Int, hourlyRate: Decimal) -> Decimal {
+        (hourlyRate * Decimal(durationMinutes)) / 60
+    }
+
     init() {}
 
     init(

@@ -146,6 +146,52 @@ struct DocumentController: RouteCollection {
         return .ok
     }
 
+    // MARK: - POST /student/profile/photo — multipart profile photo upload
+
+    func uploadProfilePhoto(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        struct PhotoInput: Content {
+            var photo: File
+        }
+        let input = try req.content.decode(PhotoInput.self)
+        guard input.photo.data.readableBytes > 0 else {
+            throw Abort(.badRequest, reason: "Photo data is empty.")
+        }
+
+        let uploadsDir = req.application.directory.workingDirectory + "uploads/profile_photos"
+        let filename = "\(userID.uuidString).jpg"
+        let path = uploadsDir + "/" + filename
+        try await req.fileio.writeFile(input.photo.data, at: path)
+
+        let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() ?? StudentProfile(userID: userID)
+        profile.profilePhotoPath = "uploads/profile_photos/\(filename)"
+        try await profile.save(on: req.db)
+        return .ok
+    }
+
+    // MARK: - GET /student/profile/photo — student views their own profile photo
+
+    func getOwnProfilePhoto(_ req: Request) async throws -> Response {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        return try await streamProfilePhoto(for: userID, req: req)
+    }
+
+    // MARK: - GET /instructor/student/:studentID/profile-photo
+
+    func instructorGetProfilePhoto(_ req: Request) async throws -> Response {
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing studentID.")
+        }
+        return try await streamProfilePhoto(for: studentID, req: req)
+    }
+
     // MARK: - Helper
 
     private func streamPhoto(for studentID: UUID, req: Request) async throws -> Response {
@@ -154,6 +200,17 @@ struct DocumentController: RouteCollection {
             .first(),
               let photoPath = profile.licencePhotoPath else {
             throw Abort(.notFound, reason: "No licence photo on file.")
+        }
+        let fullPath = req.application.directory.workingDirectory + photoPath
+        return req.fileio.streamFile(at: fullPath)
+    }
+
+    private func streamProfilePhoto(for studentID: UUID, req: Request) async throws -> Response {
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first(),
+              let photoPath = profile.profilePhotoPath else {
+            throw Abort(.notFound, reason: "No profile photo on file.")
         }
         let fullPath = req.application.directory.workingDirectory + photoPath
         return req.fileio.streamFile(at: fullPath)

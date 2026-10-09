@@ -696,15 +696,18 @@ public func routes(_ app: Application) throws {
 
             let lesson = booking.lesson
             let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-            let defaultHourlyRate = Decimal(45)
-            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
 
             let finance = LessonFinance(
                 lessonID: lessonID,
                 studentID: studentID,
                 instructorID: instructorID,
                 durationMinutes: durationMinutes,
-                hourlyRateSnapshot: defaultHourlyRate,
+                hourlyRateSnapshot: hourlyRate,
                 priceSnapshot: priceSnapshot,
                 chargeStatus: "not_charged",
                 chargedLedgerEntryID: nil,
@@ -1063,7 +1066,10 @@ public func routes(_ app: Application) throws {
                     amountDue = snapshot
                 } else {
                     let mins = max(0, Int(bLesson.endsAt.timeIntervalSince(bLesson.startsAt) / 60))
-                    amountDue = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                    let studentProfile = try await StudentProfile.query(on: req.db)
+                        .filter(\.$user.$id == userID)
+                        .first()
+                    amountDue = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
                 }
 
                 pendingPaymentBooking = PendingPaymentView(
@@ -1138,6 +1144,11 @@ public func routes(_ app: Application) throws {
     studentProtected.patch("documents", use: documentController.updateDocuments)
     studentProtected.on(.POST, "documents", "photo", body: .collect(maxSize: "10mb"), use: documentController.uploadPhoto)
     studentProtected.get("documents", "photo", use: documentController.getOwnPhoto)
+
+    // POST /student/profile/photo         — upload profile photo (multipart)
+    // GET  /student/profile/photo         — view own profile photo
+    studentProtected.on(.POST, "profile", "photo", body: .collect(maxSize: "10mb"), use: documentController.uploadProfilePhoto)
+    studentProtected.get("profile", "photo", use: documentController.getOwnProfilePhoto)
 
     // POST /student/register-fcm-token — stores the device push token for later use
     studentProtected.post("register-fcm-token") { req async throws -> HTTPStatus in
@@ -1725,6 +1736,9 @@ public func routes(_ app: Application) throws {
     financeProtected.get("instructor",  "student", ":studentID", "licence-image",    use: documentController.instructorGetLicencePhoto)
     financeProtected.post("instructor", "student", ":studentID", "documents", "verify", use: documentController.verifyLicence)
     financeProtected.post("instructor", "student", ":studentID", "documents", "revoke", use: documentController.revokeLicence)
+
+    // GET /instructor/student/:studentID/profile-photo — view the student's profile photo
+    financeProtected.get("instructor", "student", ":studentID", "profile-photo", use: documentController.instructorGetProfilePhoto)
 
     // Vehicle management
     // POST /instructor/vehicle/log

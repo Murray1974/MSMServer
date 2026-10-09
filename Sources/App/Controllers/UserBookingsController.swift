@@ -11,11 +11,13 @@ struct MeProfileResponse: Content {
         var addressLine2: String?
         var city: String?
         var postcode: String?
+        var county: String?
         // Saved pickup locations
         var pickupHome: String?
         var pickupWork: String?
         var pickupCollege: String?
         var pickupSchool: String?
+        var defaultPickupLocation: String?
         var licenceType: String?
         var provisionalLicenceNumber: String?
         var fullLicenceNumber: String?
@@ -29,6 +31,7 @@ struct MeProfileResponse: Content {
         var theoryTestDate: Date?
         var licencePhotoPath: String?
         var licenceVerified: Bool?
+        var profilePhotoPath: String?
         var dateOfBirth: Date?
         var transmissionPreference: String?
         var previousHours: Int?
@@ -51,11 +54,13 @@ struct UpdateProfileInput: Content {
     var addressLine2: String?
     var city: String?
     var postcode: String?
+    var county: String?
     // Saved pickup locations
     var pickupHome: String?
     var pickupWork: String?
     var pickupCollege: String?
     var pickupSchool: String?
+    var defaultPickupLocation: String?
     var licenceType: String?
     var provisionalLicenceNumber: String?
     var fullLicenceNumber: String?
@@ -113,10 +118,12 @@ struct UserBookingsController: RouteCollection {
                 addressLine2: p.addressLine2,
                 city: p.city,
                 postcode: p.postcode,
+                county: p.county,
                 pickupHome: p.pickupHome,
                 pickupWork: p.pickupWork,
                 pickupCollege: p.pickupCollege,
                 pickupSchool: p.pickupSchool,
+                defaultPickupLocation: p.defaultPickupLocation,
                 licenceType: p.licenceType,
                 provisionalLicenceNumber: p.provisionalLicenceNumber,
                 fullLicenceNumber: p.fullLicenceNumber,
@@ -130,6 +137,7 @@ struct UserBookingsController: RouteCollection {
                 theoryTestDate: p.theoryTestDate,
                 licencePhotoPath: p.licencePhotoPath,
                 licenceVerified: p.licenceVerified,
+                profilePhotoPath: p.profilePhotoPath,
                 dateOfBirth: p.dateOfBirth,
                 transmissionPreference: p.transmissionPreference,
                 previousHours: p.previousHours,
@@ -237,10 +245,12 @@ struct UserBookingsController: RouteCollection {
             if let v = input.addressLine2 { current.addressLine2 = v }
             if let v = input.city { current.city = v }
             if let v = input.postcode { current.postcode = v }
+            if let v = input.county { current.county = v }
             if let v = input.pickupHome { current.pickupHome = v }
             if let v = input.pickupWork { current.pickupWork = v }
             if let v = input.pickupCollege { current.pickupCollege = v }
             if let v = input.pickupSchool { current.pickupSchool = v }
+            if let v = input.defaultPickupLocation { current.defaultPickupLocation = v }
             if let v = input.licenceType { current.licenceType = v }
             if let v = input.provisionalLicenceNumber { current.provisionalLicenceNumber = v }
             if let v = input.fullLicenceNumber { current.fullLicenceNumber = v }
@@ -267,10 +277,12 @@ struct UserBookingsController: RouteCollection {
                 addressLine2: input.addressLine2,
                 city: input.city,
                 postcode: input.postcode,
+                county: input.county,
                 pickupHome: input.pickupHome,
                 pickupWork: input.pickupWork,
                 pickupCollege: input.pickupCollege,
                 pickupSchool: input.pickupSchool,
+                defaultPickupLocation: input.defaultPickupLocation,
                 licenceType: input.licenceType,
                 provisionalLicenceNumber: input.provisionalLicenceNumber,
                 fullLicenceNumber: input.fullLicenceNumber,

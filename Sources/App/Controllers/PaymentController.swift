@@ -43,7 +43,10 @@ struct PaymentController: RouteCollection {
             } else {
                 let lesson = try await booking.$lesson.get(on: req.db)
                 let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                let studentProfile = try await StudentProfile.query(on: req.db)
+                    .filter(\.$user.$id == studentID)
+                    .first()
+                price = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
             }
 
             var pence = price * 100

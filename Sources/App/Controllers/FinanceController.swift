@@ -655,15 +655,18 @@ struct FinanceController {
 
         if lessonFinance == nil {
             let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-            let defaultHourlyRate = Decimal(45)
-            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
 
             let newLessonFinance = LessonFinance(
                 lessonID: lessonID,
                 studentID: studentID,
                 instructorID: instructorID,
                 durationMinutes: durationMinutes,
-                hourlyRateSnapshot: defaultHourlyRate,
+                hourlyRateSnapshot: hourlyRate,
                 priceSnapshot: priceSnapshot,
                 chargeStatus: "not_charged",
                 chargedLedgerEntryID: nil,

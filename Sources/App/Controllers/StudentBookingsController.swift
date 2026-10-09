@@ -217,8 +217,11 @@ struct StudentBookingsController: RouteCollection {
             }
         } else {
             let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-            let defaultHourlyRate = Decimal(45)
-            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
             let instructorID = try await User.query(on: req.db)
                 .filter(\.$role == "instructor")
                 .first()?.requireID()
@@ -228,7 +231,7 @@ struct StudentBookingsController: RouteCollection {
                     studentID: userID,
                     instructorID: instructorID,
                     durationMinutes: durationMinutes,
-                    hourlyRateSnapshot: defaultHourlyRate,
+                    hourlyRateSnapshot: hourlyRate,
                     priceSnapshot: priceSnapshot,
                     chargeStatus: "not_charged",
                     chargedLedgerEntryID: nil,
@@ -266,7 +269,10 @@ struct StudentBookingsController: RouteCollection {
                 price = snapshot
             } else {
                 let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                let studentProfile = try await StudentProfile.query(on: req.db)
+                    .filter(\.$user.$id == userID)
+                    .first()
+                price = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
             }
             var pence = price * 100
             var rounded = Decimal()
@@ -350,9 +356,12 @@ struct StudentBookingsController: RouteCollection {
             if let snapshot = lessonFinance?.priceSnapshot {
                 chargeAmount = snapshot
             } else {
-                // No LessonFinance yet: estimate from lesson duration at default hourly rate.
+                // No LessonFinance yet: estimate from lesson duration at this student's actual rate.
                 let mins = max(0, Int(cancelLesson.endsAt.timeIntervalSince(cancelLesson.startsAt) / 60))
-                chargeAmount = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                let studentProfile = try await StudentProfile.query(on: req.db)
+                    .filter(\.$user.$id == userID)
+                    .first()
+                chargeAmount = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
             }
 
             // Resolve the instructor ID: prefer from the existing finance record, then role lookup.
@@ -540,8 +549,11 @@ struct StudentBookingsController: RouteCollection {
             }
         } else {
             let durationMinutes = max(0, Int(newLesson.endsAt.timeIntervalSince(newLesson.startsAt) / 60))
-            let defaultHourlyRate = Decimal(45)
-            let priceSnapshot = (defaultHourlyRate * Decimal(durationMinutes)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
             if let instructorID = try await User.query(on: req.db)
                 .filter(\.$role == "instructor").first()?.requireID() {
                 let newFinance = LessonFinance(
@@ -549,7 +561,7 @@ struct StudentBookingsController: RouteCollection {
                     studentID: userID,
                     instructorID: instructorID,
                     durationMinutes: durationMinutes,
-                    hourlyRateSnapshot: defaultHourlyRate,
+                    hourlyRateSnapshot: hourlyRate,
                     priceSnapshot: priceSnapshot,
                     chargeStatus: "not_charged",
                     chargedLedgerEntryID: nil,
@@ -944,7 +956,10 @@ struct StudentBookingsController: RouteCollection {
             price = snapshot
         } else {
             let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-            price = (Decimal(45) * Decimal(mins)) / Decimal(60)
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            price = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
         }
 
         var pence = price * 100

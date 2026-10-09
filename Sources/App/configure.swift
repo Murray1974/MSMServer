@@ -131,6 +131,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateVehicleDocument())
     app.migrations.add(CreateInsuranceClaim())
     app.migrations.add(AddCountyToStudentProfile())
+    app.migrations.add(AddProfilePhotoPathToStudentProfile())
+    app.migrations.add(AddDefaultPickupLocationToStudentProfile())
 
     try app.autoMigrate().wait()
 
@@ -156,6 +158,8 @@ public func configure(_ app: Application) throws {
     try FileManager.default.createDirectory(atPath: uploadsDir, withIntermediateDirectories: true)
     let receiptsDir = app.directory.workingDirectory + "uploads/receipts"
     try FileManager.default.createDirectory(atPath: receiptsDir, withIntermediateDirectories: true)
+    let profilePhotosDir = app.directory.workingDirectory + "uploads/profile_photos"
+    try FileManager.default.createDirectory(atPath: profilePhotosDir, withIntermediateDirectories: true)
 
     // Stripe — validate and store both keys at boot so misconfiguration
     // surfaces in the startup log rather than on the first live request.

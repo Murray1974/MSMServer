@@ -152,7 +152,10 @@ struct PaymentEnforcementService {
                 chargeAmount = snapshot
             } else {
                 let mins = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                chargeAmount = (Decimal(45) * Decimal(mins)) / Decimal(60)
+                let studentProfile = try await StudentProfile.query(on: db)
+                    .filter(\.$user.$id == studentID)
+                    .first()
+                chargeAmount = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
             }
 
             // Resolve instructor ID for the ledger entry.

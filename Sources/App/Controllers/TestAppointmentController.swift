@@ -421,7 +421,10 @@ struct TestAppointmentController: RouteCollection {
         let instructor = try req.auth.require(User.self)
         let instructorID = try instructor.requireID()
         let durationMins = max(0, Int(appt.endsAt.timeIntervalSince(appt.startsAt) / 60))
-        let chargeAmount  = (Decimal(45) * Decimal(durationMins)) / Decimal(60)
+        let studentProfile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == appt.$user.id)
+            .first()
+        let chargeAmount = LessonFinance.calculatedPrice(durationMinutes: durationMins, hourlyRate: studentProfile?.hourlyRate ?? 45)
         let entry = LedgerEntry(
             studentID: appt.$user.id,
             instructorID: instructorID,
