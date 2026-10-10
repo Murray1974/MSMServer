@@ -1497,6 +1497,39 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    // POST /admin/users/update-name — corrects a typo'd first/last name on an existing
+    // account. Updates both User and StudentProfile (if one exists) together.
+    financeProtected.post("admin", "users", "update-name") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let email: String; let firstName: String?; let lastName: String? }
+        let input = try req.content.decode(Input.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$username == email)
+            .first()
+        else { throw Abort(.notFound, reason: "No account found for that email") }
+
+        let userID = try user.requireID()
+
+        if let firstName = input.firstName { user.firstName = firstName }
+        if let lastName = input.lastName { user.lastName = lastName }
+        try await user.save(on: req.db)
+
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() {
+            if let firstName = input.firstName { profile.firstName = firstName }
+            if let lastName = input.lastName { profile.lastName = lastName }
+            try await profile.save(on: req.db)
+        }
+
+        req.logger.notice("[Admin] Updated name for '\(email)' by \(instructor.username)")
+        return .ok
+    }
+
     // POST /admin/users/delete-orphan — deletes a bare User account (no attached StudentProfile).
     // Use when a client account was created (e.g. via /admin/users) but never completed proper
     // registration, leaving an orphaned login that blocks /auth/register with "already exists"
