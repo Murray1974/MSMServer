@@ -1911,7 +1911,8 @@ public func routes(_ app: Application) throws {
     try app.register(collection: ConfirmedLessonController())
     try app.register(collection: AdminCalendarController())
     try app.register(collection: AdminUserController())
-    
+    try app.register(collection: AdminBackfillController())
+
     // GET /me/booking-events (session cookie presence required)
     app.get("me", "booking-events") { req async throws -> [BookingEvent] in
         let hasSessionCookie = req.cookies["vapor-session"] != nil
