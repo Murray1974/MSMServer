@@ -20,6 +20,45 @@ struct AdminBackfillController: RouteCollection {
         let admin = routes.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
             .grouped("admin", "backfill")
         admin.post("historical-lessons", use: backfillHistoricalLessons)
+        admin.get("lessons-in-range", use: lessonsInRange)
+    }
+
+    struct LessonRangeRow: Content {
+        let id: UUID
+        let title: String
+        let startsAt: Date
+        let endsAt: Date
+        let state: String
+        let calendarName: String
+    }
+
+    /// Read-only diagnostic: lists every Lesson row (booked or not) in a date range,
+    /// regardless of state. Used to verify whether historical calendar data already
+    /// has corresponding server-side Lesson rows before backfilling, so the backfill
+    /// never blindly creates a duplicate slot at a time that's already taken.
+    func lessonsInRange(_ req: Vapor.Request) async throws -> [LessonRangeRow] {
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let startString = try? req.query.get(String.self, at: "start"),
+              let endString = try? req.query.get(String.self, at: "end"),
+              let start = ISO8601DateFormatter().date(from: startString),
+              let end = ISO8601DateFormatter().date(from: endString)
+        else { throw Abort(.badRequest, reason: "start and end query params required (ISO8601).") }
+
+        let lessons = try await Lesson.query(on: req.db)
+            .filter(\Lesson.$startsAt >= start)
+            .filter(\Lesson.$startsAt < end)
+            .sort(\Lesson.$startsAt, .ascending)
+            .all()
+
+        return try lessons.map {
+            LessonRangeRow(
+                id: try $0.requireID(), title: $0.title,
+                startsAt: $0.startsAt, endsAt: $0.endsAt,
+                state: $0.state, calendarName: $0.calendarName
+            )
+        }
     }
 
     struct Entry: Content {
