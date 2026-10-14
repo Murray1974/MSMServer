@@ -364,6 +364,92 @@ struct FinanceController {
         return MonthlyTaxBreakdownView(monthTax: monthTax, weeks: weeks)
     }
 
+    struct MonthlyTaxTrendRow: Content {
+        let label: String
+        let start: Date
+        let end: Date
+        let tax: Decimal
+    }
+
+    struct TaxTrendView: Content {
+        let months: [MonthlyTaxTrendRow]
+    }
+
+    /// GET /finance/business-summary/tax-trend
+    ///
+    /// Same delta-of-cumulative-tax approach as `monthlyTaxBreakdown`, but walked across whole
+    /// months for the entire current tax year (6 April onward) instead of weeks within one month.
+    /// Powers the Est. Tax trend chart on the Month tab — months with no income yet (including
+    /// future ones) are naturally £0 since cumulative net hasn't grown past the previous boundary.
+    func taxTrend(req: Request) async throws -> TaxTrendView {
+        let instructorID = try req.auth.require(User.self).requireID()
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+
+        let now = Date()
+        let comps = calendar.dateComponents([.year, .month, .day], from: now)
+        let year = comps.year ?? 2026
+        let month = comps.month ?? 1
+        let day = comps.day ?? 1
+        let taxYearStartYear = (month > 4 || (month == 4 && day >= 6)) ? year : year - 1
+        var startComponents = DateComponents()
+        startComponents.year = taxYearStartYear
+        startComponents.month = 4
+        startComponents.day = 6
+        guard let taxYearStart = calendar.date(from: startComponents) else {
+            throw Abort(.internalServerError, reason: "Could not compute tax year start")
+        }
+        var endComponents = startComponents
+        endComponents.year = taxYearStartYear + 1
+        guard let taxYearEnd = calendar.date(from: endComponents) else {
+            throw Abort(.internalServerError, reason: "Could not compute tax year end")
+        }
+
+        let incomeEntries = try await LedgerEntry.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .filter(\.$type == "payment")
+            .filter(\.$effectiveDate >= taxYearStart)
+            .filter(\.$effectiveDate < taxYearEnd)
+            .filter(\.$voidedAt == nil)
+            .all()
+
+        let expenseEntries = try await ExpenseEntry.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .filter(\.$expenseDate >= taxYearStart)
+            .filter(\.$expenseDate < taxYearEnd)
+            .all()
+
+        func cumulativeNet(asOf date: Date) -> Decimal {
+            let incomeSum = incomeEntries
+                .filter { $0.effectiveDate <= date }
+                .reduce(Decimal.zero) { $0 + $1.amount }
+            let expenseSum = expenseEntries
+                .filter { $0.isBusinessUse && $0.expenseDate <= date }
+                .reduce(Decimal.zero) { $0 + $1.amount * Decimal($1.businessUsePercent) / 100 }
+            return incomeSum - expenseSum
+        }
+
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "MMM"
+        monthFormatter.timeZone = calendar.timeZone
+
+        var monthStart = taxYearStart
+        var previousCumulativeTax = estimateTax(onNet: cumulativeNet(asOf: monthStart.addingTimeInterval(-1)))
+        var months: [MonthlyTaxTrendRow] = []
+        while monthStart < taxYearEnd {
+            let nextMonthStart = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? taxYearEnd
+            let monthEnd = min(nextMonthStart, taxYearEnd)
+            let cumulativeTaxAtMonthEnd = estimateTax(onNet: cumulativeNet(asOf: monthEnd))
+            let monthTax = cumulativeTaxAtMonthEnd - previousCumulativeTax
+            months.append(MonthlyTaxTrendRow(label: monthFormatter.string(from: monthStart), start: monthStart, end: monthEnd, tax: monthTax))
+            previousCumulativeTax = cumulativeTaxAtMonthEnd
+            monthStart = nextMonthStart
+        }
+
+        return TaxTrendView(months: months)
+    }
+
     func exportExpensesCSV(req: Request) async throws -> Response {
         let instructorID = try req.auth.require(User.self).requireID()
         let query = try req.query.decode(BusinessSummaryQuery.self)
