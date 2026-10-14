@@ -43,6 +43,13 @@ struct BusinessSummaryView: Content {
     let expenseCount: Int
     let recentEntries: [BusinessLedgerRowView]
     let allEntries: [BusinessLedgerRowView]
+    /// One row per attended (delivered) confirmed lesson — `amount` is that lesson's
+    /// `LessonFinance.priceSnapshot` (duration × hourly rate at the time it was booked),
+    /// `effectiveDate` is the lesson's scheduled `startsAt`. Distinct from `allEntries`,
+    /// which reflects cash actually received rather than lessons actually taught — the two
+    /// can diverge in timing (a lesson delivered this week may be paid for from an earlier
+    /// top-up, or vice versa).
+    let deliveredEntries: [BusinessLedgerRowView]
     let expenseCategories: [String: Decimal]
     let monthlyBreakdown: [BusinessMonthlyView]
 }
@@ -186,6 +193,41 @@ struct FinanceController {
                 )
             }
 
+        // Delivered-lessons value: priceSnapshot for every attended confirmed lesson whose
+        // *scheduled* startsAt falls in range, scoped to this instructor via LessonFinance
+        // (Lesson itself carries no instructor field — single-instructor app).
+        let attendedConfirmations = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$status == ConfirmedLesson.Status.attended.rawValue)
+            .all()
+        let attendedLessonIDs = attendedConfirmations.map { $0.$lesson.id }
+
+        let deliveredLessons = try await Lesson.query(on: req.db)
+            .filter(\.$id ~~ attendedLessonIDs)
+            .filter(\.$startsAt >= startDate)
+            .filter(\.$startsAt <= endDate)
+            .all()
+
+        let deliveredLessonFinances = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ deliveredLessons.compactMap { $0.id })
+            .filter(\.$instructor.$id == instructorID)
+            .all()
+        let financeByLessonID = Dictionary(uniqueKeysWithValues: deliveredLessonFinances.compactMap { finance -> (UUID, LessonFinance)? in
+            guard let id = finance.id else { return nil }
+            return (id, finance)
+        })
+
+        let deliveredEntries: [BusinessLedgerRowView] = deliveredLessons.compactMap { lesson in
+            guard let lessonID = lesson.id, let finance = financeByLessonID[lessonID] else { return nil }
+            return BusinessLedgerRowView(
+                id: lessonID,
+                type: "lesson_delivered",
+                amount: finance.priceSnapshot,
+                note: nil,
+                effectiveDate: lesson.startsAt,
+                createdAt: nil
+            )
+        }
+
         let calendar = Calendar(identifier: .gregorian)
         let monthFormatter = DateFormatter()
         monthFormatter.dateFormat = "MMM yyyy"
@@ -240,6 +282,7 @@ struct FinanceController {
             expenseCount: expenseEntries.count,
             recentEntries: recentEntries,
             allEntries: allEntries,
+            deliveredEntries: deliveredEntries,
             expenseCategories: categoryTotals,
             monthlyBreakdown: monthlyBreakdown
         )
