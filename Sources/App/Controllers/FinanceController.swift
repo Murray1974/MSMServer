@@ -245,6 +245,125 @@ struct FinanceController {
         )
     }
 
+    /// Applies the same tax formula as `businessSummary` (lines 118-131) to an arbitrary
+    /// net-income figure. Centralized here so the monthly/weekly breakdown below computes
+    /// tax identically to the headline Tax Year figure — same bands, same rates.
+    private func estimateTax(onNet net: Decimal) -> Decimal {
+        let personalAllowance = Decimal(12570)
+        let taxableIncome = max(Decimal(0), net - personalAllowance)
+        let incomeTax = taxableIncome * Decimal(0.20)
+
+        let lowerProfitsLimit = Decimal(12570)
+        let upperProfitsLimit = Decimal(50270)
+        let class4Basic = max(Decimal(0), min(net, upperProfitsLimit) - lowerProfitsLimit) * Decimal(0.06)
+        let class4Upper = max(Decimal(0), net - upperProfitsLimit) * Decimal(0.02)
+
+        return incomeTax + class4Basic + class4Upper
+    }
+
+    struct WeeklyTaxRow: Content {
+        let label: String
+        let start: Date
+        let end: Date
+        let tax: Decimal
+    }
+
+    struct MonthlyTaxBreakdownView: Content {
+        let monthTax: Decimal
+        let weeks: [WeeklyTaxRow]
+    }
+
+    /// GET /finance/business-summary/monthly-tax?start=<month start>&end=<month end>
+    ///
+    /// Income tax only makes sense as a running total against the whole tax year — a single
+    /// month's income almost never clears the personal allowance in isolation, which is why
+    /// the Month tab's Est. Tax always showed £0.00. This instead computes *cumulative* tax as
+    /// of each week boundary (from the real tax-year start, 6 April) and takes the difference
+    /// between boundaries — so a week/month's figure is "how much this period added to the
+    /// running tax bill", which stays correct (and £0) before the year crosses into taxable
+    /// territory, and becomes meaningful once it does.
+    func monthlyTaxBreakdown(req: Request) async throws -> MonthlyTaxBreakdownView {
+        let instructorID = try req.auth.require(User.self).requireID()
+        let query = try req.query.decode(BusinessSummaryQuery.self)
+
+        guard let monthStart = parseBusinessDate(query.start) else {
+            throw Abort(.badRequest, reason: "Missing or invalid start date")
+        }
+        guard let rawMonthEnd = parseBusinessDate(query.end) else {
+            throw Abort(.badRequest, reason: "Missing or invalid end date")
+        }
+        let monthEnd: Date
+        if let endValue = query.end, isDateOnlyBusinessDate(endValue) {
+            let calendar = Calendar(identifier: .gregorian)
+            let nextDayStart = calendar.date(byAdding: .day, value: 1, to: rawMonthEnd) ?? rawMonthEnd
+            monthEnd = nextDayStart.addingTimeInterval(-0.001)
+        } else {
+            monthEnd = rawMonthEnd
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+
+        // Real tax year start (6 April) containing monthStart.
+        let comps = calendar.dateComponents([.year, .month, .day], from: monthStart)
+        let year = comps.year ?? 2026
+        let month = comps.month ?? 1
+        let day = comps.day ?? 1
+        let taxYearStartYear = (month > 4 || (month == 4 && day >= 6)) ? year : year - 1
+        var startComponents = DateComponents()
+        startComponents.year = taxYearStartYear
+        startComponents.month = 4
+        startComponents.day = 6
+        guard let taxYearStart = calendar.date(from: startComponents) else {
+            throw Abort(.internalServerError, reason: "Could not compute tax year start")
+        }
+
+        // Fetch every income/expense entry from the real tax-year start through month end —
+        // one pair of queries, then sum in memory per boundary rather than re-querying per week.
+        let incomeEntries = try await LedgerEntry.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .filter(\.$type == "payment")
+            .filter(\.$effectiveDate >= taxYearStart)
+            .filter(\.$effectiveDate <= monthEnd)
+            .filter(\.$voidedAt == nil)
+            .all()
+
+        let expenseEntries = try await ExpenseEntry.query(on: req.db)
+            .filter(\.$instructor.$id == instructorID)
+            .filter(\.$expenseDate >= taxYearStart)
+            .filter(\.$expenseDate <= monthEnd)
+            .all()
+
+        func cumulativeNet(asOf date: Date) -> Decimal {
+            let incomeSum = incomeEntries
+                .filter { $0.effectiveDate <= date }
+                .reduce(Decimal.zero) { $0 + $1.amount }
+            let expenseSum = expenseEntries
+                .filter { $0.isBusinessUse && $0.expenseDate <= date }
+                .reduce(Decimal.zero) { $0 + $1.amount * Decimal($1.businessUsePercent) / 100 }
+            return incomeSum - expenseSum
+        }
+
+        // Walk Mon-Sun week boundaries across the month, tracking the running cumulative
+        // tax figure so each week's value is a pure delta from the previous boundary.
+        var weekStart = calendar.dateInterval(of: .weekOfYear, for: monthStart)?.start ?? monthStart
+        var previousCumulativeTax = estimateTax(onNet: cumulativeNet(asOf: weekStart.addingTimeInterval(-1)))
+        var weeks: [WeeklyTaxRow] = []
+        var index = 1
+        while weekStart < monthEnd {
+            let weekEnd = min(calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart, monthEnd)
+            let cumulativeTaxAtWeekEnd = estimateTax(onNet: cumulativeNet(asOf: weekEnd))
+            let weekTax = cumulativeTaxAtWeekEnd - previousCumulativeTax
+            weeks.append(WeeklyTaxRow(label: "Week \(index)", start: weekStart, end: weekEnd, tax: weekTax))
+            previousCumulativeTax = cumulativeTaxAtWeekEnd
+            weekStart = weekEnd
+            index += 1
+        }
+
+        let monthTax = weeks.reduce(Decimal.zero) { $0 + $1.tax }
+        return MonthlyTaxBreakdownView(monthTax: monthTax, weeks: weeks)
+    }
+
     func exportExpensesCSV(req: Request) async throws -> Response {
         let instructorID = try req.auth.require(User.self).requireID()
         let query = try req.query.decode(BusinessSummaryQuery.self)

@@ -1738,6 +1738,7 @@ public func routes(_ app: Application) throws {
     financeProtected.get("finance", "students", ":studentID", "transactions", use: finance.studentTransactions)
     financeProtected.get("finance", "students", ":studentID", "outstanding-lessons", use: finance.outstandingLessons)
     financeProtected.get("finance", "business-summary", use: finance.businessSummary)
+    financeProtected.get("finance", "business-summary", "monthly-tax", use: finance.monthlyTaxBreakdown)
     financeProtected.get("instructor", "finance", "week-total", use: finance.weekTotal)
     financeProtected.post("instructor", "ledger", ":entryID", "waive",   use: finance.waiveFee)
     financeProtected.post("instructor", "finance", "ledger", ":entryID", "void",   use: finance.voidEntry)
