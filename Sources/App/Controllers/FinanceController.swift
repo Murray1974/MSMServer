@@ -50,6 +50,10 @@ struct BusinessSummaryView: Content {
     /// can diverge in timing (a lesson delivered this week may be paid for from an earlier
     /// top-up, or vice versa).
     let deliveredEntries: [BusinessLedgerRowView]
+    /// One row per business-use expense in range, `amount` negative (money out) to match
+    /// the ledger sign convention — expenses live in their own `ExpenseEntry` table and are
+    /// never written into `LedgerEntry`, so they don't appear in `allEntries`.
+    let expenseEntries: [BusinessLedgerRowView]
     let expenseCategories: [String: Decimal]
     let monthlyBreakdown: [BusinessMonthlyView]
 }
@@ -228,6 +232,19 @@ struct FinanceController {
             )
         }
 
+        let expenseEntryRows: [BusinessLedgerRowView] = expenseEntries.compactMap { entry in
+            guard entry.isBusinessUse, let entryID = entry.id else { return nil }
+            let claimable = entry.amount * Decimal(entry.businessUsePercent) / 100
+            return BusinessLedgerRowView(
+                id: entryID,
+                type: "expense_\(entry.category)",
+                amount: -claimable,
+                note: entry.note,
+                effectiveDate: entry.expenseDate,
+                createdAt: entry.createdAt
+            )
+        }
+
         let calendar = Calendar(identifier: .gregorian)
         let monthFormatter = DateFormatter()
         monthFormatter.dateFormat = "MMM yyyy"
@@ -283,6 +300,7 @@ struct FinanceController {
             recentEntries: recentEntries,
             allEntries: allEntries,
             deliveredEntries: deliveredEntries,
+            expenseEntries: expenseEntryRows,
             expenseCategories: categoryTotals,
             monthlyBreakdown: monthlyBreakdown
         )
