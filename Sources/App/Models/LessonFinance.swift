@@ -56,6 +56,59 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
         (hourlyRate * Decimal(durationMinutes)) / 60
     }
 
+    /// Creates a LessonFinance row for (lessonID, studentID) if none exists yet, or
+    /// reassigns an existing one to the new student — used any time a booking is
+    /// attached to a lesson (direct instructor booking, reschedule, swap) so the finance
+    /// record always tracks whoever is actually booked on that lesson now, rather than
+    /// whoever was booked on it last.
+    static func reassignOrCreate(lessonID: UUID, studentID: UUID, on db: Database) async throws {
+        if let existing = try await LessonFinance.find(lessonID, on: db) {
+            if existing.$student.id != studentID {
+                existing.$student.id = studentID
+                existing.financeStatus = "not_covered"
+                existing.reservedAmount = nil
+                existing.coveredAt = nil
+                try await existing.save(on: db)
+            }
+        } else {
+            guard let lesson = try await Lesson.find(lessonID, on: db) else { return }
+            let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
+            let studentProfile = try await StudentProfile.query(on: db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            let hourlyRate = studentProfile?.hourlyRate ?? 45
+            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
+            guard let instructorID = try await User.query(on: db)
+                .filter(\.$role == "instructor")
+                .first()?.requireID()
+            else { return }
+            let newFinance = LessonFinance(
+                lessonID: lessonID,
+                studentID: studentID,
+                instructorID: instructorID,
+                durationMinutes: durationMinutes,
+                hourlyRateSnapshot: hourlyRate,
+                priceSnapshot: priceSnapshot
+            )
+            try await newFinance.save(on: db)
+        }
+    }
+
+    /// Deletes a lesson's LessonFinance row if the lesson no longer has any active
+    /// booking — called whenever a booking is moved off a lesson (reschedule/swap), so a
+    /// stale finance record pointing at a student who isn't booked on it any more doesn't
+    /// linger and later get surfaced as a bogus "needs a charge decision" item.
+    static func deleteIfOrphaned(lessonID: UUID, on db: Database) async throws {
+        let activeCount = try await Booking.query(on: db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .count()
+        guard activeCount == 0 else { return }
+        try await LessonFinance.query(on: db)
+            .filter(\.$id == lessonID)
+            .delete()
+    }
+
     init() {}
 
     init(

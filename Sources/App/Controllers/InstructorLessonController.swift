@@ -451,6 +451,12 @@ struct InstructorLessonController: RouteCollection {
         try await bookingA.save(on: req.db)
         try await bookingB.save(on: req.db)
 
+        // Each lesson's finance record must follow its new occupant — lessonA now has
+        // studentB's booking, lessonB now has studentA's — otherwise the old finance
+        // rows stay pointed at the wrong (or no longer booked) student.
+        try await LessonFinance.reassignOrCreate(lessonID: lessonAID, studentID: try studentB.requireID(), on: req.db)
+        try await LessonFinance.reassignOrCreate(lessonID: lessonBID, studentID: try studentA.requireID(), on: req.db)
+
         // Broadcast to both students — each sees their own slot move as a reschedule
         req.broadcastRescheduled(old: lessonA, new: lessonB, explicitStudent: studentA)
         req.broadcastRescheduled(old: lessonB, new: lessonA, explicitStudent: studentB)
@@ -504,6 +510,12 @@ struct InstructorLessonController: RouteCollection {
         newLesson.state = "booked"
         newLesson.calendarName = "MSM Lessons"
         try await newLesson.save(on: req.db)
+
+        // The old lesson no longer has this (or any) active booking — drop its stale
+        // finance record so it doesn't later get flagged as a bogus pending charge.
+        // The new lesson needs its own finance record pointing at this student.
+        try await LessonFinance.deleteIfOrphaned(lessonID: try oldLesson.requireID(), on: req.db)
+        try await LessonFinance.reassignOrCreate(lessonID: try newLesson.requireID(), studentID: try student.requireID(), on: req.db)
 
         req.broadcastRescheduled(old: oldLesson, new: newLesson, explicitStudent: student)
 
@@ -607,41 +619,7 @@ struct InstructorLessonController: RouteCollection {
 
         // Create or reassign a LessonFinance record so coverage/charge status works.
         let lessonID = input.lessonID
-        if let existingFinance = try await LessonFinance.find(lessonID, on: req.db) {
-            if existingFinance.$student.id != studentID {
-                existingFinance.$student.id = studentID
-                existingFinance.financeStatus = "not_covered"
-                existingFinance.reservedAmount = nil
-                existingFinance.coveredAt = nil
-                try await existingFinance.save(on: req.db)
-            }
-        } else {
-            let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-            let studentProfile = try await StudentProfile.query(on: req.db)
-                .filter(\.$user.$id == studentID)
-                .first()
-            let hourlyRate = studentProfile?.hourlyRate ?? 45
-            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
-            let instructorID = try await User.query(on: req.db)
-                .filter(\.$role == "instructor")
-                .first()?.requireID()
-            if let instructorID {
-                let newFinance = LessonFinance(
-                    lessonID: lessonID,
-                    studentID: studentID,
-                    instructorID: instructorID,
-                    durationMinutes: durationMinutes,
-                    hourlyRateSnapshot: hourlyRate,
-                    priceSnapshot: priceSnapshot,
-                    chargeStatus: "not_charged",
-                    chargedLedgerEntryID: nil,
-                    financeStatus: "not_covered",
-                    coveredAt: nil,
-                    reservedAmount: nil
-                )
-                try await newFinance.save(on: req.db)
-            }
-        }
+        try await LessonFinance.reassignOrCreate(lessonID: lessonID, studentID: studentID, on: req.db)
         try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
 
         if let fcmToken = student.fcmToken, let fcm = FCMNotificationService(req: req) {
