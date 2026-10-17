@@ -101,9 +101,7 @@ struct AuthController: RouteCollection {
         guard input.firstName.trimmingCharacters(in: .whitespaces).isEmpty == false else {
             throw Abort(.unprocessableEntity, reason: "First name is required.")
         }
-        guard input.password.count >= 8 else {
-            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
-        }
+        try PasswordPolicy.validate(input.password)
         guard input.gdprConsent else {
             throw Abort(.unprocessableEntity, reason: "GDPR consent is required to create an account.")
         }
@@ -399,9 +397,7 @@ struct AuthController: RouteCollection {
         let input = try req.content.decode(ResetPasswordRequest.self)
         let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard input.newPassword.count >= 8 else {
-            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
-        }
+        try PasswordPolicy.validate(input.newPassword)
 
         guard let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$email == email)

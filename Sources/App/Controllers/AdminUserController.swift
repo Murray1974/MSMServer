@@ -33,9 +33,7 @@ struct AdminUserController: RouteCollection {
         guard !username.isEmpty, username.contains("@") else {
             throw Abort(.unprocessableEntity, reason: "Please provide a valid email address.")
         }
-        guard input.password.count >= 8 else {
-            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
-        }
+        try PasswordPolicy.validate(input.password)
         guard Self.allowedRoles.contains(input.role) else {
             throw Abort(.unprocessableEntity, reason: "Role must be one of: \(Self.allowedRoles.sorted().joined(separator: ", ")).")
         }

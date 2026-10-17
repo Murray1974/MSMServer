@@ -355,9 +355,7 @@ struct UserBookingsController: RouteCollection {
         guard try Bcrypt.verify(input.currentPassword, created: user.passwordHash) else {
             throw Abort(.unprocessableEntity, reason: "Current password is incorrect.")
         }
-        guard input.newPassword.count >= 8 else {
-            throw Abort(.unprocessableEntity, reason: "New password must be at least 8 characters.")
-        }
+        try PasswordPolicy.validate(input.newPassword)
 
         user.passwordHash = try Bcrypt.hash(input.newPassword)
         try await user.save(on: req.db)

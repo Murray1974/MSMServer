@@ -324,9 +324,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         guard !firstName.isEmpty else {
             throw Abort(.unprocessableEntity, reason: "First name is required.")
         }
-        guard input.password.count >= 8 else {
-            throw Abort(.unprocessableEntity, reason: "Password must be at least 8 characters.")
-        }
+        try PasswordPolicy.validate(input.password)
 
         if try await User.query(on: req.db).filter(\.$username == email).first() != nil {
             throw Abort(.conflict, reason: "An account with this email already exists.")
