@@ -72,4 +72,8 @@ jobs:
             docker compose up -d --no-build --force-recreate app
             sleep 8
             curl -sf http://127.0.0.1:8080/health || echo "Health check failed"
+            # Remove old, unused image layers left behind by previous --no-cache builds.
+            # Image-only — never touches volumes, so the Postgres data volume is untouched.
+            docker image prune -af
+            df -h / | tail -n 1
             echo "Deploy complete — $(date)"
