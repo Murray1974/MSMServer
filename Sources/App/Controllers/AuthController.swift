@@ -9,6 +9,8 @@ struct AuthController: RouteCollection {
         auth.post("logout", use: logout)
         auth.post("forgot-password", use: forgotPassword)
         auth.post("reset-password", use: resetPassword)
+        auth.post("send-verification-code", use: sendVerificationCode)
+        auth.post("verify-code", use: verifyEmailCode)
     }
 
     // MARK: - DTOs
@@ -23,6 +25,9 @@ struct AuthController: RouteCollection {
         let firstName: String
         let lastName: String
         let mobile: String?
+        /// Raw ticket returned by `/auth/verify-code` proving `email` was confirmed deliverable
+        /// in this same registration session. Required — registration refuses without it.
+        let emailVerificationTicket: String
         // Consents — all must be true except socialMediaOptIn
         let tcVersion: String
         let tcBodyText: String?
@@ -62,6 +67,19 @@ struct AuthController: RouteCollection {
         let email: String
         let code: String
         let newPassword: String
+    }
+
+    struct SendVerificationCodeRequest: Content {
+        let email: String
+    }
+
+    struct VerifyEmailCodeRequest: Content {
+        let email: String
+        let code: String
+    }
+
+    struct VerifyEmailCodeResponse: Content {
+        let ticket: String
     }
 
     // MARK: - Handlers
@@ -105,6 +123,24 @@ struct AuthController: RouteCollection {
             .first() {
             throw Abort(.conflict, reason: "An account with this email already exists.")
         }
+
+        // Email must have been verified via /auth/verify-code in this same registration
+        // session — this is what catches a mistyped inbox before it becomes an account
+        // with no reachable recovery email.
+        guard let verificationToken = try await EmailVerificationToken.query(on: req.db)
+            .filter(\.$email == email)
+            .filter(\.$verified == true)
+            .sort(\.$createdAt, .descending)
+            .first(),
+            let ticketHash = verificationToken.ticketHash,
+            verificationToken.consumedAt == nil,
+            !verificationToken.isExpired,
+            (try? Bcrypt.verify(input.emailVerificationTicket, created: ticketHash)) == true
+        else {
+            throw Abort(.unprocessableEntity, reason: "Please verify your email address before continuing.")
+        }
+        verificationToken.consumedAt = Date()
+        try await verificationToken.save(on: req.db)
 
         let hash = try Bcrypt.hash(input.password)
         let user = User(
@@ -172,6 +208,86 @@ struct AuthController: RouteCollection {
         }
 
         return .init(token: raw, approvalStatus: "pending", profileComplete: true)
+    }
+
+    /// POST /auth/send-verification-code
+    /// First step of registration's email-confirmation flow. Sends a 6-digit OTP to the given
+    /// address via SendGrid. Unlike forgot-password, this deliberately DOES reveal whether the
+    /// email is already registered — during sign-up that's useful feedback (avoids duplicate
+    /// accounts) rather than an enumeration risk worth hiding.
+    func sendVerificationCode(_ req: Request) async throws -> HTTPStatus {
+        let input = try req.content.decode(SendVerificationCodeRequest.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !email.isEmpty, email.contains("@") else {
+            throw Abort(.unprocessableEntity, reason: "Please enter a valid email address.")
+        }
+
+        let existingUser = try await User.query(on: req.db).filter(\.$username == email).first()
+        let existingProfile = try await StudentProfile.query(on: req.db).filter(\.$email == email).first()
+        if existingUser != nil || existingProfile != nil {
+            throw Abort(.conflict, reason: "An account with this email already exists.")
+        }
+
+        // Invalidate any previous unverified codes for this email so only the latest is live.
+        try await EmailVerificationToken.query(on: req.db)
+            .filter(\.$email == email)
+            .filter(\.$verified == false)
+            .delete()
+
+        let code = String(format: "%06d", Int.random(in: 0..<1_000_000))
+        let token = EmailVerificationToken(
+            email: email,
+            codeHash: try Bcrypt.hash(code),
+            expiresAt: Date().addingTimeInterval(15 * 60)
+        )
+        try await token.save(on: req.db)
+
+        if let sg = SendGridService(req: req) {
+            try await sg.sendVerificationCode(to: email, firstName: nil, code: code)
+        }
+
+        return .ok
+    }
+
+    /// POST /auth/verify-code
+    /// Second step — verifies the OTP and returns a short-lived opaque ticket that
+    /// `/auth/register` requires to prove this email was confirmed deliverable.
+    func verifyEmailCode(_ req: Request) async throws -> VerifyEmailCodeResponse {
+        let input = try req.content.decode(VerifyEmailCodeRequest.self)
+        let email = input.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let token = try await EmailVerificationToken.query(on: req.db)
+            .filter(\.$email == email)
+            .filter(\.$verified == false)
+            .sort(\.$createdAt, .descending)
+            .first()
+        else {
+            throw Abort(.unprocessableEntity, reason: "Invalid or expired code. Please request a new one.")
+        }
+
+        guard !token.isExpired else {
+            throw Abort(.unprocessableEntity, reason: "This code has expired. Please request a new one.")
+        }
+
+        guard token.attempts < 5 else {
+            throw Abort(.tooManyRequests, reason: "Too many incorrect attempts. Please request a new code.")
+        }
+
+        guard try Bcrypt.verify(input.code, created: token.codeHash) else {
+            token.attempts += 1
+            try await token.save(on: req.db)
+            throw Abort(.unprocessableEntity, reason: "Incorrect code. Please try again.")
+        }
+
+        var rng = SystemRandomNumberGenerator()
+        let ticketBytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
+        let ticket = Data(ticketBytes).base64EncodedString()
+        token.verified = true
+        token.ticketHash = try Bcrypt.hash(ticket)
+        try await token.save(on: req.db)
+
+        return .init(ticket: ticket)
     }
 
     /// POST /auth/login

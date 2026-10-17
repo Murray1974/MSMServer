@@ -133,6 +133,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddCountyToStudentProfile())
     app.migrations.add(AddProfilePhotoPathToStudentProfile())
     app.migrations.add(AddDefaultPickupLocationToStudentProfile())
+    app.migrations.add(CreateEmailVerificationToken())
 
     try app.autoMigrate().wait()
 
