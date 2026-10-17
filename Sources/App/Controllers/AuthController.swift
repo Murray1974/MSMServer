@@ -26,8 +26,10 @@ struct AuthController: RouteCollection {
         let lastName: String
         let mobile: String?
         /// Raw ticket returned by `/auth/verify-code` proving `email` was confirmed deliverable
-        /// in this same registration session. Required — registration refuses without it.
-        let emailVerificationTicket: String
+        /// in this same registration session. Optional for now — the client-side verification
+        /// step is disabled until SendGrid's plan is upgraded (see EmailVerificationToken),
+        /// but when present it's still checked so the flow can be re-enabled client-side alone.
+        let emailVerificationTicket: String?
         // Consents — all must be true except socialMediaOptIn
         let tcVersion: String
         let tcBodyText: String?
@@ -124,23 +126,26 @@ struct AuthController: RouteCollection {
             throw Abort(.conflict, reason: "An account with this email already exists.")
         }
 
-        // Email must have been verified via /auth/verify-code in this same registration
-        // session — this is what catches a mistyped inbox before it becomes an account
-        // with no reachable recovery email.
-        guard let verificationToken = try await EmailVerificationToken.query(on: req.db)
-            .filter(\.$email == email)
-            .filter(\.$verified == true)
-            .sort(\.$createdAt, .descending)
-            .first(),
-            let ticketHash = verificationToken.ticketHash,
-            verificationToken.consumedAt == nil,
-            !verificationToken.isExpired,
-            (try? Bcrypt.verify(input.emailVerificationTicket, created: ticketHash)) == true
-        else {
-            throw Abort(.unprocessableEntity, reason: "Please verify your email address before continuing.")
+        // If the client completed /auth/verify-code, confirm the ticket is genuine and consume
+        // it. If no ticket was sent, this step is skipped entirely — the client-side email
+        // verification UI is currently disabled (SendGrid has no send credits until the plan
+        // is upgraded), so registration falls back to its pre-verification behaviour.
+        if let ticket = input.emailVerificationTicket {
+            guard let verificationToken = try await EmailVerificationToken.query(on: req.db)
+                .filter(\.$email == email)
+                .filter(\.$verified == true)
+                .sort(\.$createdAt, .descending)
+                .first(),
+                let ticketHash = verificationToken.ticketHash,
+                verificationToken.consumedAt == nil,
+                !verificationToken.isExpired,
+                (try? Bcrypt.verify(ticket, created: ticketHash)) == true
+            else {
+                throw Abort(.unprocessableEntity, reason: "Please verify your email address before continuing.")
+            }
+            verificationToken.consumedAt = Date()
+            try await verificationToken.save(on: req.db)
         }
-        verificationToken.consumedAt = Date()
-        try await verificationToken.save(on: req.db)
 
         let hash = try Bcrypt.hash(input.password)
         let user = User(
