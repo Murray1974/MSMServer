@@ -229,6 +229,35 @@ struct UserBookingsController: RouteCollection {
 
         let input = try req.content.decode(UpdateProfileInput.self)
 
+        // Keep the login credential (User.username) in sync with the profile's contact email.
+        // Without this, a student editing their email here only ever changed the *display*
+        // field — login, and the /auth/forgot-password lookup (which is keyed off
+        // StudentProfile.email), would silently diverge from what they can still log in with.
+        let normalizedEmail: String? = try await { () async throws -> String? in
+            guard let newEmail = input.email else { return nil }
+            let normalized = newEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, normalized.contains("@") else {
+                throw Abort(.unprocessableEntity, reason: "Please enter a valid email address.")
+            }
+            if normalized != user.username {
+                let existingUser = try await User.query(on: req.db)
+                    .filter(\.$username == normalized)
+                    .first()
+                guard existingUser == nil || existingUser?.id == userID else {
+                    throw Abort(.conflict, reason: "An account with this email already exists.")
+                }
+                let existingProfile = try await StudentProfile.query(on: req.db)
+                    .filter(\.$email == normalized)
+                    .first()
+                guard existingProfile == nil || existingProfile?.$user.id == userID else {
+                    throw Abort(.conflict, reason: "An account with this email already exists.")
+                }
+                user.username = normalized
+                try await user.save(on: req.db)
+            }
+            return normalized
+        }()
+
         // Look up existing profile, if any.
         let existing = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == userID)
@@ -240,7 +269,7 @@ struct UserBookingsController: RouteCollection {
             if let v = input.firstName { current.firstName = v }
             if let v = input.lastName { current.lastName = v }
             if let v = input.mobile { current.mobile = v }
-            if let v = input.email { current.email = v }
+            if let v = normalizedEmail { current.email = v }
             if let v = input.addressLine1 { current.addressLine1 = v }
             if let v = input.addressLine2 { current.addressLine2 = v }
             if let v = input.city { current.city = v }
@@ -272,7 +301,7 @@ struct UserBookingsController: RouteCollection {
                 firstName: input.firstName,
                 lastName: input.lastName,
                 mobile: input.mobile,
-                email: input.email,
+                email: normalizedEmail,
                 addressLine1: input.addressLine1,
                 addressLine2: input.addressLine2,
                 city: input.city,
