@@ -93,6 +93,9 @@ struct UserBookingsController: RouteCollection {
         // PUT /me/profile  (create or update the student's profile)
         me.put("profile", use: updateProfile)
 
+        // POST /me/change-password — logged-in password change, no email involved.
+        me.post("change-password", use: changePassword)
+
         // GET /me/bookings?scope=future|past|all
         me.get("bookings", use: listMyBookings)
     }
@@ -331,6 +334,46 @@ struct UserBookingsController: RouteCollection {
 
         // Return the standard /me/profile payload.
         return try await profile(req)
+    }
+
+    // MARK: POST /me/change-password
+    struct ChangePasswordInput: Content {
+        let currentPassword: String
+        let newPassword: String
+    }
+
+    /// Lets an already-logged-in student set a new password by proving they know the
+    /// current one — no email involved, unlike /auth/forgot-password's OTP flow. Keeps
+    /// the session that made this request valid, but revokes every other session token
+    /// for this account, matching standard "password changed" security practice.
+    func changePassword(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        let input = try req.content.decode(ChangePasswordInput.self)
+
+        guard try Bcrypt.verify(input.currentPassword, created: user.passwordHash) else {
+            throw Abort(.unprocessableEntity, reason: "Current password is incorrect.")
+        }
+        guard input.newPassword.count >= 8 else {
+            throw Abort(.unprocessableEntity, reason: "New password must be at least 8 characters.")
+        }
+
+        user.passwordHash = try Bcrypt.hash(input.newPassword)
+        try await user.save(on: req.db)
+
+        // Revoke every other session (other devices) — but not the one making this
+        // request, so the student isn't logged out of the change they just made.
+        if let bearer = req.headers.bearerAuthorization {
+            let currentHash = SessionToken.hash(bearer.token)
+            try await SessionToken.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$tokenHash != currentHash)
+                .delete()
+        }
+
+        req.logger.notice("[Auth] Password changed via /me/change-password for '\(user.username)'.")
+        return .ok
     }
 
 }
