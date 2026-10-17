@@ -545,6 +545,12 @@ public func routes(_ app: Application) throws {
                 try await l.save(on: req.db)
                 lesson = l
 
+                // Register the new lesson in both lookup maps immediately — otherwise a second
+                // slot later in this same batch at the identical start/end time won't find it
+                // and will create its own duplicate lesson instead of reusing this one.
+                futureByID[try lesson.requireID()] = lesson
+                futureByTime[timeKey] = lesson
+
                 // Broadcast brand-new availability
                 let update = AvailabilityUpdate(
                     action: AvailabilityAction.slotAvailable,
