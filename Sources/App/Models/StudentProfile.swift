@@ -136,6 +136,15 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "profile_photo_path")
     var profilePhotoPath: String?
 
+    /// An emoji chosen as an alternative to a photo avatar. Both can be set independently —
+    /// `lastAvatarType` records which one was set most recently, for the client to display.
+    @OptionalField(key: "avatar_emoji")
+    var avatarEmoji: String?
+
+    /// "photo" | "emoji" — whichever avatar source was set most recently.
+    @OptionalField(key: "last_avatar_type")
+    var lastAvatarType: String?
+
     // MARK: - Account hold
 
     @Field(key: "account_hold")
@@ -264,6 +273,8 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         licencePhotoPath: String? = nil,
         licenceVerified: Bool = false,
         profilePhotoPath: String? = nil,
+        avatarEmoji: String? = nil,
+        lastAvatarType: String? = nil,
         accountHold: Bool = false,
         accountHoldReason: String? = nil,
         tcAcceptedAt: Date? = nil,
@@ -316,6 +327,8 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.licencePhotoPath = licencePhotoPath
         self.licenceVerified = licenceVerified
         self.profilePhotoPath = profilePhotoPath
+        self.avatarEmoji = avatarEmoji
+        self.lastAvatarType = lastAvatarType
         self.accountHold = accountHold
         self.accountHoldReason = accountHoldReason
         self.tcAcceptedAt = tcAcceptedAt

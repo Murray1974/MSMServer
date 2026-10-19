@@ -32,6 +32,8 @@ struct MeProfileResponse: Content {
         var licencePhotoPath: String?
         var licenceVerified: Bool?
         var profilePhotoPath: String?
+        var avatarEmoji: String?
+        var lastAvatarType: String?
         var dateOfBirth: Date?
         var transmissionPreference: String?
         var previousHours: Int?
@@ -141,6 +143,8 @@ struct UserBookingsController: RouteCollection {
                 licencePhotoPath: p.licencePhotoPath,
                 licenceVerified: p.licenceVerified,
                 profilePhotoPath: p.profilePhotoPath,
+                avatarEmoji: p.avatarEmoji,
+                lastAvatarType: p.lastAvatarType,
                 dateOfBirth: p.dateOfBirth,
                 transmissionPreference: p.transmissionPreference,
                 previousHours: p.previousHours,

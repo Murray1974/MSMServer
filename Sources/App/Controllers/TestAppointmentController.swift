@@ -332,6 +332,7 @@ struct TestAppointmentController: RouteCollection {
             ekEventID: body.ekEventID
         )
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: body.userID, on: req)
         return dto(from: appt)
     }
 
@@ -388,6 +389,7 @@ struct TestAppointmentController: RouteCollection {
         appt.status   = "instructor_withdrawn"
         appt.ekEventID = ""
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         req.application.broadcastTestUpdated(studentID: appt.$user.id, status: "instructor_withdrawn", to: .students)
         return dto(from: appt)
     }
@@ -439,6 +441,7 @@ struct TestAppointmentController: RouteCollection {
         appt.state = "attended"
         appt.$chargedLedgerEntry.id = try entry.requireID()
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         return dto(from: appt)
     }
 
@@ -453,6 +456,7 @@ struct TestAppointmentController: RouteCollection {
         }
         appt.state = "cancelled"
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         return .ok
     }
 
@@ -499,6 +503,7 @@ struct TestAppointmentController: RouteCollection {
         if let v = body.endsAt       { appt.endsAt       = v }
         if let v = body.status       { appt.status       = v }
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         return dto(from: appt)
     }
 
@@ -554,7 +559,23 @@ struct TestAppointmentController: RouteCollection {
         }
         appt.status = "confirmed"
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         req.application.broadcastTestUpdated(studentID: appt.$user.id, status: "confirmed", to: .students)
+
+        if let student = try await User.find(appt.$user.id, on: req.db),
+           let fcmToken = student.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            let df = DateFormatter()
+            df.dateFormat = "EEE d MMM 'at' HH:mm"
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            let dateLabel = df.string(from: appt.startsAt.addingTimeInterval(3600))
+            try? await fcm.send(
+                to: fcmToken,
+                title: "Test confirmed",
+                body: "Your test on \(dateLabel) has been confirmed. Good luck!"
+            )
+        }
+
         return dto(from: appt)
     }
 
@@ -569,7 +590,19 @@ struct TestAppointmentController: RouteCollection {
         }
         appt.status = "rejected"
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: appt.$user.id, on: req)
         req.application.broadcastTestUpdated(studentID: appt.$user.id, status: "rejected", to: .students)
+
+        if let student = try await User.find(appt.$user.id, on: req.db),
+           let fcmToken = student.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            try? await fcm.send(
+                to: fcmToken,
+                title: "Test request not confirmed",
+                body: "Your instructor wasn't able to confirm this test date. Open the app to request another."
+            )
+        }
+
         return dto(from: appt)
     }
 
@@ -673,6 +706,29 @@ struct TestAppointmentController: RouteCollection {
         )
         try await appt.save(on: req.db)
         req.application.broadcastTestUpdated(studentID: studentID, status: finalStatus, to: .instructors)
+
+        // Push the instructor so a pending request isn't missed if the app isn't open —
+        // auto-rejected ones are already resolved and don't need their attention.
+        if finalStatus == "pending",
+           let instructor = try await User.query(on: req.db).filter(\.$role == "instructor").first(),
+           let fcmToken = instructor.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            let df = DateFormatter()
+            df.dateFormat = "EEE d MMM 'at' HH:mm"
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            let dateLabel = df.string(from: body.testDate)
+            let pendingCount = try? await TestAppointment.query(on: req.db)
+                .filter(\.$status == "pending")
+                .filter(\.$state != "cancelled")
+                .count()
+            try? await fcm.send(
+                to: fcmToken,
+                title: "New test request",
+                body: "\(student.displayName ?? student.username) requested a test for \(dateLabel) at \(body.testCentre).",
+                badge: pendingCount
+            )
+        }
+
         return studentDTO(from: appt, rejectionReason: autoRejectionReason)
     }
 
@@ -705,6 +761,7 @@ struct TestAppointmentController: RouteCollection {
         }
         appt.state = "cancelled"
         try await appt.save(on: req.db)
+        try await syncTestDateBanner(studentID: studentID, on: req)
         req.application.broadcastTestUpdated(studentID: studentID, status: "cancelled", to: .instructors)
         return .ok
     }
@@ -770,11 +827,30 @@ struct TestAppointmentController: RouteCollection {
             submittedBy: "student"
         )
         try await newAppt.save(on: req.db)
+        try await syncTestDateBanner(studentID: studentID, on: req)
         req.application.broadcastTestUpdated(studentID: studentID, status: "rescheduled", to: .instructors)
         return studentDTO(from: newAppt)
     }
 
     // MARK: - Private helpers
+
+    /// Keeps `User.testDate` (surfaced in the student app's Progress tab countdown banner)
+    /// in sync with this student's single confirmed, still-scheduled test appointment, if
+    /// any. Recomputed from scratch each call rather than conditionally set/cleared per call
+    /// site, so it's self-correcting and safe to call after any mutation that could confirm,
+    /// reschedule, or remove a confirmed test.
+    private func syncTestDateBanner(studentID: UUID, on req: Request) async throws {
+        let confirmed = try await TestAppointment.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .filter(\.$status == "confirmed")
+            .filter(\.$state == "scheduled")
+            .sort(\.$startsAt)
+            .first()
+        guard let user = try await User.find(studentID, on: req.db) else { return }
+        user.testDate = confirmed.map { $0.startsAt.addingTimeInterval(3600) } // actual test moment, not slot start
+        try await user.save(on: req.db)
+        req.application.broadcastProgressUpdated(studentID: studentID, topicName: "testDate", level: 0)
+    }
 
     private func studentDTO(from appt: TestAppointment, rejectionReason: String? = nil) -> StudentTestDTO {
         StudentTestDTO(

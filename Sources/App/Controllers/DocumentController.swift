@@ -169,6 +169,52 @@ struct DocumentController: RouteCollection {
             .filter(\.$user.$id == userID)
             .first() ?? StudentProfile(userID: userID)
         profile.profilePhotoPath = "uploads/profile_photos/\(filename)"
+        profile.lastAvatarType = "photo"
+        try await profile.save(on: req.db)
+        return .ok
+    }
+
+    // MARK: - PUT /student/profile/avatar-emoji — sets an emoji avatar (kept alongside any saved photo)
+
+    func setAvatarEmoji(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        struct EmojiInput: Content { var emoji: String }
+        let input = try req.content.decode(EmojiInput.self)
+        guard !input.emoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Abort(.badRequest, reason: "Emoji is required.")
+        }
+
+        let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first() ?? StudentProfile(userID: userID)
+        profile.avatarEmoji = input.emoji
+        profile.lastAvatarType = "emoji"
+        try await profile.save(on: req.db)
+        return .ok
+    }
+
+    // MARK: - DELETE /student/profile/avatar — clears any saved photo/emoji, reverting to initials
+
+    func removeAvatar(_ req: Request) async throws -> HTTPStatus {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        else {
+            return .ok
+        }
+
+        if let path = profile.profilePhotoPath {
+            let fullPath = req.application.directory.workingDirectory + path
+            try? FileManager.default.removeItem(atPath: fullPath)
+        }
+        profile.profilePhotoPath = nil
+        profile.avatarEmoji = nil
+        profile.lastAvatarType = nil
         try await profile.save(on: req.db)
         return .ok
     }

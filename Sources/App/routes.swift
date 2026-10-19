@@ -1089,6 +1089,14 @@ public func routes(_ app: Application) throws {
             }
         }
 
+        // ── Default-tab signal (My Lessons vs Book) ──────────────────────────
+        let hasUpcomingLessons = try await Booking.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$deletedAt == .null)
+            .with(\.$lesson)
+            .all()
+            .contains { $0.lesson.startsAt > now }
+
         // ── Hold recovery info ────────────────────────────────────────────────
         var holdLessonID: String? = nil
         var holdLessonStartsAt: String? = nil
@@ -1122,7 +1130,9 @@ public func routes(_ app: Application) throws {
             pendingPaymentBooking: pendingPaymentBooking,
             holdLessonID: holdLessonID,
             holdLessonStartsAt: holdLessonStartsAt,
-            holdLessonAvailable: holdLessonAvailable
+            holdLessonAvailable: holdLessonAvailable,
+            hasUpcomingLessons: hasUpcomingLessons,
+            hourlyRatePence: profile?.hourlyRatePence ?? 4500
         )
     }
 
@@ -1155,6 +1165,11 @@ public func routes(_ app: Application) throws {
     // GET  /student/profile/photo         — view own profile photo
     studentProtected.on(.POST, "profile", "photo", body: .collect(maxSize: "10mb"), use: documentController.uploadProfilePhoto)
     studentProtected.get("profile", "photo", use: documentController.getOwnProfilePhoto)
+
+    // PUT /student/profile/avatar-emoji — sets an emoji as an alternative to a photo avatar
+    studentProtected.put("profile", "avatar-emoji", use: documentController.setAvatarEmoji)
+    // DELETE /student/profile/avatar — clears any saved photo/emoji, reverting to initials
+    studentProtected.delete("profile", "avatar", use: documentController.removeAvatar)
 
     // POST /student/register-fcm-token — stores the device push token for later use
     studentProtected.post("register-fcm-token") { req async throws -> HTTPStatus in

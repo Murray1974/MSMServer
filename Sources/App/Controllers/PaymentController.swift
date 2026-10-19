@@ -56,10 +56,26 @@ struct PaymentController: RouteCollection {
 
             metadata["bookingID"] = bookingID.uuidString
 
+        } else if let blockHours = input.blockHours {
+            guard blockHours > 0 else {
+                throw Abort(.badRequest, reason: "blockHours must be greater than 0.")
+            }
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            let price = LessonFinance.calculatedPrice(durationMinutes: blockHours * 60, hourlyRate: studentProfile?.hourlyRate ?? 45)
+
+            var pence = price * 100
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &pence, 0, .plain)
+            amountPence = max(50, NSDecimalNumber(decimal: rounded).intValue)
+
+            metadata["blockHours"] = String(blockHours)
+
         } else if let explicit = input.amount {
             amountPence = explicit
         } else {
-            throw Abort(.badRequest, reason: "Provide bookingID (per-lesson) or amount (top-up).")
+            throw Abort(.badRequest, reason: "Provide bookingID (per-lesson), blockHours, or amount (top-up).")
         }
 
         let secret = try await stripe.createPaymentIntent(

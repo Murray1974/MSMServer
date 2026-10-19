@@ -224,11 +224,28 @@ struct RecoverySequenceService {
         let title = "Lesson slot available"
         let body = "\(slotString) has become available — tap to book."
 
+        // Every push is self-contained with the *current* full set of recently-released,
+        // still-open slots (not just this one lesson) — lets the client group everything
+        // newly available across several weeks into one modal on tap, regardless of which
+        // notification was actually tapped.
+        let recentWindowStart = Date().addingTimeInterval(-7 * 24 * 3600)
+        let recentlyReleased = try? await Lesson.query(on: db)
+            .filter(\.$state == "available")
+            .filter(\.$startsAt > Date())
+            .filter(\.$updatedAt >= recentWindowStart)
+            .all()
+        let lessonIDs = (recentlyReleased ?? [lesson]).compactMap { $0.id?.uuidString }
+        var pushData: [String: String]? = nil
+        if let jsonData = try? JSONEncoder().encode(lessonIDs),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            pushData = ["type": "lesson_available", "lessonIDs": jsonString]
+        }
+
         var sent = 0
         for user in users {
             guard let token = user.fcmToken else { continue }
             if let fcm = FCMNotificationService(app: app) {
-                try? await fcm.send(to: token, title: title, body: body)
+                try? await fcm.send(to: token, title: title, body: body, data: pushData)
                 sent += 1
             }
         }
