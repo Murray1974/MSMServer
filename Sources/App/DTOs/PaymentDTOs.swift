@@ -8,7 +8,10 @@ import Vapor
 ///   - `blockHours` → server prices it at the student's own hourly rate (e.g. a 10-hour block)
 struct CreatePaymentIntentRequest: Content {
     let bookingID: UUID?
-    /// Explicit amount in pence. Only used when bookingID/blockHours are nil (fixed/custom top-up).
+    /// A TestAppointment to pay for in advance (priced the same way as the automatic
+    /// charge applied when the instructor marks the test attended).
+    let testID: UUID?
+    /// Explicit amount in pence. Only used when bookingID/testID/blockHours are nil (fixed/custom top-up).
     let amount: Int?
     /// Number of hours to price at the student's own StudentProfile.hourlyRate. The amount is
     /// always computed server-side from this — never trust a client-supplied amount for a block.

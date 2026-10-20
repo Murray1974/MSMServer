@@ -56,6 +56,31 @@ struct PaymentController: RouteCollection {
 
             metadata["bookingID"] = bookingID.uuidString
 
+        } else if let testID = input.testID {
+            // Pay in advance for an upcoming test appointment. Priced the same
+            // way as the automatic ledger charge applied when the instructor
+            // marks the test attended (TestAppointmentController.markAttended).
+            guard let appt = try await TestAppointment.query(on: req.db)
+                .filter(\.$id == testID)
+                .filter(\.$user.$id == studentID)
+                .filter(\.$state == "scheduled")
+                .first()
+            else {
+                throw Abort(.notFound, reason: "Test appointment not found")
+            }
+            let mins = max(0, Int(appt.endsAt.timeIntervalSince(appt.startsAt) / 60))
+            let studentProfile = try await StudentProfile.query(on: req.db)
+                .filter(\.$user.$id == studentID)
+                .first()
+            let price = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
+
+            var pence = price * 100
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &pence, 0, .plain)
+            amountPence = max(50, NSDecimalNumber(decimal: rounded).intValue)
+
+            metadata["testID"] = testID.uuidString
+
         } else if let blockHours = input.blockHours {
             guard blockHours > 0 else {
                 throw Abort(.badRequest, reason: "blockHours must be greater than 0.")
