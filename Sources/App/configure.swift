@@ -135,6 +135,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddDefaultPickupLocationToStudentProfile())
     app.migrations.add(CreateEmailVerificationToken())
     app.migrations.add(AddAvatarEmojiToStudentProfile())
+    app.migrations.add(AddTheoryTestTimeToStudentProfile())
 
     try app.autoMigrate().wait()
 

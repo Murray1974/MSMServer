@@ -123,6 +123,17 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "theory_test_date")
     var theoryTestDate: Date?
 
+    /// "HH:mm" — the time of day the theory test took place.
+    @OptionalField(key: "theory_test_time")
+    var theoryTestTime: String?
+
+    /// DVSA theory certificates are valid for 2 years from the test date. Only meaningful
+    /// when `theoryTestPassed` is true — nil (fail/not taken) means there's nothing to expire.
+    var theoryCertificateExpiryDate: Date? {
+        guard theoryTestPassed, let date = theoryTestDate else { return nil }
+        return Calendar(identifier: .gregorian).date(byAdding: .year, value: 2, to: date)
+    }
+
     /// Set (now + 14 days) after each theory-test reminder push; nil/expired means one is due.
     @OptionalField(key: "theory_reminder_dismissed_until")
     var theoryReminderDismissedUntil: Date?
@@ -269,6 +280,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         medicalConditions: String? = nil,
         theoryTestPassed: Bool = false,
         theoryTestDate: Date? = nil,
+        theoryTestTime: String? = nil,
         theoryReminderDismissedUntil: Date? = nil,
         licencePhotoPath: String? = nil,
         licenceVerified: Bool = false,
@@ -323,6 +335,7 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.medicalConditions = medicalConditions
         self.theoryTestPassed = theoryTestPassed
         self.theoryTestDate = theoryTestDate
+        self.theoryTestTime = theoryTestTime
         self.theoryReminderDismissedUntil = theoryReminderDismissedUntil
         self.licencePhotoPath = licencePhotoPath
         self.licenceVerified = licenceVerified

@@ -5,6 +5,9 @@ import Foundation
 struct StudentDocumentsDTO: Content {
     let theoryTestPassed: Bool
     let theoryTestDate: Date?
+    let theoryTestTime: String?
+    let theoryCertificateNumber: String?
+    let theoryCertificateExpiryDate: Date?
     let licencePhotoPath: String?
     let licenceVerified: Bool
     let provisionalLicenceNumber: String?
@@ -88,6 +91,9 @@ struct DocumentController: RouteCollection {
         return StudentDocumentsDTO(
             theoryTestPassed: profile?.theoryTestPassed ?? false,
             theoryTestDate: profile?.theoryTestDate,
+            theoryTestTime: profile?.theoryTestTime,
+            theoryCertificateNumber: profile?.theoryCertificateNumber,
+            theoryCertificateExpiryDate: profile?.theoryCertificateExpiryDate,
             licencePhotoPath: profile?.licencePhotoPath,
             licenceVerified: profile?.licenceVerified ?? false,
             provisionalLicenceNumber: profile?.provisionalLicenceNumber

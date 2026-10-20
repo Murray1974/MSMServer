@@ -22,6 +22,9 @@ struct StudentSelfBalanceView: Content {
     /// (e.g. a "10 hour block" top-up estimate) — never used client-side to compute an
     /// actual charge, only to show it before the server computes the real amount.
     let hourlyRatePence: Int
+    /// Lets the client decide whether to show "Add theory test result" in the More tab —
+    /// hidden once a pass has been recorded (at registration or via that sheet).
+    let theoryTestPassed: Bool
 }
 
 struct PendingPaymentView: Content {

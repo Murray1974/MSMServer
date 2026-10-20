@@ -29,6 +29,8 @@ struct MeProfileResponse: Content {
         var medicalConditions: String?
         var theoryTestPassed: Bool?
         var theoryTestDate: Date?
+        var theoryTestTime: String?
+        var theoryCertificateExpiryDate: Date?
         var licencePhotoPath: String?
         var licenceVerified: Bool?
         var profilePhotoPath: String?
@@ -75,6 +77,12 @@ struct UpdateProfileInput: Content {
     var dateOfBirth: Date?
     var transmissionPreference: String?
     var previousHours: Int?
+    /// A theory test result submission from the student app's "Add theory test result"
+    /// sheet (More tab). Present only when that sheet submits — never sent by a plain
+    /// profile edit — which is what lets `updateProfile` know to fire the instructor push.
+    var theoryTestPassed: Bool?
+    var theoryTestDate: Date?
+    var theoryTestTime: String?
 }
 
 struct UserBookingsController: RouteCollection {
@@ -140,6 +148,8 @@ struct UserBookingsController: RouteCollection {
                 medicalConditions: p.medicalConditions,
                 theoryTestPassed: p.theoryTestPassed,
                 theoryTestDate: p.theoryTestDate,
+                theoryTestTime: p.theoryTestTime,
+                theoryCertificateExpiryDate: p.theoryCertificateExpiryDate,
                 licencePhotoPath: p.licencePhotoPath,
                 licenceVerified: p.licenceVerified,
                 profilePhotoPath: p.profilePhotoPath,
@@ -236,6 +246,15 @@ struct UserBookingsController: RouteCollection {
 
         let input = try req.content.decode(UpdateProfileInput.self)
 
+        // A theory test result is only submitted by the "Add theory test result" sheet
+        // (More tab) — a pass must carry a certificate number, a fail must not.
+        if input.theoryTestPassed == true {
+            guard let cert = input.theoryCertificateNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !cert.isEmpty else {
+                throw Abort(.unprocessableEntity, reason: "A certificate number is required when the result is a pass.")
+            }
+        }
+
         // Keep the login credential (User.username) in sync with the profile's contact email.
         // Without this, a student editing their email here only ever changed the *display*
         // field — login, and the /auth/forgot-password lookup (which is keyed off
@@ -291,7 +310,15 @@ struct UserBookingsController: RouteCollection {
             if let v = input.provisionalLicenceNumber { current.provisionalLicenceNumber = v }
             if let v = input.fullLicenceNumber { current.fullLicenceNumber = v }
             if let v = input.licenceExpiryDate { current.licenceExpiryDate = v }
-            if let v = input.theoryCertificateNumber { current.theoryCertificateNumber = v }
+            if let v = input.theoryCertificateNumber, input.theoryTestPassed == nil {
+                current.theoryCertificateNumber = v
+            }
+            if let passed = input.theoryTestPassed {
+                current.theoryTestPassed = passed
+                if let v = input.theoryTestDate { current.theoryTestDate = v }
+                if let v = input.theoryTestTime { current.theoryTestTime = v }
+                current.theoryCertificateNumber = passed ? input.theoryCertificateNumber : nil
+            }
             if let v = input.defaultLessonLengthMinutes { current.defaultLessonLengthMinutes = v }
             if let v = input.hourlyRatePence { current.hourlyRatePence = v }
             if let v = input.eyesightTestPassed { current.eyesightTestPassed = v }
@@ -323,11 +350,16 @@ struct UserBookingsController: RouteCollection {
                 provisionalLicenceNumber: input.provisionalLicenceNumber,
                 fullLicenceNumber: input.fullLicenceNumber,
                 licenceExpiryDate: input.licenceExpiryDate,
-                theoryCertificateNumber: input.theoryCertificateNumber,
+                theoryCertificateNumber: input.theoryTestPassed == nil
+                    ? input.theoryCertificateNumber
+                    : (input.theoryTestPassed == true ? input.theoryCertificateNumber : nil),
                 defaultLessonLengthMinutes: input.defaultLessonLengthMinutes ?? 120,
                 hourlyRatePence: input.hourlyRatePence ?? 4500,
                 eyesightTestPassed: input.eyesightTestPassed ?? false,
                 medicalConditions: input.medicalConditions,
+                theoryTestPassed: input.theoryTestPassed ?? false,
+                theoryTestDate: input.theoryTestDate,
+                theoryTestTime: input.theoryTestTime,
                 dateOfBirth: input.dateOfBirth,
                 transmissionPreference: input.transmissionPreference,
                 previousHours: input.previousHours
@@ -335,6 +367,22 @@ struct UserBookingsController: RouteCollection {
         }
 
         try await profileModel.save(on: req.db)
+
+        // A theory result was submitted via the "Add theory test result" sheet — let the
+        // instructor know, whether it's a pass or a fail. Registration-time theory answers
+        // go through AuthController.register instead, which sends its own new-registration
+        // push, so this never double-notifies.
+        if let passed = input.theoryTestPassed,
+           let instructor = try await User.query(on: req.db).filter(\.$role == "instructor").first(),
+           let fcmToken = instructor.fcmToken,
+           let fcm = FCMNotificationService(app: req.application) {
+            let name = user.displayName ?? user.username
+            try? await fcm.send(
+                to: fcmToken,
+                title: "Theory test updated",
+                body: "\(name) \(passed ? "passed" : "did not pass") their theory test."
+            )
+        }
 
         // Return the standard /me/profile payload.
         return try await profile(req)

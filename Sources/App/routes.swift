@@ -1132,7 +1132,8 @@ public func routes(_ app: Application) throws {
             holdLessonStartsAt: holdLessonStartsAt,
             holdLessonAvailable: holdLessonAvailable,
             hasUpcomingLessons: hasUpcomingLessons,
-            hourlyRatePence: profile?.hourlyRatePence ?? 4500
+            hourlyRatePence: profile?.hourlyRatePence ?? 4500,
+            theoryTestPassed: profile?.theoryTestPassed ?? false
         )
     }
 
