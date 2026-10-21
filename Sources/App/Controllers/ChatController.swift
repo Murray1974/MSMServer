@@ -151,7 +151,12 @@ struct ChatController: Sendable {
             try? await FCMNotificationService(req: req)?.send(
                 to: fcmToken,
                 title: student.displayName,
-                body: body.content
+                body: body.content,
+                data: [
+                    "type": "chat_message",
+                    "studentID": studentID.uuidString,
+                    "studentName": student.displayName
+                ]
             )
         }
 
@@ -271,7 +276,8 @@ struct ChatController: Sendable {
             try? await FCMNotificationService(req: req)?.send(
                 to: fcmToken,
                 title: "New message from Instructor",
-                body: body.content
+                body: body.content,
+                data: ["type": "chat_message"]
             )
         }
 
