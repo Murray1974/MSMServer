@@ -332,87 +332,21 @@ struct StudentBookingsController: RouteCollection {
 
         booking.cancellationSource = "student_app"
         if isLate {
-            booking.cancellationType = "late_cancellation"
-            // Persist cancellationType + cancellationSource before soft-delete: Fluent's
-            // delete() only writes deleted_at, so we must save() any extra field changes first.
-            try await booking.save(on: req.db)
+            try await LateCancellationCharge.apply(
+                booking: booking,
+                lesson: cancelLesson,
+                studentID: userID,
+                cancellationSource: "student_app",
+                on: req.db
+            )
 
-            // Load (or nil) the lesson finance record for this lesson.
-            let lessonID = cancelLesson.id
-            var lessonFinance: LessonFinance? = nil
-            if let lid = lessonID {
-                lessonFinance = try await LessonFinance.find(lid, on: req.db)
-            }
-
-            // Flag the finance record as fully billable.
-            if let finance = lessonFinance {
-                finance.fullChargeApplied = true
-                try await finance.save(on: req.db)
-            }
-
-            // Auto-debit the student's ledger balance so the outstanding fee is immediately
-            // visible in the Finance tab without the instructor needing to manually charge.
-            let chargeAmount: Decimal
-            if let snapshot = lessonFinance?.priceSnapshot {
-                chargeAmount = snapshot
-            } else {
-                // No LessonFinance yet: estimate from lesson duration at this student's actual rate.
-                let mins = max(0, Int(cancelLesson.endsAt.timeIntervalSince(cancelLesson.startsAt) / 60))
-                let studentProfile = try await StudentProfile.query(on: req.db)
-                    .filter(\.$user.$id == userID)
-                    .first()
-                chargeAmount = LessonFinance.calculatedPrice(durationMinutes: mins, hourlyRate: studentProfile?.hourlyRate ?? 45)
-            }
-
-            // Resolve the instructor ID: prefer from the existing finance record, then role lookup.
-            let instructorIDFromFinance: UUID? = lessonFinance?.$instructor.id
-            let instructorID: UUID?
-            if let iid = instructorIDFromFinance {
-                instructorID = iid
-            } else {
-                do {
-                    instructorID = try await User.query(on: req.db)
-                        .filter(\.$role == "instructor")
-                        .first()?
-                        .requireID()
-                } catch {
-                    req.logger.error("Failed to resolve instructorID for late cancellation charge: \(error)")
-                    instructorID = nil
-                }
-            }
-
-            if instructorID == nil {
-                req.logger.warning("No instructor found — late cancellation LedgerEntry will have nil createdByUserID for studentID=\(userID)")
-            }
-
-            if let lid = lessonID, let instructorID {
-                // Guard against race with auto-cancel service: skip if charge already written.
-                let existingCharge = try await LedgerEntry.query(on: req.db)
-                    .filter(\.$lesson.$id == lid)
-                    .filter(\.$type == "late_cancellation_charge")
-                    .first()
-                if existingCharge == nil {
-                let chargeEntry = LedgerEntry(
-                    studentID: userID,
-                    instructorID: instructorID,
-                    lessonID: lid,
-                    type: "late_cancellation_charge",
-                    amount: -chargeAmount,
-                    note: "Late cancellation — full charge applies",
-                    effectiveDate: Date(),
-                    createdByUserID: instructorID
+            // Best-effort push notification — never fails the cancellation.
+            if let fcmToken = user.fcmToken, let fcm = FCMNotificationService(req: req) {
+                try? await fcm.send(
+                    to: fcmToken,
+                    title: "Lesson Update",
+                    body: "A late cancellation fee has been applied to your account per our 48h policy."
                 )
-                try await chargeEntry.save(on: req.db)
-
-                // Best-effort push notification — never fails the cancellation.
-                if let fcmToken = user.fcmToken, let fcm = FCMNotificationService(req: req) {
-                    try? await fcm.send(
-                        to: fcmToken,
-                        title: "Lesson Update",
-                        body: "A late cancellation fee has been applied to your account per our 48h policy."
-                    )
-                }
-                } // end existingCharge == nil guard
             }
         } else {
             // Non-late path: no save() has been called yet, so persist cancellationSource now.

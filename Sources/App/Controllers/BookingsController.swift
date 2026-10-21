@@ -30,6 +30,7 @@ struct BookingsController: RouteCollection {
         // NOTE: Do not register another wildcard under /instructor/bookings with a different param name,
         // because RoutingKit disallows colliding wildcards. Use /instructor/lessons/:lessonID/... instead.
         protected.grouped("instructor", "lessons").post(":lessonID", "cancel-bookings", use: cancelLessonBookings)
+        protected.grouped("instructor", "lessons").post(":lessonID", "cancel-bookings-late-charge", use: cancelLessonBookingsWithLateCharge)
     }
 
     func createManualBooking(req: Request) async throws -> Response {
@@ -507,6 +508,89 @@ struct BookingsController: RouteCollection {
         res.body = .init(data: data)
         return res
     }
+
+    // MARK: - POST /instructor/lessons/:lessonID/cancel-bookings-late-charge
+    //
+    // Used ONLY by the instructor app's "Student Cancellation" swipe, and only when the
+    // instructor has explicitly confirmed a late-cancellation charge should apply — the
+    // app only offers this when the lesson starts within 48 hours. Rejects the request if
+    // that's no longer true, since the client's clock/state could be stale.
+    func cancelLessonBookingsWithLateCharge(req: Request) async throws -> Response {
+        guard let lessonIDParam = req.parameters.get("lessonID"),
+              let lessonID = UUID(uuidString: lessonIDParam) else {
+            throw Abort(.badRequest, reason: "Invalid lessonID")
+        }
+        guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
+            struct Out: Content { let ok: Bool; let lessonID: UUID; let cancelled: Int }
+            let out = Out(ok: true, lessonID: lessonID, cancelled: 0)
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(out)
+            let res = Response(status: .ok)
+            res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+            res.body = .init(data: data)
+            return res
+        }
+
+        let hoursUntilLesson = lesson.startsAt.timeIntervalSinceNow / 3600
+        guard hoursUntilLesson >= 0 && hoursUntilLesson < 48 else {
+            throw Abort(.conflict, reason: "This lesson is no longer within the 48-hour late-cancellation window.")
+        }
+
+        let cancelledStudentIDs = try await req.cancelActiveBookingsWithLateCharge(for: lesson)
+
+        if !cancelledStudentIDs.isEmpty {
+            req.application.broadcastRecoveryCandidate(for: lesson)
+            let recovery = RecoverySequenceService(app: req.application)
+            Task { await recovery.triggerSequence(for: lesson, on: req.db) }
+        }
+
+        if let lessonFinance = try await LessonFinance.find(lessonID, on: req.db) {
+            if lessonFinance.chargeStatus != "charged" && lessonFinance.financeStatus != "charged" {
+                lessonFinance.financeStatus = "not_covered"
+                lessonFinance.coveredAt = nil
+                lessonFinance.reservedAmount = nil
+                try await lessonFinance.save(on: req.db)
+            }
+        }
+
+        let financeController = FinanceController()
+        var reevaluated = Set<UUID>()
+        for sid in cancelledStudentIDs {
+            if reevaluated.insert(sid).inserted {
+                try await financeController.reevaluateCoverageForStudent(sid, on: req.db)
+            }
+        }
+
+        // Push notification to each affected student — distinct wording since a charge applied.
+        if !cancelledStudentIDs.isEmpty, let fcm = FCMNotificationService(req: req) {
+            for sid in cancelledStudentIDs {
+                if let fcmToken = try await User.find(sid, on: req.db)?.fcmToken {
+                    try? await fcm.send(
+                        to: fcmToken,
+                        title: "Lesson Update",
+                        body: "A late cancellation fee has been applied to your account per our 48h policy."
+                    )
+                }
+            }
+        }
+
+        struct Out: Content {
+            let ok: Bool
+            let lessonID: UUID
+            let cancelled: Int
+        }
+
+        let out = Out(ok: true, lessonID: lessonID, cancelled: cancelledStudentIDs.count)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(out)
+
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+        res.body = .init(data: data)
+        return res
+    }
 }
 
 // Helper for broadcasting to studentHub.
@@ -607,9 +691,67 @@ extension Request {
         return cancelledStudentIDs
     }
 
-    // INVARIANT: instructor-initiated cancellations (cancel-bookings endpoint) must NEVER
-    // apply late-cancellation charges. Late charges are exclusively for student-initiated
-    // cancellations (StudentBookingsController). Do not add a charge-applying path here.
+    // INVARIANT: cancelActiveBookings (used by cancel-bookings, recovery, and calendar-sync
+    // paths) must NEVER apply late-cancellation charges — do not add a charge-applying path
+    // here. The one deliberate exception is cancelActiveBookingsWithLateCharge below, used
+    // ONLY by the instructor app's "Student Cancellation" swipe when the instructor explicitly
+    // confirms a charge within the 48h window — never by cancel-bookings or any automated path.
+
+    /// Same as cancelActiveBookings, but applies the late-cancellation charge to each active
+    /// booking first. Only call this when the instructor has explicitly confirmed a charge
+    /// (see cancelLessonBookingsWithLateCharge) — never from an automated/recovery path.
+    @discardableResult
+    func cancelActiveBookingsWithLateCharge(for lesson: Lesson) async throws -> [UUID] {
+        let lessonID = try lesson.requireID()
+
+        let bookings = try await Booking.query(on: self.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$deletedAt == nil)
+            .all()
+
+        var cancelledStudentIDs: [UUID] = []
+        var cancelledStudents: [UUID: User] = [:]
+        cancelledStudentIDs.reserveCapacity(bookings.count)
+
+        for booking in bookings {
+            let sid = booking.$user.id
+            cancelledStudentIDs.append(sid)
+            if let student = try? await User.find(sid, on: self.db) {
+                cancelledStudents[sid] = student
+            }
+
+            try await LateCancellationCharge.apply(
+                booking: booking,
+                lesson: lesson,
+                studentID: sid,
+                cancellationSource: "instructor_recorded_late",
+                on: self.db
+            )
+            try await booking.delete(on: self.db)
+
+            let evt = BookingEvent(
+                type: "instructor.cancelled_late_charged",
+                userID: sid,
+                lessonID: lessonID,
+                bookingID: try? booking.requireID()
+            )
+            try? await evt.save(on: self.db)
+        }
+
+        if lesson.state != "available" || lesson.calendarName != "MSM Available" {
+            lesson.state = "available"
+            lesson.calendarName = "MSM Available"
+            try await lesson.save(on: self.db)
+        }
+
+        for sid in cancelledStudentIDs {
+            try self.broadcastCancelled(for: lesson, student: cancelledStudents[sid], studentID: sid, cancellationSource: "instructor_recorded_late")
+            self.broadcastBookingCleared(for: lesson, studentID: sid)
+        }
+        self.broadcastBookingCleared(for: lesson)
+
+        return cancelledStudentIDs
+    }
 
     private func sendBookingPayload(_ payload: [String: Any], studentID: UUID?) {
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
