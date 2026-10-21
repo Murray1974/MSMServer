@@ -720,21 +720,24 @@ struct FinanceController {
                   let lesson = try await Lesson.find(lessonID, on: req.db),
                   lesson.startsAt < now else { continue }
 
-            let booking = try await Booking.query(on: req.db)
+            // Only an ACTIVE booking means this student still genuinely owes for the
+            // slot. A cancelled lesson's LessonFinance is reset to "not_covered" on
+            // cancellation but the booking itself is gone — without this check, a
+            // cancelled (and possibly charge-free) lesson looks identical to a real
+            // unpaid delivered lesson, which is misleading for the instructor picking
+            // a lesson to apply a payment to. Late-cancellation debt has its own
+            // dedicated charge mechanism and doesn't belong in this list either.
+            guard let booking = try await Booking.query(on: req.db)
                 .filter(\.$lesson.$id == lessonID)
                 .filter(\.$user.$id == studentID)
-                .withDeleted()
+                .filter(\.$deletedAt == nil)
                 .first()
-            let bookingID = try booking?.requireID()
+            else { continue }
+            let bookingID = try booking.requireID()
 
-            let isAttended: Bool
-            if let bid = bookingID {
-                isAttended = try await ConfirmedLesson.query(on: req.db)
-                    .filter(\.$booking.$id == bid)
-                    .first() != nil
-            } else {
-                isAttended = false
-            }
+            let isAttended = try await ConfirmedLesson.query(on: req.db)
+                .filter(\.$booking.$id == bookingID)
+                .first() != nil
 
             results.append(OutstandingLessonDTO(
                 lessonID: lessonID,
@@ -971,6 +974,58 @@ struct FinanceController {
 
         return ledgerEntry
     }
+
+    // MARK: - POST /instructor/lessons/:lessonID/apply-late-charge
+    //
+    // Manual reconciliation: retroactively applies the standard late-cancellation charge
+    // to a lesson whose booking was already cancelled without one — e.g. a cancellation
+    // from before the swipe-right Charge/Waive choice existed, or one the instructor
+    // waived by mistake and wants to correct. Unlike cancel-bookings-late-charge, this
+    // doesn't require an active booking or the 48h window — the cancellation already
+    // happened; this just backfills the charge the instructor is now confirming applies.
+    struct ApplyLateChargeInput: Content { let studentID: UUID }
+
+    func applyLateChargeToLesson(req: Request) async throws -> LedgerEntry {
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing or invalid lessonID")
+        }
+        guard let lesson = try await Lesson.find(lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "Lesson not found")
+        }
+        let input = try req.content.decode(ApplyLateChargeInput.self)
+
+        guard let booking = try await Booking.query(on: req.db)
+            .withDeleted()
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$user.$id == input.studentID)
+            .sort(\.$deletedAt, .descending)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "No booking found for this student on this lesson")
+        }
+
+        try await LateCancellationCharge.apply(
+            booking: booking,
+            lesson: lesson,
+            studentID: input.studentID,
+            cancellationSource: "instructor_backfill_late_charge",
+            on: req.db
+        )
+
+        try await reevaluateCoverageForStudent(input.studentID, on: req.db)
+
+        // Idempotent: if a charge already existed for this lesson, apply() left it alone
+        // and this just returns it — calling this endpoint twice is safe.
+        guard let entry = try await LedgerEntry.query(on: req.db)
+            .filter(\.$lesson.$id == lessonID)
+            .filter(\.$type == "late_cancellation_charge")
+            .first()
+        else {
+            throw Abort(.internalServerError, reason: "Charge could not be recorded — no instructor account found")
+        }
+        return entry
+    }
+
     // MARK: - Coverage Helpers
 
     func availableCredit(
