@@ -21,6 +21,9 @@ struct ConfirmedLessonController: RouteCollection {
         // POST /instructor/bookings/:bookingID/confirm
         instructor.post("bookings", ":bookingID", "confirm", use: confirmBooking)
 
+        // DELETE /instructor/bookings/:bookingID/confirm
+        instructor.delete("bookings", ":bookingID", "confirm", use: unconfirmBooking)
+
         // GET /instructor/users/:userID/confirmed-lessons?from=...&to=...
         instructor.get("users", ":userID", "confirmed-lessons", use: listForUser)
     }
@@ -117,6 +120,30 @@ struct ConfirmedLessonController: RouteCollection {
         // Note: confirming a lesson does not broadcast booking/slot changes.
 
         return try confirmation.asPublic()
+    }
+
+    // MARK: - DELETE /instructor/bookings/:bookingID/confirm
+    //
+    // Invalidates a confirmed-lesson record for a booking that was marked attended/no-show
+    // in error — e.g. a lesson was confirmed, then it turned out the student was actually
+    // sitting a test at that time, and the booking was cancelled and the charge moved to the
+    // test instead. The booking itself is typically already soft-deleted by that point (cancel
+    // happens via the separate cancel-bookings endpoint), so this looks the record up by
+    // bookingID directly rather than going through Booking.find. Does not touch any ledger
+    // entries — those are voided/created separately.
+    func unconfirmBooking(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingID missing or invalid")
+        }
+        guard let existing = try await ConfirmedLesson.query(on: req.db)
+            .filter(\.$booking.$id == bookingID)
+            .first()
+        else {
+            return .notFound
+        }
+        existing.statusValue = .cancelled
+        try await existing.save(on: req.db)
+        return .ok
     }
 
     /// Stamps `lastAttendedLessonAt` (always) and `firstLessonConfirmedAt` (first time only) on the
