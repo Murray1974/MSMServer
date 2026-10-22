@@ -323,6 +323,8 @@ struct InstructorLessonController: RouteCollection {
         }
 
         // Broadcast rich event so agent can move the EKEvent (by stamped MSM_LESSON_ID).
+        // Also reaches students so a slot that becomes personal disappears from their
+        // live "Book" list immediately instead of waiting for their next manual refresh.
         req.application.broadcastLessonEvent(
             type: "slot.unavailable",
             title: "Slot unavailable",
@@ -332,7 +334,8 @@ struct InstructorLessonController: RouteCollection {
             status: "unavailable",
             reason: body.reason,
             startsAt: lesson.startsAt,
-            endsAt: lesson.endsAt
+            endsAt: lesson.endsAt,
+            to: .all
         )
 
         return .ok
@@ -380,7 +383,8 @@ struct InstructorLessonController: RouteCollection {
             lessonID: lessonID,
             bookingID: nil,
             status: "available",
-            reason: nil
+            reason: nil,
+            to: .all
         )
 
         return .ok
