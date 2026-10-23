@@ -266,7 +266,11 @@ struct ChatController: Sendable {
         )
         try await message.save(on: req.db)
 
-        let delivered = req.application.deliverChatToStudent(
+        // Broadcast over WebSocket regardless of push delivery below. A live socket on a
+        // backgrounded iOS app doesn't mean the student has actually seen the message — iOS
+        // keeps sockets open for a grace period after backgrounding — so socket-open state alone
+        // isn't a reliable signal to skip the push (same issue fixed for the instructor side).
+        _ = req.application.deliverChatToStudent(
             messageID: message.id!,
             recipientID: studentID,
             senderName: "Instructor",
@@ -277,7 +281,7 @@ struct ChatController: Sendable {
             attachmentID: body.attachmentID
         )
 
-        if !delivered, let fcmToken = student.fcmToken {
+        if let fcmToken = student.fcmToken {
             try? await FCMNotificationService(req: req)?.send(
                 to: fcmToken,
                 title: "New message from Instructor",
