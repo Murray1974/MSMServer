@@ -136,7 +136,12 @@ struct ChatController: Sendable {
         )
         try await message.save(on: req.db)
 
-        let delivered = req.application.deliverChatToInstructor(
+        // Broadcast over WebSocket (e.g. to MSMAgent) regardless of push delivery below.
+        // Unlike the student-side gate, this can't be "if !delivered" — MSMAgent keeps a
+        // persistent, auto-reconnecting socket open nearly all the time it's running, so that
+        // socket being open is not a reliable signal that the instructor's phone (which is what
+        // actually has FCM/APNs push registered, via Instructor-server-side-app) has seen it.
+        _ = req.application.deliverChatToInstructor(
             messageID: message.id!,
             senderID: studentID,
             senderName: student.displayName,
@@ -147,7 +152,7 @@ struct ChatController: Sendable {
             attachmentID: body.attachmentID
         )
 
-        if !delivered, let fcmToken = instructor.fcmToken {
+        if let fcmToken = instructor.fcmToken {
             try? await FCMNotificationService(req: req)?.send(
                 to: fcmToken,
                 title: student.displayName,
