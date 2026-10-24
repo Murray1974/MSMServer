@@ -1180,7 +1180,9 @@ public func routes(_ app: Application) throws {
                     lessonID: bLessonID.uuidString,
                     startsAt: iso.string(from: bLesson.startsAt),
                     endsAt: iso.string(from: bLesson.endsAt),
-                    amountDue: amountDue
+                    amountDue: amountDue,
+                    discountAmount: lf?.discountAmount,
+                    discountReason: lf?.discountReason
                 )
                 break  // surface the soonest only
             }

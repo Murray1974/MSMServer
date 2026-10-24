@@ -33,4 +33,6 @@ struct PendingPaymentView: Content {
     let startsAt: String
     let endsAt: String
     let amountDue: Decimal
+    let discountAmount: Decimal?
+    let discountReason: String?
 }
