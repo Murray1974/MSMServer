@@ -69,6 +69,8 @@ struct InstructorLessonController: RouteCollection {
         var dropoffLocation: String?
         var rescheduled: Bool?
         var hourlyRatePence: Int?
+        var discountAmount: Decimal?
+        var discountReason: String?
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -210,7 +212,8 @@ struct InstructorLessonController: RouteCollection {
                   let student = studentByID[booking.$user.id] else { continue }
 
             let isLate = booking.cancellationType == "late_cancellation"
-            let financeStatus = financeByLessonID[booking.$lesson.id]?.financeStatus
+            let finance = financeByLessonID[booking.$lesson.id]
+            let financeStatus = finance?.financeStatus
 
             rows.append(
                 BookingRangeRow(
@@ -227,7 +230,9 @@ struct InstructorLessonController: RouteCollection {
                     cancellationType: booking.cancellationType,
                     dropoffLocation: booking.dropoffLocation,
                     rescheduled: booking.rescheduled,
-                    hourlyRatePence: profileByUserID[booking.$user.id]?.hourlyRatePence
+                    hourlyRatePence: profileByUserID[booking.$user.id]?.hourlyRatePence,
+                    discountAmount: finance?.discountAmount,
+                    discountReason: finance?.discountReason
                 )
             )
         }

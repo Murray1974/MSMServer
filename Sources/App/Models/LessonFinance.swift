@@ -42,6 +42,17 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
     @OptionalField(key: "full_charge_applied")
     var fullChargeApplied: Bool?
 
+    /// Instructor-applied per-lesson discount, in pounds, off the undiscounted
+    /// (hourlyRateSnapshot × durationMinutes) price. Nil means no discount. When set,
+    /// `priceSnapshot` is this lesson's full price minus this amount — every consumer
+    /// (payment, late-cancellation charge, confirmed-lesson billing) already reads
+    /// priceSnapshot directly, so nothing else needs to know a discount exists.
+    @OptionalField(key: "discount_amount")
+    var discountAmount: Decimal?
+
+    @OptionalField(key: "discount_reason")
+    var discountReason: String?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -123,7 +134,9 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
         financeStatus: String = "not_covered",
         coveredAt: Date? = nil,
         reservedAmount: Double? = nil,
-        fullChargeApplied: Bool? = nil
+        fullChargeApplied: Bool? = nil,
+        discountAmount: Decimal? = nil,
+        discountReason: String? = nil
     ) {
         self.id = lessonID
         self.$student.id = studentID
@@ -137,6 +150,8 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
         self.coveredAt = coveredAt
         self.reservedAmount = reservedAmount
         self.fullChargeApplied = fullChargeApplied
+        self.discountAmount = discountAmount
+        self.discountReason = discountReason
     }
 }
 //  LessonFinance.swift

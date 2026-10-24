@@ -172,6 +172,7 @@ struct AuthController: RouteCollection {
             provisionalLicenceNumber: input.provisionalLicenceNumber,
             licenceExpiryDate: input.licenceExpiryDate,
             theoryCertificateNumber: input.theoryCertificateNumber,
+            hourlyRatePence: try await InstructorSettings.currentRatePence(on: req.db),
             medicalConditions: input.medicalConditions,
             theoryTestPassed: input.theoryTestPassed ?? false,
             theoryTestDate: input.theoryTestDate,

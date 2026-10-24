@@ -136,6 +136,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateEmailVerificationToken())
     app.migrations.add(AddAvatarEmojiToStudentProfile())
     app.migrations.add(AddTheoryTestTimeToStudentProfile())
+    app.migrations.add(CreateInstructorSettings())
+    app.migrations.add(AddDiscountFieldsToLessonFinance())
 
     try app.autoMigrate().wait()
 

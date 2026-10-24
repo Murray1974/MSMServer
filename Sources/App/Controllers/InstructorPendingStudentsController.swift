@@ -349,7 +349,8 @@ struct InstructorPendingStudentsController: RouteCollection {
             firstName: firstName,
             lastName: lastName.isEmpty ? nil : lastName,
             mobile: (mobile?.isEmpty ?? true) ? nil : mobile,
-            email: email
+            email: email,
+            hourlyRatePence: try await InstructorSettings.currentRatePence(on: req.db)
         )
         try await profile.save(on: req.db)
 

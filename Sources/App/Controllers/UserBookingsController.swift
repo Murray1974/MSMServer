@@ -330,6 +330,7 @@ struct UserBookingsController: RouteCollection {
             profileModel = current
         } else {
             // Create a new profile with sensible defaults, overriding with any provided fields.
+            let defaultRatePence = try await InstructorSettings.currentRatePence(on: req.db)
             profileModel = StudentProfile(
                 userID: userID,
                 firstName: input.firstName,
@@ -354,7 +355,7 @@ struct UserBookingsController: RouteCollection {
                     ? input.theoryCertificateNumber
                     : (input.theoryTestPassed == true ? input.theoryCertificateNumber : nil),
                 defaultLessonLengthMinutes: input.defaultLessonLengthMinutes ?? 120,
-                hourlyRatePence: input.hourlyRatePence ?? 4500,
+                hourlyRatePence: input.hourlyRatePence ?? defaultRatePence,
                 eyesightTestPassed: input.eyesightTestPassed ?? false,
                 medicalConditions: input.medicalConditions,
                 theoryTestPassed: input.theoryTestPassed ?? false,

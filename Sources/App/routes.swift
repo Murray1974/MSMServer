@@ -14,6 +14,17 @@ private struct SyncResult: Content {
     let links: [SlotLink]
 }
 
+private struct InstructorSettingsView: Content {
+    let currentHourlyRatePence: Int
+}
+
+private struct LessonDiscountView: Content {
+    let lessonID: UUID
+    let priceSnapshot: Decimal
+    let discountAmount: Decimal?
+    let discountReason: String?
+}
+
 private struct AdminUserCheckResult: Content {
     let email: String
     let accountExists: Bool
@@ -1518,6 +1529,112 @@ public func routes(_ app: Application) throws {
 
         req.logger.notice("[Admin] Cleared late-cancel flag on booking \(bookingID) by \(instructor.username)")
         return .ok
+    }
+
+    // GET /instructor/settings — current pricing defaults
+    financeProtected.get("instructor", "settings") { req async throws -> InstructorSettingsView in
+        let settings = try await InstructorSettings.current(on: req.db)
+        return InstructorSettingsView(currentHourlyRatePence: settings.currentHourlyRatePence)
+    }
+
+    // PATCH /instructor/settings — updates the default hourly rate stamped onto new
+    // students at registration. Never touches any existing StudentProfile.hourlyRatePence
+    // — each student's rate is its own independent field, so changing this is exactly
+    // "raise the price for new clients only" with existing clients kept on their legacy rate.
+    financeProtected.patch("instructor", "settings") { req async throws -> InstructorSettingsView in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let currentHourlyRatePence: Int }
+        let input = try req.content.decode(Input.self)
+        guard input.currentHourlyRatePence > 0 else {
+            throw Abort(.badRequest, reason: "Hourly rate must be greater than zero")
+        }
+
+        let settings = try await InstructorSettings.current(on: req.db)
+        settings.currentHourlyRatePence = input.currentHourlyRatePence
+        try await settings.save(on: req.db)
+
+        req.logger.notice("[Settings] Current hourly rate set to \(input.currentHourlyRatePence)p by \(instructor.username)")
+        return InstructorSettingsView(currentHourlyRatePence: settings.currentHourlyRatePence)
+    }
+
+    // POST /instructor/lessons/:lessonID/discount — applies a one-off, instructor's-
+    // discretion discount to a single lesson, as an absolute amount off that lesson's
+    // undiscounted (hourlyRateSnapshot × duration) price. Reducing priceSnapshot directly
+    // means every existing consumer (payment, late-cancellation charge, confirmed-lesson
+    // billing, business finance "earned" totals) picks it up automatically — none of them
+    // need to know a discount exists, they already just read priceSnapshot.
+    financeProtected.post("instructor", "lessons", ":lessonID", "discount") { req async throws -> LessonDiscountView in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing lessonID")
+        }
+
+        struct Input: Decodable { let amount: Decimal; let reason: String? }
+        let input = try req.content.decode(Input.self)
+        guard input.amount > 0 else {
+            throw Abort(.badRequest, reason: "Discount amount must be greater than zero")
+        }
+
+        guard let finance = try await LessonFinance.find(lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "No finance record for this lesson — is a student actually booked on it?")
+        }
+        guard finance.chargeStatus == "not_charged" else {
+            throw Abort(.conflict, reason: "This lesson has already been charged — its price can't be changed retroactively.")
+        }
+
+        let fullPrice = LessonFinance.calculatedPrice(durationMinutes: finance.durationMinutes, hourlyRate: finance.hourlyRateSnapshot)
+        guard input.amount <= fullPrice else {
+            throw Abort(.badRequest, reason: "Discount can't exceed the lesson's full price")
+        }
+
+        finance.discountAmount = input.amount
+        finance.discountReason = input.reason
+        finance.priceSnapshot = fullPrice - input.amount
+        try await finance.save(on: req.db)
+
+        req.logger.notice("[Discount] Applied \(input.amount) discount to lesson \(lessonID) by \(instructor.username)")
+        return LessonDiscountView(
+            lessonID: lessonID,
+            priceSnapshot: finance.priceSnapshot,
+            discountAmount: finance.discountAmount,
+            discountReason: finance.discountReason
+        )
+    }
+
+    // DELETE /instructor/lessons/:lessonID/discount — clears a previously-applied discount,
+    // restoring the lesson's full undiscounted price.
+    financeProtected.delete("instructor", "lessons", ":lessonID", "discount") { req async throws -> LessonDiscountView in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing lessonID")
+        }
+
+        guard let finance = try await LessonFinance.find(lessonID, on: req.db) else {
+            throw Abort(.notFound, reason: "No finance record for this lesson")
+        }
+        guard finance.chargeStatus == "not_charged" else {
+            throw Abort(.conflict, reason: "This lesson has already been charged — its price can't be changed retroactively.")
+        }
+
+        let fullPrice = LessonFinance.calculatedPrice(durationMinutes: finance.durationMinutes, hourlyRate: finance.hourlyRateSnapshot)
+        finance.discountAmount = nil
+        finance.discountReason = nil
+        finance.priceSnapshot = fullPrice
+        try await finance.save(on: req.db)
+
+        req.logger.notice("[Discount] Cleared discount on lesson \(lessonID) by \(instructor.username)")
+        return LessonDiscountView(
+            lessonID: lessonID,
+            priceSnapshot: finance.priceSnapshot,
+            discountAmount: nil,
+            discountReason: nil
+        )
     }
 
     // POST /admin/undo-confirm/:bookingID — deletes the ConfirmedLesson, its auto-charge
