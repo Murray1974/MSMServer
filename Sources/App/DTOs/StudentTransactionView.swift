@@ -12,4 +12,6 @@ struct StudentTransactionView: Content {
     let createdAt: Date?
     let voidedAt: Date?
     let voidReason: String?
+    let discountAmount: Decimal?
+    let discountReason: String?
 }

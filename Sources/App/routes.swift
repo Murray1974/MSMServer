@@ -1110,8 +1110,17 @@ public func routes(_ app: Application) throws {
             .filter(\.$user.$id == userID)
             .first()
 
+        // Batch-fetch discount info for any lesson these transactions reference, so a
+        // discounted lesson-charge entry can show the discount that produced its amount.
+        let entryLessonIDs = Array(Set(activeEntries.compactMap { $0.$lesson.id }))
+        let financeByLessonID = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ entryLessonIDs)
+            .all()
+            .reduce(into: [UUID: LessonFinance]()) { $0[$1.id!] = $1 }
+
         let transactions = activeEntries.compactMap { entry -> StudentTransactionView? in
             guard let id = entry.id else { return nil }
+            let finance = entry.$lesson.id.flatMap { financeByLessonID[$0] }
             return StudentTransactionView(
                 id: id,
                 lessonID: entry.$lesson.id,
@@ -1123,7 +1132,9 @@ public func routes(_ app: Application) throws {
                 effectiveDate: entry.effectiveDate,
                 createdAt: entry.createdAt,
                 voidedAt: nil,
-                voidReason: nil
+                voidReason: nil,
+                discountAmount: finance?.discountAmount,
+                discountReason: finance?.discountReason
             )
         }
 

@@ -773,8 +773,15 @@ struct FinanceController {
             .sort(\.$effectiveDate, .descending)
             .all()
 
+        let entryLessonIDs = Array(Set(entries.compactMap { $0.$lesson.id }))
+        let financeByLessonID = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ entryLessonIDs)
+            .all()
+            .reduce(into: [UUID: LessonFinance]()) { $0[$1.id!] = $1 }
+
         return entries.compactMap { entry in
             guard let id = entry.id else { return nil }
+            let finance = entry.$lesson.id.flatMap { financeByLessonID[$0] }
             return StudentTransactionView(
                 id: id,
                 lessonID: entry.$lesson.id,
@@ -786,7 +793,9 @@ struct FinanceController {
                 effectiveDate: entry.effectiveDate,
                 createdAt: entry.createdAt,
                 voidedAt: entry.voidedAt,
-                voidReason: entry.voidReason
+                voidReason: entry.voidReason,
+                discountAmount: finance?.discountAmount,
+                discountReason: finance?.discountReason
             )
         }
     }
