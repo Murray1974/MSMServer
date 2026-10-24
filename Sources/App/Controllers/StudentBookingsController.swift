@@ -575,6 +575,31 @@ struct StudentBookingsController: RouteCollection {
 
         let newEndsAt = effectiveStart.addingTimeInterval(Double(input.durationMinutes) * 60)
 
+        // Keep LessonFinance.priceSnapshot in sync with the new duration — it's never
+        // touched otherwise, so shortening/lengthening a lesson would silently leave
+        // the price (and any instructor discount) stuck at whatever it was computed
+        // for originally. Guarded the same way the discount endpoint is: price can't
+        // move once the lesson has actually been charged.
+        if let finance = try await LessonFinance.find(try lesson.requireID(), on: req.db) {
+            guard finance.chargeStatus == "not_charged" else {
+                throw Abort(.conflict, reason: "This lesson has already been charged — its duration can't be changed now.")
+            }
+            let newFullPrice = LessonFinance.calculatedPrice(
+                durationMinutes: input.durationMinutes,
+                hourlyRate: finance.hourlyRateSnapshot
+            )
+            if let discount = finance.discountAmount, discount > 0 {
+                guard discount <= newFullPrice else {
+                    throw Abort(.badRequest, reason: "The existing £\(discount) discount exceeds this shorter lesson's full price — adjust or remove the discount first.")
+                }
+                finance.priceSnapshot = newFullPrice - discount
+            } else {
+                finance.priceSnapshot = newFullPrice
+            }
+            finance.durationMinutes = input.durationMinutes
+            try await finance.save(on: req.db)
+        }
+
         booking.durationMinutes = input.durationMinutes
         booking.actualEndsAt = newEndsAt
 
