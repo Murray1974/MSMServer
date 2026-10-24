@@ -138,7 +138,10 @@ struct StudentBookingsController: RouteCollection {
 
         // Check duration+offset inside slot
         if let mins = input.durationMinutes {
-            let slotMinutes = Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60)
+            // .rounded() avoids Int(...) truncating a hair under a whole minute
+            // (e.g. 119.9999... from Date arithmetic) into a falsely-smaller slot,
+            // which would reject a duration that actually fits exactly.
+            let slotMinutes = Int((lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60).rounded())
             if offsetMinutes < 0 || offsetMinutes + mins > slotMinutes {
                 throw Abort(.badRequest, reason: "Requested duration/offset exceeds lesson length (\(slotMinutes)m)")
             }
@@ -544,7 +547,12 @@ struct StudentBookingsController: RouteCollection {
             throw Abort(.internalServerError, reason: "Booking missing lesson")
         }
 
-        let slotMinutes = Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60)
+        // .rounded() avoids Int(...) truncating a hair under a whole minute
+        // (e.g. 119.9999... from Date arithmetic) into a falsely-smaller slot,
+        // which would reject a duration that actually fits exactly — this is
+        // why increasing back to the slot's full length could fail even though
+        // the same duration worked the first time.
+        let slotMinutes = Int((lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60).rounded())
 
         // Determine effective start
         let effectiveStart: Date
@@ -557,7 +565,7 @@ struct StudentBookingsController: RouteCollection {
             effectiveStart = lesson.startsAt
         }
 
-        let newOffsetMinutes = Int(effectiveStart.timeIntervalSince(lesson.startsAt) / 60)
+        let newOffsetMinutes = Int((effectiveStart.timeIntervalSince(lesson.startsAt) / 60).rounded())
 
         if newOffsetMinutes < 0 ||
             newOffsetMinutes + input.durationMinutes > slotMinutes
