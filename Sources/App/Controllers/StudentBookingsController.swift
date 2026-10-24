@@ -846,7 +846,17 @@ struct StudentBookingsController: RouteCollection {
         booking.pickupSource = input.pickupSource
 
         try await booking.save(on: req.db)
-        req.broadcastLocationChanged(lessonID: booking.$lesson.id)
+
+        let userID = try user.requireID()
+        let profile = try? await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .first()
+        let resolvedPickup = InstructorLessonController.resolvePickupAddress(
+            pickupLocation: booking.pickupLocation,
+            pickupSource: booking.pickupSource,
+            profile: profile
+        )
+        req.broadcastLocationChanged(lessonID: booking.$lesson.id, field: "pickup", resolvedPickup: resolvedPickup)
 
         if let lesson = try? await booking.$lesson.get(on: req.db) {
             let fmt = DateFormatter()
@@ -884,7 +894,7 @@ struct StudentBookingsController: RouteCollection {
 
         booking.dropoffLocation = input.dropoffLocation
         try await booking.save(on: req.db)
-        req.broadcastLocationChanged(lessonID: booking.$lesson.id)
+        req.broadcastLocationChanged(lessonID: booking.$lesson.id, field: "dropoff")
 
         if let lesson = try? await booking.$lesson.get(on: req.db) {
             let fmt = DateFormatter()

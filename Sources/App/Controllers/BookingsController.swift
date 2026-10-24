@@ -881,12 +881,22 @@ extension Request {
 
     /// Broadcast that a student changed their pickup or dropoff location for a booking.
     /// Lets connected instructor clients refresh so the displayed location stays in sync.
-    func broadcastLocationChanged(lessonID: UUID) {
+    /// `field` is "pickup" or "dropoff". `resolvedPickup` is only meaningful for
+    /// "pickup" — the student's real address (resolved from their profile when the
+    /// booking only stores a preset name), which MSMAgent writes onto the real
+    /// calendar event's location field. Dropoff has no equivalent on the calendar
+    /// (EKEvent has only one location field, already used for pickup), so it's
+    /// surfaced only in-app, not on the calendar — deliberate, not an oversight.
+    func broadcastLocationChanged(lessonID: UUID, field: String, resolvedPickup: String? = nil) {
         var payload: [String: Any] = [
             "type": "booking_changed",
             "lessonID": lessonID.uuidString,
             "status": "location_updated",
+            "field": field,
         ]
+        if let resolvedPickup, !resolvedPickup.isEmpty {
+            payload["location"] = resolvedPickup
+        }
 
         let user = self.auth.get(User.self)
         let sid = user.flatMap { try? $0.requireID() }
