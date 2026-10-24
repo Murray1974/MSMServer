@@ -705,8 +705,15 @@ struct StudentBookingsController: RouteCollection {
 
         let results = try await query.all()
 
+        let lessonIDs = Array(Set(results.compactMap { $0.$lesson.id }))
+        let financeByLessonID = try await LessonFinance.query(on: req.db)
+            .filter(\.$id ~~ lessonIDs)
+            .all()
+            .reduce(into: [UUID: LessonFinance]()) { $0[$1.id!] = $1 }
+
         return results.map { booking in
             let lesson = booking.$lesson.value
+            let finance = financeByLessonID[booking.$lesson.id]
 
             let baseEndsAt = booking.actualEndsAt ?? lesson?.endsAt
             let effectiveStart: Date?
@@ -740,7 +747,9 @@ struct StudentBookingsController: RouteCollection {
                 lessonEndsAt: lesson?.endsAt,
                 paymentStatus: booking.paymentStatus,
                 fullChargeApplied: booking.cancellationType == "late_cancellation" ? true : nil,
-                cancellationSource: booking.cancellationSource
+                cancellationSource: booking.cancellationSource,
+                discountAmount: finance?.discountAmount,
+                discountReason: finance?.discountReason
             )
         }
     }
@@ -763,6 +772,8 @@ struct StudentBookingsController: RouteCollection {
         var paymentStatus: String?
         var fullChargeApplied: Bool?
         var cancellationSource: String?
+        var discountAmount: Decimal?
+        var discountReason: String?
     }
 
     // MARK: UPDATE PICKUP
