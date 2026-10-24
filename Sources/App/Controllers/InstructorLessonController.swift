@@ -67,6 +67,8 @@ struct InstructorLessonController: RouteCollection {
         var status: String?           // "active" | "late_cancelled"
         var cancellationType: String? // "late_cancellation" | nil
         var dropoffLocation: String?
+        var pickupLocation: String?
+        var pickupSource: String?
         var rescheduled: Bool?
         var hourlyRatePence: Int?
         var discountAmount: Decimal?
@@ -77,6 +79,48 @@ struct InstructorLessonController: RouteCollection {
         /// to display, when they differ from it.
         var actualStartsAt: Date?
         var actualEndsAt: Date?
+    }
+
+    /// Resolves a booking's pickup label ("Home"/"Work"/"College"/"School", or a
+    /// manual/dropped-pin address) into a real address using the student's saved
+    /// profile fields when it's a known preset — mirrors student_app's own
+    /// _resolvePickup logic, since the booking never stores more than the preset
+    /// name itself.
+    static func resolvePickupAddress(
+        pickupLocation: String?,
+        pickupSource: String?,
+        profile: StudentProfile?
+    ) -> String? {
+        let label = (pickupLocation ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = (pickupSource ?? "").lowercased()
+
+        let presetKey: String?
+        if ["home", "work", "college", "school"].contains(source) {
+            presetKey = source
+        } else {
+            switch label.lowercased() {
+            case "home", "home address", "home address (default)": presetKey = "home"
+            case "work": presetKey = "work"
+            case "college": presetKey = "college"
+            case "school": presetKey = "school"
+            default: presetKey = nil
+            }
+        }
+
+        if let presetKey {
+            let address: String?
+            switch presetKey {
+            case "home": address = profile?.pickupHome
+            case "work": address = profile?.pickupWork
+            case "college": address = profile?.pickupCollege
+            case "school": address = profile?.pickupSchool
+            default: address = nil
+            }
+            let trimmed = address?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty == false) ? trimmed : nil
+        }
+
+        return label.isEmpty ? nil : label
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -221,6 +265,16 @@ struct InstructorLessonController: RouteCollection {
             let finance = financeByLessonID[booking.$lesson.id]
             let financeStatus = finance?.financeStatus
 
+            // The booking only ever stores a short preset name ("Home"/"Work"/etc) as
+            // pickupLocation — never the real address — so resolve it against the
+            // student's saved profile address before sending it to the instructor,
+            // the same way the student app's own card display does.
+            let resolvedPickup = Self.resolvePickupAddress(
+                pickupLocation: booking.pickupLocation,
+                pickupSource: booking.pickupSource,
+                profile: profileByUserID[booking.$user.id]
+            )
+
             // Only surface an "actual" window distinct from the full slot when the
             // student has genuinely adjusted it (shorter duration and/or a non-zero
             // offset) — otherwise leave both nil so clients fall back to startsAt/endsAt.
@@ -248,6 +302,8 @@ struct InstructorLessonController: RouteCollection {
                     status: isLate ? "late_cancelled" : "active",
                     cancellationType: booking.cancellationType,
                     dropoffLocation: booking.dropoffLocation,
+                    pickupLocation: resolvedPickup,
+                    pickupSource: booking.pickupSource,
                     rescheduled: booking.rescheduled,
                     hourlyRatePence: profileByUserID[booking.$user.id]?.hourlyRatePence,
                     discountAmount: finance?.discountAmount,

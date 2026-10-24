@@ -834,6 +834,7 @@ struct StudentBookingsController: RouteCollection {
         booking.pickupSource = input.pickupSource
 
         try await booking.save(on: req.db)
+        req.broadcastLocationChanged(lessonID: booking.$lesson.id)
         return .ok
     }
 
@@ -859,6 +860,7 @@ struct StudentBookingsController: RouteCollection {
 
         booking.dropoffLocation = input.dropoffLocation
         try await booking.save(on: req.db)
+        req.broadcastLocationChanged(lessonID: booking.$lesson.id)
         return .ok
     }
 

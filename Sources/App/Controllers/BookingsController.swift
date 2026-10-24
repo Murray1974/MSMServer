@@ -879,6 +879,26 @@ extension Request {
         sendBookingPayload(payload, studentID: sid)
     }
 
+    /// Broadcast that a student changed their pickup or dropoff location for a booking.
+    /// Lets connected instructor clients refresh so the displayed location stays in sync.
+    func broadcastLocationChanged(lessonID: UUID) {
+        var payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID.uuidString,
+            "status": "location_updated",
+        ]
+
+        let user = self.auth.get(User.self)
+        let sid = user.flatMap { try? $0.requireID() }
+        if let user {
+            payload["studentID"] = sid?.uuidString
+            payload["studentName"] = user.username
+            payload["studentDisplayName"] = user.displayName
+        }
+
+        sendBookingPayload(payload, studentID: sid)
+    }
+
     /// Broadcast that a booking association has been cleared and the slot is available again.
     func broadcastBookingCleared(for lesson: Lesson, studentID: UUID? = nil) {
         guard let lessonID = try? lesson.requireID() else { return }
