@@ -33,7 +33,7 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
         if let existing = try await InstructorSettings.query(on: db).first() {
             return existing
         }
-        let created = InstructorSettings()
+        let created = InstructorSettings(currentHourlyRatePence: 4500)
         try await created.save(on: db)
         return created
     }
