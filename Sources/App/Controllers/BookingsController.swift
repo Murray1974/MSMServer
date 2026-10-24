@@ -854,6 +854,31 @@ extension Request {
         sendBookingPayload(payload, studentID: sid)
     }
 
+    /// Broadcast that a student adjusted their booking's duration and/or start offset
+    /// within the slot (the "Lesson time" control in the student app). Lets connected
+    /// instructor clients refresh so the displayed lesson window stays in sync.
+    func broadcastDurationChanged(lessonID: UUID, actualStartsAt: Date, actualEndsAt: Date) {
+        let formatter = ISO8601DateFormatter()
+
+        var payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID.uuidString,
+            "status": "duration_updated",
+            "startsAt": formatter.string(from: actualStartsAt),
+            "endsAt": formatter.string(from: actualEndsAt),
+        ]
+
+        let user = self.auth.get(User.self)
+        let sid = user.flatMap { try? $0.requireID() }
+        if let user {
+            payload["studentID"] = sid?.uuidString
+            payload["studentName"] = user.username
+            payload["studentDisplayName"] = user.displayName
+        }
+
+        sendBookingPayload(payload, studentID: sid)
+    }
+
     /// Broadcast that a booking association has been cleared and the slot is available again.
     func broadcastBookingCleared(for lesson: Lesson, studentID: UUID? = nil) {
         guard let lessonID = try? lesson.requireID() else { return }

@@ -580,6 +580,12 @@ struct StudentBookingsController: RouteCollection {
 
         try await booking.save(on: req.db)
 
+        req.broadcastDurationChanged(
+            lessonID: try lesson.requireID(),
+            actualStartsAt: effectiveStart,
+            actualEndsAt: newEndsAt
+        )
+
         return StudentBookingDTO(
             id: booking.id,
             lessonID: booking.$lesson.id,

@@ -71,6 +71,12 @@ struct InstructorLessonController: RouteCollection {
         var hourlyRatePence: Int?
         var discountAmount: Decimal?
         var discountReason: String?
+        /// Non-nil when the student has shortened/repositioned their lesson within the
+        /// slot (via the "Lesson time" control in the student app). `startsAt`/`endsAt`
+        /// above always stay the full original slot — these are the actual booked window
+        /// to display, when they differ from it.
+        var actualStartsAt: Date?
+        var actualEndsAt: Date?
     }
 
     func availableLessons(_ req: Request) async throws -> [InstructorLessonRow] {
@@ -215,6 +221,19 @@ struct InstructorLessonController: RouteCollection {
             let finance = financeByLessonID[booking.$lesson.id]
             let financeStatus = finance?.financeStatus
 
+            // Only surface an "actual" window distinct from the full slot when the
+            // student has genuinely adjusted it (shorter duration and/or a non-zero
+            // offset) — otherwise leave both nil so clients fall back to startsAt/endsAt.
+            var actualStartsAt: Date? = nil
+            var actualEndsAt: Date? = nil
+            if let mins = booking.durationMinutes, let actualEnd = booking.actualEndsAt {
+                let actualStart = actualEnd.addingTimeInterval(Double(-mins) * 60)
+                if actualStart != lesson.startsAt || actualEnd != lesson.endsAt {
+                    actualStartsAt = actualStart
+                    actualEndsAt = actualEnd
+                }
+            }
+
             rows.append(
                 BookingRangeRow(
                     id: bookingID,
@@ -232,7 +251,9 @@ struct InstructorLessonController: RouteCollection {
                     rescheduled: booking.rescheduled,
                     hourlyRatePence: profileByUserID[booking.$user.id]?.hourlyRatePence,
                     discountAmount: finance?.discountAmount,
-                    discountReason: finance?.discountReason
+                    discountReason: finance?.discountReason,
+                    actualStartsAt: actualStartsAt,
+                    actualEndsAt: actualEndsAt
                 )
             )
         }
