@@ -961,6 +961,92 @@ public func routes(_ app: Application) throws {
         return try await PruneResult(deleted: 0).encodeResponse(for: req)
     }
 
+    // GET /admin/chat/orphaned — read-only preview of chat_messages whose non-instructor
+    // party no longer has a matching User (leftover from deleted test accounts on old
+    // iPhone 12/16 test builds). Check this before calling clear-orphaned.
+    adminProtected.get("chat", "orphaned") { req async throws -> Response in
+        struct OrphanedConversation: Content {
+            var partyID: UUID
+            var messageCount: Int
+            var lastMessage: String
+            var lastMessageAt: Date?
+        }
+        struct OrphanedResult: Content { var conversations: [OrphanedConversation] }
+
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        let instructorID = try instructor.requireID()
+
+        let allMessages = try await ChatMessage.query(on: req.db)
+            .group(.or) { g in
+                g.filter(\.$senderID == instructorID)
+                g.filter(\.$receiverID == instructorID)
+            }
+            .sort(\.$createdAt, .descending)
+            .all()
+
+        var seen = Set<UUID>()
+        var results: [OrphanedConversation] = []
+        for msg in allMessages {
+            let partyID = msg.senderID == instructorID ? msg.receiverID : msg.senderID
+            guard !seen.contains(partyID) else { continue }
+            seen.insert(partyID)
+
+            let exists = try await User.query(on: req.db).filter(\.$id == partyID).first() != nil
+            guard !exists else { continue }
+
+            let messageCount = allMessages.filter { $0.senderID == partyID || $0.receiverID == partyID }.count
+            results.append(OrphanedConversation(
+                partyID: partyID,
+                messageCount: messageCount,
+                lastMessage: msg.content,
+                lastMessageAt: msg.createdAt
+            ))
+        }
+        return try await OrphanedResult(conversations: results).encodeResponse(for: req)
+    }
+
+    // POST /admin/chat/clear-orphaned — deletes chat_messages whose non-instructor party no
+    // longer has a matching User. Only ever touches rows already identified as orphaned by
+    // GET /admin/chat/orphaned above — never touches a conversation where the other party's
+    // User account still exists, so a real student's chat history can't be wiped by this.
+    adminProtected.post("chat", "clear-orphaned") { req async throws -> Response in
+        struct ClearResult: Content { var deletedMessages: Int; var conversationsCleared: Int }
+
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        let instructorID = try instructor.requireID()
+
+        let allMessages = try await ChatMessage.query(on: req.db)
+            .group(.or) { g in
+                g.filter(\.$senderID == instructorID)
+                g.filter(\.$receiverID == instructorID)
+            }
+            .all()
+
+        var partyIDs = Set<UUID>()
+        for msg in allMessages {
+            partyIDs.insert(msg.senderID == instructorID ? msg.receiverID : msg.senderID)
+        }
+
+        var orphanedIDs: [UUID] = []
+        for partyID in partyIDs {
+            let exists = try await User.query(on: req.db).filter(\.$id == partyID).first() != nil
+            if !exists { orphanedIDs.append(partyID) }
+        }
+
+        guard !orphanedIDs.isEmpty else {
+            return try await ClearResult(deletedMessages: 0, conversationsCleared: 0).encodeResponse(for: req)
+        }
+
+        let toDelete = allMessages.filter { orphanedIDs.contains($0.senderID) || orphanedIDs.contains($0.receiverID) }
+        let idsToDelete = toDelete.compactMap { $0.id }
+        try await ChatMessage.query(on: req.db).filter(\.$id ~~ idsToDelete).delete()
+
+        req.logger.notice("[Admin] Cleared \(idsToDelete.count) orphaned chat messages across \(orphanedIDs.count) conversations, by \(instructor.username)")
+        return try await ClearResult(deletedMessages: idsToDelete.count, conversationsCleared: orphanedIDs.count).encodeResponse(for: req)
+    }
+
     adminProtected.get("recovery-events") { req async throws -> [RecoveryEventView] in
         struct Filter: Decodable {
             var lessonID: UUID?
