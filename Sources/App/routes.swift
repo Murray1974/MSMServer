@@ -8,6 +8,26 @@ private struct SlotLink: Content {
     let lessonID: UUID
 }
 
+/// Extracts the stable lesson ID MSMAgent stamps onto an EKEvent's notes
+/// ("MSM_LESSON_ID=<uuid>"), when present. Used by `/instructor/sync/available`
+/// so a slot is matched by its stamped lesson regardless of start/end time —
+/// without this, resizing an already-booked lesson's calendar event (to show a
+/// student's shortened/repositioned duration) looked like a brand-new slot to
+/// that sync, creating a phantom duplicate lesson + booking. Reproduced in
+/// production 2026-10-24.
+func extractStampedLessonID(from notes: String?) -> UUID? {
+    guard let notes else { return nil }
+    for line in notes.split(separator: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("MSM_LESSON_ID=") else { continue }
+        let idString = trimmed.dropFirst("MSM_LESSON_ID=".count)
+        if let uuid = UUID(uuidString: String(idString)) {
+            return uuid
+        }
+    }
+    return nil
+}
+
 private struct SyncResult: Content {
     let upserted: Int
     let pruned: Int
@@ -485,6 +505,7 @@ public func routes(_ app: Application) throws {
             var title: String?
             var capacity: Int?
             var calendarName: String?
+            var notes: String?
         }
         struct SyncIn: Content {
             var timezone: String?
@@ -536,11 +557,16 @@ public func routes(_ app: Application) throws {
                 throw Abort(.badRequest, reason: "Use ISO8601 dates for startsAt/endsAt")
             }
 
-            // Match by explicit id first (in-memory), then by start/end time (in-memory).
+            // Match by explicit id first, then by the stamped MSM_LESSON_ID in notes
+            // (so a resized/moved calendar event still resolves to its real lesson
+            // instead of looking like a new slot), then by start/end time (in-memory).
             // No per-slot DB queries — all lookups use the futureLessons fetch above.
             let timeKey = "\(start.timeIntervalSince1970)_\(end.timeIntervalSince1970)"
+            let stampedID = extractStampedLessonID(from: s.notes)
             let lesson: Lesson
             if let lid = s.id, let existing = futureByID[lid] {
+                lesson = existing
+            } else if let sid = stampedID, let existing = futureByID[sid] {
                 lesson = existing
             } else if let existing = futureByTime[timeKey] {
                 lesson = existing
