@@ -611,6 +611,18 @@ struct StudentBookingsController: RouteCollection {
             actualEndsAt: newEndsAt
         )
 
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "EEE d MMM, HH:mm"
+        timeFmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        let endTimeFmt = DateFormatter()
+        endTimeFmt.dateFormat = "HH:mm"
+        endTimeFmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        await notifyInstructor(
+            req: req,
+            title: "Lesson Time Changed",
+            body: "\(user.displayName) changed their lesson time to \(timeFmt.string(from: effectiveStart))–\(endTimeFmt.string(from: newEndsAt))"
+        )
+
         return StudentBookingDTO(
             id: booking.id,
             lessonID: booking.$lesson.id,
@@ -835,6 +847,18 @@ struct StudentBookingsController: RouteCollection {
 
         try await booking.save(on: req.db)
         req.broadcastLocationChanged(lessonID: booking.$lesson.id)
+
+        if let lesson = try? await booking.$lesson.get(on: req.db) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEE d MMM, HH:mm"
+            fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+            await notifyInstructor(
+                req: req,
+                title: "Pickup Location Changed",
+                body: "\(user.displayName) changed their pickup location for the \(fmt.string(from: lesson.startsAt)) lesson"
+            )
+        }
+
         return .ok
     }
 
@@ -861,6 +885,18 @@ struct StudentBookingsController: RouteCollection {
         booking.dropoffLocation = input.dropoffLocation
         try await booking.save(on: req.db)
         req.broadcastLocationChanged(lessonID: booking.$lesson.id)
+
+        if let lesson = try? await booking.$lesson.get(on: req.db) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEE d MMM, HH:mm"
+            fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+            await notifyInstructor(
+                req: req,
+                title: "Dropoff Location Changed",
+                body: "\(user.displayName) changed their dropoff location for the \(fmt.string(from: lesson.startsAt)) lesson"
+            )
+        }
+
         return .ok
     }
 
