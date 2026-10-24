@@ -275,6 +275,16 @@ struct InstructorLessonController: RouteCollection {
                 profile: profileByUserID[booking.$user.id]
             )
 
+            // Dropoff has no source field at all — a preset choice is stored as the
+            // exact preset label text ("Home address"/"Work"/etc), resolved here the
+            // same way, by label match (resolvePickupAddress already falls back to
+            // label-matching when no source is given).
+            let resolvedDropoff = Self.resolvePickupAddress(
+                pickupLocation: booking.dropoffLocation,
+                pickupSource: nil,
+                profile: profileByUserID[booking.$user.id]
+            )
+
             // Only surface an "actual" window distinct from the full slot when the
             // student has genuinely adjusted it (shorter duration and/or a non-zero
             // offset) — otherwise leave both nil so clients fall back to startsAt/endsAt.
@@ -301,7 +311,7 @@ struct InstructorLessonController: RouteCollection {
                     financeStatus: financeStatus,
                     status: isLate ? "late_cancelled" : "active",
                     cancellationType: booking.cancellationType,
-                    dropoffLocation: booking.dropoffLocation,
+                    dropoffLocation: resolvedDropoff,
                     pickupLocation: resolvedPickup,
                     pickupSource: booking.pickupSource,
                     rescheduled: booking.rescheduled,
