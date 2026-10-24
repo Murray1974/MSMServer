@@ -915,10 +915,24 @@ struct StudentBookingsController: RouteCollection {
     }
 
     private func notifyInstructor(req: Request, title: String, body: String) async {
-        guard let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),
-              let token = instructor.fcmToken,
-              let fcm = FCMNotificationService(req: req) else { return }
-        try? await fcm.send(to: token, title: title, body: body)
+        guard let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first() else {
+            req.logger.warning("[notifyInstructor] no instructor user found — title=\(title)")
+            return
+        }
+        guard let token = instructor.fcmToken else {
+            req.logger.warning("[notifyInstructor] instructor has no fcmToken registered — title=\(title)")
+            return
+        }
+        guard let fcm = FCMNotificationService(req: req) else {
+            req.logger.warning("[notifyInstructor] FCMNotificationService init failed — title=\(title)")
+            return
+        }
+        do {
+            try await fcm.send(to: token, title: title, body: body)
+            req.logger.notice("[notifyInstructor] sent — title=\(title)")
+        } catch {
+            req.logger.error("[notifyInstructor] fcm.send failed — title=\(title) error=\(error)")
+        }
     }
 
     // MARK: - POST /student/bookings/recover-and-pay
