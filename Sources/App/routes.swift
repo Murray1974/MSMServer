@@ -31,6 +31,7 @@ func extractStampedLessonID(from notes: String?) -> UUID? {
 private struct SyncResult: Content {
     let upserted: Int
     let pruned: Int
+    let withdrawn: Int
     let links: [SlotLink]
 }
 
@@ -650,6 +651,7 @@ public func routes(_ app: Application) throws {
         req.logger.notice("[SYNC] processed slots in \(String(format: "%.3f", t3.timeIntervalSince(t2)))s — upserted=\(upsertedCount)")
 
         var prunedCount = 0
+        var withdrawnCount = 0
         if input.prune == true {
             let toPrune = futureLessons.filter { l in
                 guard let id = l.id else { return false }
@@ -691,12 +693,41 @@ public func routes(_ app: Application) throws {
                         broadcastAvailability(update, req.application)
                     }
                 }
+
+                // Lessons with booking history can't be deleted (audit/finance records would
+                // break), but leaving them untouched meant a slot that fell out of the live
+                // calendar (resized/deleted) stayed "available" and fully bookable forever,
+                // invisibly, since nothing ever re-checks it once it's protected from deletion.
+                // Withdraw instead: keeps the row and its booking/finance history intact, but
+                // flips it out of "available" so every student/instructor query (all of which
+                // filter strictly on state == "available") stops surfacing it. Reproduced in
+                // production 2026-10-25 — see [[project_duplicate_lesson_bug]].
+                let withdrawIDs = Array(withHistoryIDs)
+                if !withdrawIDs.isEmpty {
+                    try await Lesson.query(on: req.db)
+                        .filter(\.$id ~~ withdrawIDs)
+                        .set(\.$state, to: "withdrawn")
+                        .update()
+                    withdrawnCount = withdrawIDs.count
+                    let withdrawnSet = Set(withdrawIDs)
+                    for l in toPrune where l.id.map({ withdrawnSet.contains($0) }) ?? false {
+                        let update = AvailabilityUpdate(
+                            action: AvailabilityAction.slotUnavailable,
+                            id: try l.requireID(),
+                            title: l.title,
+                            startsAt: l.startsAt,
+                            endsAt: l.endsAt,
+                            capacity: l.capacity
+                        )
+                        broadcastAvailability(update, req.application)
+                    }
+                }
             }
         }
 
         let t4 = Date()
-        req.logger.notice("[SYNC] prune done in \(String(format: "%.3f", t4.timeIntervalSince(t3)))s — pruned=\(prunedCount) total=\(String(format: "%.3f", t4.timeIntervalSince(t0)))s")
-        return SyncResult(upserted: upsertedCount, pruned: prunedCount, links: links)
+        req.logger.notice("[SYNC] prune done in \(String(format: "%.3f", t4.timeIntervalSince(t3)))s — pruned=\(prunedCount) withdrawn=\(withdrawnCount) total=\(String(format: "%.3f", t4.timeIntervalSince(t0)))s")
+        return SyncResult(upserted: upsertedCount, pruned: prunedCount, withdrawn: withdrawnCount, links: links)
     }
 
     let admin = app.grouped("admin")
