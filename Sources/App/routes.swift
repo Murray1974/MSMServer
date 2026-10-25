@@ -1925,6 +1925,71 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
+    struct NotifyResult: Content {
+        var sent: Int
+        var total: Int
+    }
+
+    // POST /admin/notify-all-students — ad-hoc broadcast push (custom title/body) to every
+    // student with a registered FCM token. Fire-and-forget per recipient — one failed/missing
+    // token never blocks the rest. Driven from the instructor app's "+" quick-actions composer.
+    financeProtected.post("admin", "notify-all-students") { req async throws -> NotifyResult in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let title: String; let body: String }
+        let input = try req.content.decode(Input.self)
+        guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !input.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { throw Abort(.badRequest, reason: "Title and body are required") }
+
+        let students = try await User.query(on: req.db)
+            .filter(\.$role == "student")
+            .all()
+
+        var sent = 0
+        if let fcm = FCMNotificationService(req: req) {
+            for student in students {
+                guard let token = student.fcmToken else { continue }
+                do {
+                    try await fcm.send(to: token, title: input.title, body: input.body)
+                    sent += 1
+                } catch {
+                    req.logger.error("[notify-all-students] send failed for \(student.username): \(error)")
+                }
+            }
+        }
+
+        req.logger.notice("[Admin] Broadcast notification sent to \(sent)/\(students.count) students by \(instructor.username)")
+        return NotifyResult(sent: sent, total: students.count)
+    }
+
+    // POST /admin/notify-instructor — lets a client app push an arbitrary title/body to the
+    // instructor's own device. Used for "heads up" events detected client-side (e.g. the
+    // Instructor app auto-restoring an archived client to Students) that the server itself
+    // has no way to observe, since the triggering state (local Contacts.app archive reason)
+    // only exists on the instructor's Mac.
+    financeProtected.post("admin", "notify-instructor") { req async throws -> HTTPStatus in
+        let caller = try req.auth.require(User.self)
+        guard caller.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct Input: Decodable { let title: String; let body: String }
+        let input = try req.content.decode(Input.self)
+        guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !input.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { throw Abort(.badRequest, reason: "Title and body are required") }
+
+        guard let instructor = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first(),
+            let token = instructor.fcmToken,
+            let fcm = FCMNotificationService(req: req)
+        else { return .ok }
+
+        try? await fcm.send(to: token, title: input.title, body: input.body)
+        return .ok
+    }
+
     // POST /admin/users/check — bulk, read-only lookup of account status by email. Used to audit
     // whether client-side "add contact" entries (which never touch the server) have a matching
     // real server account. Never creates or modifies anything.

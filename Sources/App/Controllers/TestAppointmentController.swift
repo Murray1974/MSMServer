@@ -170,6 +170,7 @@ struct TestAppointmentController: RouteCollection {
         var displayName: String?
         var dateOfBirth: Date?
         var accountStatus: String
+        var hasUpcomingLesson: Bool
     }
 
     func listStudents(_ req: Request) async throws -> [StudentPickerRow] {
@@ -182,6 +183,19 @@ struct TestAppointmentController: RouteCollection {
             .all()
         let dobByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.dateOfBirth) })
         let statusByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.accountStatus) })
+
+        // Lightweight presence check (not a full booking fetch) — used client-side by the
+        // Instructor app to auto-restore an archived client once they've actually booked a
+        // new lesson, rather than merely reactivating their account status.
+        let now = Date()
+        let upcomingBookings = try await Booking.query(on: req.db)
+            .filter(\.$user.$id ~~ userIDs)
+            .filter(\.$deletedAt == nil)
+            .with(\.$lesson)
+            .all()
+            .filter { $0.lesson.startsAt > now }
+        let studentIDsWithUpcoming = Set(upcomingBookings.map { $0.$user.id })
+
         return students.compactMap { u in
             guard let id = u.id else { return nil }
             return StudentPickerRow(
@@ -189,7 +203,8 @@ struct TestAppointmentController: RouteCollection {
                 username: u.username,
                 displayName: u.displayName,
                 dateOfBirth: dobByUserID[id] ?? nil,
-                accountStatus: statusByUserID[id] ?? "active"
+                accountStatus: statusByUserID[id] ?? "active",
+                hasUpcomingLesson: studentIDsWithUpcoming.contains(id)
             )
         }
         .sorted { ($0.displayName ?? $0.username) < ($1.displayName ?? $1.username) }
