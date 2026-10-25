@@ -523,6 +523,15 @@ struct StudentBookingsController: RouteCollection {
 
         req.broadcastRescheduled(old: oldLesson, new: newLesson)
 
+        let rescheduleFmt = DateFormatter()
+        rescheduleFmt.dateFormat = "EEE d MMM, HH:mm"
+        rescheduleFmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        await notifyInstructor(
+            req: req,
+            title: "Lesson Rescheduled",
+            body: "\(user.displayName) moved their lesson from \(rescheduleFmt.string(from: oldLesson.startsAt)) to \(rescheduleFmt.string(from: newLesson.startsAt))"
+        )
+
         return .ok
     }
 
