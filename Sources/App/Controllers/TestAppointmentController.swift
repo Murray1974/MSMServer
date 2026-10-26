@@ -636,6 +636,23 @@ struct TestAppointmentController: RouteCollection {
         let studentID = try student.requireID()
         let body = try req.content.decode(StudentTestRequestInput.self)
 
+        // Mirrors the real DVSA rule: you can't hold two active test bookings at once.
+        // "Active" = still scheduled and either awaiting a decision or confirmed — once it's
+        // been sat (state flips to "attended", any outcome) the student is free to request
+        // again, deliberately without checking outcome: a pass should never realistically need
+        // a retest, but a revoked licence can force one, so nothing here should block it.
+        let hasActiveTest = try await TestAppointment.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .filter(\.$state == "scheduled")
+            .group(.or) { g in
+                g.filter(\.$status == "pending")
+                g.filter(\.$status == "confirmed")
+            }
+            .first() != nil
+        if hasActiveTest {
+            throw Abort(.conflict, reason: "You already have an active test request. Cancel it or wait for a decision before requesting another.")
+        }
+
         // Snap to nearest hour then ±1h window — same logic as instructor app's testLessonSlot().
         // e.g. test at 08:57 → centre = 09:00 → slot 08:00–10:00.
         var slotCal = Calendar(identifier: .gregorian)

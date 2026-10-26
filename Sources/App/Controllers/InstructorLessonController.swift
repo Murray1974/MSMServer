@@ -79,6 +79,10 @@ struct InstructorLessonController: RouteCollection {
         /// to display, when they differ from it.
         var actualStartsAt: Date?
         var actualEndsAt: Date?
+        /// Non-nil only when the student has passed theory and their 2-year certificate
+        /// expires within the warning window — lets the instructor app show a subtle
+        /// "Theory expires <date>" line without a separate lookup call.
+        var theoryExpiringAt: Date?
     }
 
     /// Resolves a booking's pickup label ("Home"/"Work"/"College"/"School", or a
@@ -319,7 +323,13 @@ struct InstructorLessonController: RouteCollection {
                     discountAmount: finance?.discountAmount,
                     discountReason: finance?.discountReason,
                     actualStartsAt: actualStartsAt,
-                    actualEndsAt: actualEndsAt
+                    actualEndsAt: actualEndsAt,
+                    theoryExpiringAt: {
+                        guard let expiry = profileByUserID[booking.$user.id]?.theoryCertificateExpiryDate,
+                              expiry.timeIntervalSinceNow <= TheoryExpiryWarningService.warningWindow
+                        else { return nil }
+                        return expiry
+                    }()
                 )
             )
         }

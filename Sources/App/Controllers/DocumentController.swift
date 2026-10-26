@@ -33,7 +33,10 @@ struct DocumentController: RouteCollection {
             .filter(\.$user.$id == userID)
             .first() ?? StudentProfile(userID: userID)
 
-        if let passed = input.theoryTestPassed { profile.theoryTestPassed = passed }
+        if let passed = input.theoryTestPassed {
+            profile.theoryTestPassed = passed
+            if passed { profile.theoryExpiryWarningSentAt = nil }
+        }
         if input.clearTheoryTestDate == true { profile.theoryTestDate = nil }
         else if let date = input.theoryTestDate { profile.theoryTestDate = date }
 

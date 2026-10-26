@@ -138,6 +138,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddTheoryTestTimeToStudentProfile())
     app.migrations.add(CreateInstructorSettings())
     app.migrations.add(AddDiscountFieldsToLessonFinance())
+    app.migrations.add(AddTheoryExpiryWarningFieldToStudentProfile())
 
     try app.autoMigrate().wait()
 
@@ -151,6 +152,7 @@ public func configure(_ app: Application) throws {
     app.lifecycle.use(InactivityEnforcementLifecycle())
     app.lifecycle.use(TempHoldReclassificationLifecycle())
     app.lifecycle.use(TheoryTestReminderLifecycle())
+    app.lifecycle.use(TheoryExpiryWarningLifecycle())
 
     // WebSocket keepalive — pings all connected clients every 30s to prevent
     // Nginx from closing idle connections (default proxy_read_timeout = 60s).

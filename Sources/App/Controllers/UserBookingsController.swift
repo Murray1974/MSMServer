@@ -318,6 +318,10 @@ struct UserBookingsController: RouteCollection {
                 if let v = input.theoryTestDate { current.theoryTestDate = v }
                 if let v = input.theoryTestTime { current.theoryTestTime = v }
                 current.theoryCertificateNumber = passed ? input.theoryCertificateNumber : nil
+                // A newly-recorded pass starts a fresh 2-year certificate — clear any prior
+                // expiry warning so TheoryExpiryWarningService re-evaluates against the new date
+                // instead of staying silent forever because it already fired once before.
+                if passed { current.theoryExpiryWarningSentAt = nil }
             }
             if let v = input.defaultLessonLengthMinutes { current.defaultLessonLengthMinutes = v }
             if let v = input.hourlyRatePence { current.hourlyRatePence = v }

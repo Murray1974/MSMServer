@@ -138,6 +138,12 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
     @OptionalField(key: "theory_reminder_dismissed_until")
     var theoryReminderDismissedUntil: Date?
 
+    /// Set once, the first time the 6-month-before-expiry warning push fires (to both student
+    /// and instructor) for a passed theory certificate. Unlike the "haven't passed yet" nag
+    /// above, this is a one-shot warning, not a recurring one — nil means it hasn't fired yet.
+    @OptionalField(key: "theory_expiry_warning_sent_at")
+    var theoryExpiryWarningSentAt: Date?
+
     @OptionalField(key: "licence_photo_path")
     var licencePhotoPath: String?
 
