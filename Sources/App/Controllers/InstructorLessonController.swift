@@ -718,6 +718,36 @@ struct InstructorLessonController: RouteCollection {
         try await LessonFinance.reassignOrCreate(lessonID: lessonID, studentID: studentID, on: req.db)
         try await FinanceController().reevaluateCoverageForStudent(studentID, on: req.db)
 
+        // Unlike the student-facing create-booking route, this one has no inactive-account
+        // guard (the instructor is allowed to book an archived client straight back in), so
+        // nothing was ever reactivating accountStatus here — a student could end up with a
+        // real future booking while still flagged "inactive" forever, which made the instructor
+        // app's archive/restore reconcile sweep archive-then-immediately-restore the same
+        // client on every single load (reproduced in production 2026-10-26 with Estelle Harris,
+        // booked for 2026-09-28 by the instructor while already auto-deactivated on that same
+        // day — never reactivated). Mirrors updateStudentAccountStatus's reactivation exactly.
+        if let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first(),
+           profile.accountStatus == "inactive" {
+            let previousStatus = profile.accountStatus
+            profile.accountStatus = "active"
+            profile.inactivityStage14SentAt = nil
+            profile.inactivityStage21SentAt = nil
+            profile.inactivityAutoDeactivatedAt = nil
+            try await profile.save(on: req.db)
+
+            let event = StudentStatusEvent(
+                studentID: studentID,
+                fromStatus: previousStatus,
+                toStatus: "active",
+                reason: nil
+            )
+            try? await event.save(on: req.db)
+
+            req.application.broadcastAccountStatusUpdated(studentID: studentID, status: "active", to: .students)
+        }
+
         if let fcmToken = student.fcmToken, let fcm = FCMNotificationService(req: req) {
             let fmt = DateFormatter()
             fmt.dateFormat = "EEE d MMM, HH:mm"
