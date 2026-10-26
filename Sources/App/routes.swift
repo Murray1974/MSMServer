@@ -614,13 +614,32 @@ public func routes(_ app: Application) throws {
                     .count()) ?? 0
                 if hasBooking == 0 { stateChanged = false }
             }
+
+            // A slot matched by id/stamped-id (not brand new) that's still "available" on both
+            // sides can have genuinely different start/end than what's stored — the instructor
+            // resized the calendar event. Nothing above ever reconciled that: a matched lesson's
+            // startsAt/endsAt was only ever set at creation. A resize whose new window didn't
+            // happen to collide with another lesson's id/stamp/time silently kept showing the
+            // OLD window to students forever — this is what produced the overlapping "duplicate"
+            // available slots found in production 2026-10-25/26, not true duplication. Booked
+            // lessons are deliberately excluded: their time is owned by the instructor app's
+            // dedicated duration/reschedule flow, which sends its own student-facing
+            // notification — a raw calendar resize must never silently retime a booked lesson.
+            let timesChanged = lesson.state == "available" && syncedState == "available"
+                && (lesson.startsAt != start || lesson.endsAt != end)
+
             if stateChanged {
                 if let t = s.title { lesson.title = t }
                 if let c = s.capacity { lesson.capacity = c }
                 lesson.calendarName = cal
                 lesson.state = syncedState
             }
-            let changed = stateChanged
+            if timesChanged {
+                lesson.startsAt = start
+                lesson.endsAt = end
+                if let c = s.capacity { lesson.capacity = c }
+            }
+            let changed = stateChanged || timesChanged
             if changed {
                 try await lesson.save(on: req.db)
 
