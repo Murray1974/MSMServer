@@ -865,6 +865,37 @@ extension Request {
         sendBookingPayload(payload, studentID: sid)
     }
 
+    /// Broadcast that the instructor moved/resized a booked lesson's own time window
+    /// in place (same lesson row, not a reassignment to a different one — see
+    /// `instructorRetimeBooking`). Distinct from `broadcastRescheduled` (moves a booking
+    /// onto a different, already-existing lesson) and `broadcastDurationChanged` (a
+    /// student narrowing their actual start/end within an unchanged slot).
+    func broadcastRetimed(lesson: Lesson, oldStartsAt: Date, oldEndsAt: Date, explicitStudent: User? = nil) {
+        let lessonID = (try? lesson.requireID().uuidString) ?? ""
+        let formatter = ISO8601DateFormatter()
+
+        var payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID,
+            "status": "retimed",
+            "startsAt": formatter.string(from: oldStartsAt),
+            "endsAt": formatter.string(from: oldEndsAt),
+            "newStartsAt": formatter.string(from: lesson.startsAt),
+            "newEndsAt": formatter.string(from: lesson.endsAt)
+        ]
+
+        let user = explicitStudent ?? self.auth.get(User.self)
+        let sid = user.flatMap { try? $0.requireID() }
+
+        if let user {
+            payload["studentID"] = sid?.uuidString
+            payload["studentName"] = user.username
+            payload["studentDisplayName"] = user.displayName
+        }
+
+        sendBookingPayload(payload, studentID: sid)
+    }
+
     /// Broadcast that a student adjusted their booking's duration and/or start offset
     /// within the slot (the "Lesson time" control in the student app). Lets connected
     /// instructor clients refresh so the displayed lesson window stays in sync.

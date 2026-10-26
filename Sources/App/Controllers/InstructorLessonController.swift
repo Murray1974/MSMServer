@@ -22,6 +22,10 @@ struct InstructorLessonController: RouteCollection {
         // Instructor-side reschedule: moves a booking to a different lesson (no ownership/48h checks)
         instructor.post("bookings", ":bookingID", "reschedule", use: instructorReschedule)
 
+        // Instructor-side retime: moves/resizes a booked lesson's own time window in place
+        // (same lesson row — not a reassignment to a different one, see instructorReschedule)
+        instructor.post("bookings", ":bookingID", "retime", use: instructorRetimeBooking)
+
         // Instructor-side swap: exchanges lesson slots between two bookings, notifying both students
         instructor.post("bookings", ":bookingID", "swap", use: instructorSwap)
 
@@ -633,6 +637,73 @@ struct InstructorLessonController: RouteCollection {
                 to: fcmToken,
                 title: "Lesson Rescheduled",
                 body: "Your lesson has been moved to \(fmt.string(from: newLesson.startsAt))"
+            )
+        }
+
+        return .ok
+    }
+
+    // MARK: - POST /instructor/bookings/:bookingID/retime
+    //
+    // Moves/resizes a booked lesson's own startsAt/endsAt in place — the instructor-app
+    // landscape calendar's long-press "Change duration"/"Change start time" on an
+    // already-booked lesson. Distinct from instructorReschedule (which moves the booking
+    // onto a different, already-existing lesson): here there is no target lesson, just a
+    // new time window for the same one. Before this endpoint existed, the client only
+    // moved the local calendar event — the server's lesson row stayed frozen at its old
+    // time (deliberately, so a raw calendar resize of a booked lesson wouldn't silently
+    // retime it — see /instructor/sync/available's timesChanged comment), so a later sync
+    // couldn't match the resized calendar event back to it and created a duplicate lesson
+    // + booking instead. Reproduced in production 2026-10-26 (Estelle Harris x2, Sky
+    // Williams x1).
+    func instructorRetimeBooking(_ req: Request) async throws -> HTTPStatus {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Missing bookingID")
+        }
+
+        struct RetimeInput: Content { let startsAt: Date; let endsAt: Date }
+        let body = try req.content.decode(RetimeInput.self)
+
+        guard body.startsAt < body.endsAt else {
+            throw Abort(.unprocessableEntity, reason: "startsAt must be before endsAt")
+        }
+        guard body.startsAt > Date() else {
+            throw Abort(.unprocessableEntity, reason: "Cannot retime to a start time in the past")
+        }
+
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .filter(\.$deletedAt == nil)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+
+        let lesson = try await booking.$lesson.get(on: req.db)
+        let student = try await booking.$user.get(on: req.db)
+
+        let oldStartsAt = lesson.startsAt
+        let oldEndsAt = lesson.endsAt
+
+        lesson.startsAt = body.startsAt
+        lesson.endsAt = body.endsAt
+        try await lesson.save(on: req.db)
+
+        if let mins = booking.durationMinutes {
+            booking.actualEndsAt = body.startsAt.addingTimeInterval(Double(mins) * 60)
+            try await booking.save(on: req.db)
+        }
+
+        req.broadcastRetimed(lesson: lesson, oldStartsAt: oldStartsAt, oldEndsAt: oldEndsAt, explicitStudent: student)
+
+        if let fcmToken = student.fcmToken, let fcm = FCMNotificationService(req: req) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEE d MMM, HH:mm"
+            fmt.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+            try? await fcm.send(
+                to: fcmToken,
+                title: "Lesson Time Changed",
+                body: "Your lesson has been moved to \(fmt.string(from: lesson.startsAt))"
             )
         }
 
