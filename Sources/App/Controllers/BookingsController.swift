@@ -896,6 +896,36 @@ extension Request {
         sendBookingPayload(payload, studentID: sid)
     }
 
+    /// Broadcast that a swap retitled this lesson's occupant in place — used instead of
+    /// `broadcastRescheduled` for `instructorSwap`. A swap keeps BOTH lessons in the
+    /// "booked" state the whole time (just by the other student), unlike a normal
+    /// reschedule where the old slot becomes free. Reusing broadcastRescheduled's
+    /// old-slot/new-slot semantics for a swap broke this: each side's "old" lesson is
+    /// exactly the other side's "new" lesson, so whichever of the two broadcasts a
+    /// client processed second always freed/cleared the slot the first one had just
+    /// retitled — reproduced in production 2026-10-26 (one side of every swap silently
+    /// vanished from the calendar). This broadcast only ever retitles in place; it must
+    /// never free or move a lesson to the available calendar.
+    func broadcastSwapped(lesson: Lesson, student: User) {
+        let lessonID = (try? lesson.requireID().uuidString) ?? ""
+        let formatter = ISO8601DateFormatter()
+
+        var payload: [String: Any] = [
+            "type": "booking_changed",
+            "lessonID": lessonID,
+            "status": "swapped",
+            "startsAt": formatter.string(from: lesson.startsAt),
+            "endsAt": formatter.string(from: lesson.endsAt)
+        ]
+
+        let sid = try? student.requireID()
+        payload["studentID"] = sid?.uuidString
+        payload["studentName"] = student.username
+        payload["studentDisplayName"] = student.displayName
+
+        sendBookingPayload(payload, studentID: sid)
+    }
+
     /// Broadcast that a student adjusted their booking's duration and/or start offset
     /// within the slot (the "Lesson time" control in the student app). Lets connected
     /// instructor clients refresh so the displayed lesson window stays in sync.

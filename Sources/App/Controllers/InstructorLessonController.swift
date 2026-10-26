@@ -546,6 +546,13 @@ struct InstructorLessonController: RouteCollection {
         bookingA.$lesson.id = lessonBID
         bookingB.$lesson.id = lessonAID
 
+        // Keep each lesson's title in sync with its new occupant — it was never touched
+        // here before, leaving both lessons displaying the pre-swap student's name.
+        lessonA.title = studentB.displayName.isEmpty ? studentB.username : studentB.displayName
+        lessonB.title = studentA.displayName.isEmpty ? studentA.username : studentA.displayName
+        try await lessonA.save(on: req.db)
+        try await lessonB.save(on: req.db)
+
         // Carry each booking's duration to the new slot's start time
         if let mins = bookingA.durationMinutes {
             bookingA.actualEndsAt = lessonB.startsAt.addingTimeInterval(Double(mins) * 60)
@@ -567,9 +574,12 @@ struct InstructorLessonController: RouteCollection {
         try await LessonFinance.reassignOrCreate(lessonID: lessonAID, studentID: try studentB.requireID(), on: req.db)
         try await LessonFinance.reassignOrCreate(lessonID: lessonBID, studentID: try studentA.requireID(), on: req.db)
 
-        // Broadcast to both students — each sees their own slot move as a reschedule
-        req.broadcastRescheduled(old: lessonA, new: lessonB, explicitStudent: studentA)
-        req.broadcastRescheduled(old: lessonB, new: lessonA, explicitStudent: studentB)
+        // Broadcast to both students — each retitles their new lesson in place.
+        // Deliberately NOT broadcastRescheduled: see broadcastSwapped's doc comment for
+        // why reusing single-sided reschedule semantics here clobbers one side of
+        // every swap.
+        req.broadcastSwapped(lesson: lessonB, student: studentA)
+        req.broadcastSwapped(lesson: lessonA, student: studentB)
 
         return .ok
     }
@@ -598,6 +608,18 @@ struct InstructorLessonController: RouteCollection {
 
         guard newLesson.startsAt > Date() else {
             throw Abort(.unprocessableEntity, reason: "Cannot reschedule to a lesson that has already started")
+        }
+
+        // Unlike createBookingForStudent, this had no capacity check at all — rescheduling
+        // onto a lesson someone else already actively occupies silently succeeded and
+        // created a real double-booking (reproduced in production 2026-10-26: two active
+        // bookings on the same lesson, no error surfaced to the instructor).
+        let activeOnNewLesson = try await Booking.query(on: req.db)
+            .filter(\.$lesson.$id == newLesson.requireID())
+            .filter(\.$deletedAt == nil)
+            .count()
+        guard activeOnNewLesson < newLesson.capacity else {
+            throw Abort(.conflict, reason: "That lesson is already booked")
         }
 
         let oldLesson = try await booking.$lesson.get(on: req.db)
