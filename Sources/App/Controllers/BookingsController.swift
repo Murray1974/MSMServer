@@ -105,6 +105,11 @@ struct BookingsController: RouteCollection {
         let userID = try user.requireID()
         req.logger.info("manual-booking: resolved user id=\(userID) username=\(user.username) displayName=\(user.displayName)")
 
+        // This route has no inactive-account guard — see StudentProfile.reactivateIfInactive.
+        if try await StudentProfile.reactivateIfInactive(studentID: userID, on: req.db) {
+            req.application.broadcastAccountStatusUpdated(studentID: userID, status: "active", to: .students)
+        }
+
         let booking: Booking
         if let existing = try await Booking.query(on: req.db)
             .filter(\.$lesson.$id == lessonID)
@@ -296,6 +301,12 @@ struct BookingsController: RouteCollection {
             let lessonID = try lesson.requireID()
             let userID = try user.requireID()
             req.logger.info("work-bookings: resolved user id=\(userID) username=\(user.username) displayName=\(user.displayName) lessonID=\(lessonID)")
+
+            // This is the calendar-sync path that creates most real bookings day-to-day — it
+            // had no inactive-account guard either. See StudentProfile.reactivateIfInactive.
+            if try await StudentProfile.reactivateIfInactive(studentID: userID, on: req.db) {
+                req.application.broadcastAccountStatusUpdated(studentID: userID, status: "active", to: .students)
+            }
 
             // Check for an active booking for this lesson+user instead of any history
             let existingActive = try await Booking.query(on: req.db)

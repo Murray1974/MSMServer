@@ -364,3 +364,40 @@ final class StudentProfile: Model, Content, @unchecked Sendable {
         self.inactivityAutoDeactivatedAt = inactivityAutoDeactivatedAt
     }
 }
+
+extension StudentProfile {
+    /// Every booking-creation path that can place a student into a real future lesson must
+    /// call this if the student might currently be inactive — the student-facing create-booking
+    /// route is the only one with a hard inactive-account guard, so nothing else was ever
+    /// reactivating accountStatus. A student left "inactive" with a real future booking is a
+    /// contradiction the instructor app's archive/restore reconcile sweep can't resolve: it
+    /// archives the contact (status says inactive) then immediately restores it (a real upcoming
+    /// lesson exists) on every single reconcile pass, re-sending the "back on your list"
+    /// notification each time. Reproduced in production 2026-10-26 (Estelle Harris, booked by
+    /// the instructor into lessons after an auto-deactivation that was never cleared).
+    /// Mirrors updateStudentAccountStatus's reactivation exactly. Returns true if it reactivated.
+    @discardableResult
+    static func reactivateIfInactive(studentID: UUID, on db: Database) async throws -> Bool {
+        guard let profile = try await StudentProfile.query(on: db)
+            .filter(\.$user.$id == studentID)
+            .first(),
+            profile.accountStatus == "inactive"
+        else { return false }
+
+        profile.accountStatus = "active"
+        profile.inactivityStage14SentAt = nil
+        profile.inactivityStage21SentAt = nil
+        profile.inactivityAutoDeactivatedAt = nil
+        try await profile.save(on: db)
+
+        let event = StudentStatusEvent(
+            studentID: studentID,
+            fromStatus: "inactive",
+            toStatus: "active",
+            reason: nil
+        )
+        try? await event.save(on: db)
+
+        return true
+    }
+}
