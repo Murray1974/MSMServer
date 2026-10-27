@@ -635,12 +635,18 @@ struct InstructorLessonController: RouteCollection {
 
         try await booking.save(on: req.db)
 
-        // Free the old slot and mark the new slot as booked.
+        // Free the old slot and mark the new slot as booked. Title was never touched
+        // here before - the old lesson kept showing the departing student's name in
+        // /instructor/lessons/available even once free (reproduced in production
+        // 2026-10-27, Lola Harris's Nov 3 slot), and the new lesson's title stayed
+        // blank since it was never set at all. Same fix pattern as instructorSwap.
         oldLesson.state = "available"
         oldLesson.calendarName = "MSM Available"
+        oldLesson.title = ""
         try await oldLesson.save(on: req.db)
         newLesson.state = "booked"
         newLesson.calendarName = "MSM Lessons"
+        newLesson.title = student.displayName.isEmpty ? student.username : student.displayName
         try await newLesson.save(on: req.db)
 
         // The old lesson no longer has this (or any) active booking — drop its stale
