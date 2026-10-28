@@ -3,31 +3,58 @@ import NIOConcurrencyHelpers
 
 final class WebSocketHub: @unchecked Sendable {
     private let lock = NIOLock()
-    private var clients: [WebSocket] = []
+    private var clients: [ObjectIdentifier: (ws: WebSocket, lastPong: Date)] = [:]
 
     func add(_ ws: WebSocket) {
-        lock.withLock { clients.append(ws) }
+        lock.withLock { clients[ObjectIdentifier(ws)] = (ws, Date()) }
     }
 
     func remove(_ ws: WebSocket) {
-        lock.withLock { clients.removeAll { $0 === ws } }
+        lock.withLock { _ = clients.removeValue(forKey: ObjectIdentifier(ws)) }
+    }
+
+    /// Call from the route's `ws.onPong` handler — without this, `pingAll()`'s
+    /// staleness check below has nothing to go on and will incorrectly treat every
+    /// client as dead after ~70s, even ones that are genuinely still connected.
+    func recordPong(_ ws: WebSocket) {
+        lock.withLock {
+            guard var entry = clients[ObjectIdentifier(ws)] else { return }
+            entry.lastPong = Date()
+            clients[ObjectIdentifier(ws)] = entry
+        }
     }
 
     func broadcast(_ text: String) {
-        lock.withLock { clients.forEach { $0.send(text) } }
+        lock.withLock { clients.values.forEach { $0.ws.send(text) } }
     }
 
     /// Sends a WebSocket ping to all open clients to keep connections alive through
-    /// reverse-proxy idle timeouts (Nginx default: 60s). Call every ~30s.
+    /// reverse-proxy idle timeouts (Nginx default: 60s), and proactively closes any
+    /// client that hasn't ponged in over two ping cycles (~70s).
+    ///
+    /// Found via a real bug report: swiping an app away (rather than a clean app-level
+    /// disconnect) doesn't always send a TCP close/RST promptly — `WebSocket.isClosed`
+    /// can stay false indefinitely for a connection that's actually dead, which left
+    /// instructor/student "Active now" presence stuck on for minutes after the app was
+    /// gone. A missed-pong timeout is what actually detects that case; `isClosed` alone
+    /// only catches a clean close.
     func pingAll() {
-        lock.withLock {
-            clients = clients.filter { !$0.isClosed }
-            clients.forEach { $0.sendPing() }
+        let stale: [WebSocket] = lock.withLock {
+            clients = clients.filter { !$0.value.ws.isClosed }
+            let now = Date()
+            let staleEntries = clients.values.filter { now.timeIntervalSince($0.lastPong) > 70 }
+            clients.values.forEach { $0.ws.sendPing() }
+            return staleEntries.map { $0.ws }
+        }
+        // Closed outside the lock — the resulting onClose handler calls back into
+        // remove(), which would deadlock if still holding this same lock.
+        stale.forEach { ws in
+            _ = ws.close(code: .goingAway)
         }
     }
 
     var hasClients: Bool {
-        lock.withLock { clients.contains { !$0.isClosed } }
+        lock.withLock { clients.values.contains { !$0.ws.isClosed } }
     }
 }
 

@@ -253,6 +253,7 @@ public func routes(_ app: Application) throws {
 
             ws.onPong { ws, data in
                 req.logger.debug("WS(instructor) pong")
+                app.instructorHub.recordPong(ws)
             }
 
             ws.onClose.whenComplete { _ in
@@ -338,6 +339,10 @@ public func routes(_ app: Application) throws {
             ws.onText { ws, text in
                 req.logger.info("WS(student) <- \(text)")
                 ws.send(#"{"type":"echo","text":\#(String(reflecting: text))}"#)
+            }
+
+            ws.onPong { ws, data in
+                req.application.studentHub.recordPong(ws)
             }
 
             ws.onClose.whenComplete { _ in
