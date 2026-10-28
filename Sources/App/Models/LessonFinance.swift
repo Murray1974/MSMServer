@@ -74,7 +74,11 @@ final class LessonFinance: Model, Content, @unchecked Sendable {
     /// whoever was booked on it last.
     static func reassignOrCreate(lessonID: UUID, studentID: UUID, on db: Database) async throws {
         if let existing = try await LessonFinance.find(lessonID, on: db) {
-            if existing.$student.id != studentID {
+            // Never reassign a record that's already been charged — found as a gap here
+            // during an Oct 2026 audit (one of several hand-duplicated call sites already
+            // had this guard; this canonical helper didn't).
+            if existing.$student.id != studentID,
+               existing.chargeStatus != "charged", existing.financeStatus != "charged" {
                 existing.$student.id = studentID
                 existing.financeStatus = "not_covered"
                 existing.reservedAmount = nil

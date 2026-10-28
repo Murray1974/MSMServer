@@ -134,47 +134,7 @@ struct BookingsController: RouteCollection {
         }
 
         // Ensure lesson finance exists and evaluate coverage.
-        let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
-        let lessonFinance: LessonFinance
-
-        if let existingLessonFinance {
-            // If this slot was previously booked by a different student, reassign
-            // the finance record so reevaluateCoverageForStudent finds it.
-            if existingLessonFinance.$student.id != userID {
-                existingLessonFinance.$student.id = userID
-                existingLessonFinance.financeStatus = "not_covered"
-                existingLessonFinance.reservedAmount = nil
-                existingLessonFinance.coveredAt = nil
-                try await existingLessonFinance.save(on: req.db)
-            }
-            lessonFinance = existingLessonFinance
-        } else {
-            let durationMinutes = max(0, Int(input.endsAt.timeIntervalSince(input.startsAt) / 60))
-            let studentProfile = try await StudentProfile.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .first()
-            let hourlyRate = studentProfile?.hourlyRate ?? 45
-            let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
-
-            let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
-
-            let newLessonFinance = LessonFinance(
-                lessonID: lessonID,
-                studentID: userID,
-                instructorID: resolvedInstructorID,
-                durationMinutes: durationMinutes,
-                hourlyRateSnapshot: hourlyRate,
-                priceSnapshot: priceSnapshot,
-                chargeStatus: "not_charged",
-                chargedLedgerEntryID: nil,
-                financeStatus: "not_covered",
-                coveredAt: nil,
-                reservedAmount: nil
-            )
-            try await newLessonFinance.save(on: req.db)
-            lessonFinance = newLessonFinance
-        }
-
+        try await LessonFinance.reassignOrCreate(lessonID: lessonID, studentID: userID, on: req.db)
         try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
 
         // Cancel any pending recovery jobs for this slot — it's now filled.
@@ -324,38 +284,10 @@ struct BookingsController: RouteCollection {
                     try await lesson.save(on: req.db)
                 }
 
-                // Ensure lesson finance exists and evaluate coverage even when the booking already exists.
-                let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
-                let lessonFinance: LessonFinance
-
-                if let existingLessonFinance {
-                    lessonFinance = existingLessonFinance
-                } else {
-                    let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                    let studentProfile = try await StudentProfile.query(on: req.db)
-                        .filter(\.$user.$id == userID)
-                        .first()
-                    let hourlyRate = studentProfile?.hourlyRate ?? 45
-                    let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
-                    let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
-
-                    let newLessonFinance = LessonFinance(
-                        lessonID: lessonID,
-                        studentID: userID,
-                        instructorID: resolvedInstructorID,
-                        durationMinutes: durationMinutes,
-                        hourlyRateSnapshot: hourlyRate,
-                        priceSnapshot: priceSnapshot,
-                        chargeStatus: "not_charged",
-                        chargedLedgerEntryID: nil,
-                        financeStatus: "not_covered",
-                        coveredAt: nil,
-                        reservedAmount: nil
-                    )
-                    try await newLessonFinance.save(on: req.db)
-                    lessonFinance = newLessonFinance
-                }
-
+                // Ensure lesson finance exists (reassigned to this student if it previously
+                // belonged to someone else) and evaluate coverage even when the booking
+                // already exists.
+                try await LessonFinance.reassignOrCreate(lessonID: lessonID, studentID: userID, on: req.db)
                 try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
             } else {
                 let b = Booking()
@@ -370,38 +302,9 @@ struct BookingsController: RouteCollection {
                     try await lesson.save(on: req.db)
                 }
 
-                // Ensure lesson finance exists and evaluate coverage.
-                let existingLessonFinance = try await LessonFinance.find(lessonID, on: req.db)
-                let lessonFinance: LessonFinance
-
-                if let existingLessonFinance {
-                    lessonFinance = existingLessonFinance
-                } else {
-                    let durationMinutes = max(0, Int(lesson.endsAt.timeIntervalSince(lesson.startsAt) / 60))
-                    let studentProfile = try await StudentProfile.query(on: req.db)
-                        .filter(\.$user.$id == userID)
-                        .first()
-                    let hourlyRate = studentProfile?.hourlyRate ?? 45
-                    let priceSnapshot = LessonFinance.calculatedPrice(durationMinutes: durationMinutes, hourlyRate: hourlyRate)
-                    let resolvedInstructorID = (try? req.auth.require(User.self).requireID()) ?? userID
-
-                    let newLessonFinance = LessonFinance(
-                        lessonID: lessonID,
-                        studentID: userID,
-                        instructorID: resolvedInstructorID,
-                        durationMinutes: durationMinutes,
-                        hourlyRateSnapshot: hourlyRate,
-                        priceSnapshot: priceSnapshot,
-                        chargeStatus: "not_charged",
-                        chargedLedgerEntryID: nil,
-                        financeStatus: "not_covered",
-                        coveredAt: nil,
-                        reservedAmount: nil
-                    )
-                    try await newLessonFinance.save(on: req.db)
-                    lessonFinance = newLessonFinance
-                }
-
+                // Ensure lesson finance exists (reassigned to this student if it previously
+                // belonged to someone else) and evaluate coverage.
+                try await LessonFinance.reassignOrCreate(lessonID: lessonID, studentID: userID, on: req.db)
                 try await FinanceController().reevaluateCoverageForStudent(userID, on: req.db)
 
                 upserted += 1
