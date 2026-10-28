@@ -1593,6 +1593,14 @@ public func routes(_ app: Application) throws {
         }
 
         req.logger.notice("[Admin] Booking \(bookingID) restored by \(instructor.username)")
+
+        // Found via audit: this route never broadcast anything, yet both instructor
+        // clients already had dead code expecting a "restored"/"booking_restored"
+        // message. Reuses broadcastBooked's "booked" semantics since that's exactly
+        // the lesson's resulting state.
+        if let student = try await User.find(studentID, on: req.db) {
+            try req.broadcastBooked(for: lesson, student: student)
+        }
         return .ok
     }
 
@@ -2333,17 +2341,4 @@ public func routes(_ app: Application) throws {
     try app.register(collection: AdminUserController())
     try app.register(collection: AdminBackfillController())
 
-    // GET /me/booking-events (session cookie presence required)
-    app.get("me", "booking-events") { req async throws -> [BookingEvent] in
-        let hasSessionCookie = req.cookies["vapor-session"] != nil
-        let hasSessionObject = (req.session.id != nil)
-        guard hasSessionCookie || hasSessionObject else {
-            throw Abort(.unauthorized, reason: "User not authenticated (no session cookie).")
-        }
-
-        // TODO: resolve the current user's UUID from your session store if available.
-        // For now, return an empty list to keep the server compiling and running.
-        return []
-    }
-    
 }
