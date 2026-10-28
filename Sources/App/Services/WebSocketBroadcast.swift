@@ -440,6 +440,31 @@ extension Application {
         for ws in live { ws.send(text) }
     }
 
+    /// Live instructor-location-tracking push — sent on every location ping while a
+    /// TrackingSession is active for this student's booking.
+    func deliverLocationToStudent(studentID: UUID, latitude: Double, longitude: Double, updatedAt: Date) {
+        let payload: [String: Any] = [
+            "type": "instructor_location",
+            "latitude": latitude,
+            "longitude": longitude,
+            "updatedAt": ISO8601DateFormatter().string(from: updatedAt)
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else { return }
+        let live = (msmStudentSockets[studentID] ?? []).filter { !$0.isClosed }
+        for ws in live { ws.send(text) }
+    }
+
+    /// Notifies a student's open tracking screen (if any) that the session has ended,
+    /// either manually by the instructor or automatically at the lesson's end time.
+    func deliverTrackingEndedToStudent(studentID: UUID) {
+        let payload: [String: Any] = ["type": "tracking_ended"]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else { return }
+        let live = (msmStudentSockets[studentID] ?? []).filter { !$0.isClosed }
+        for ws in live { ws.send(text) }
+    }
+
     /// Notifies a student that the instructor has read their message.
     func deliverChatReadReceiptToStudent(messageID: UUID, readAt: Date, studentID: UUID) {
         let payload: [String: Any] = [

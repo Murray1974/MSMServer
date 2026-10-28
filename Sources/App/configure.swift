@@ -141,6 +141,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddTheoryExpiryWarningFieldToStudentProfile())
     app.migrations.add(AddContactAndVehicleFieldsToInstructorSettings())
     app.migrations.add(AddProfilePhotoPathToInstructorSettings())
+    app.migrations.add(AddPickupCoordinatesToBooking())
+    app.migrations.add(CreateTrackingSession())
 
     try app.autoMigrate().wait()
 
@@ -155,6 +157,10 @@ public func configure(_ app: Application) throws {
     app.lifecycle.use(TempHoldReclassificationLifecycle())
     app.lifecycle.use(TheoryTestReminderLifecycle())
     app.lifecycle.use(TheoryExpiryWarningLifecycle())
+
+    // Live instructor-location tracking — activates sessions ~10 min before a lesson
+    // starts, auto-expires them at the lesson's end time. Checks every 30s.
+    app.lifecycle.use(TrackingSchedulerLifecycle())
 
     // WebSocket keepalive — pings all connected clients every 30s to prevent
     // Nginx from closing idle connections (default proxy_read_timeout = 60s).

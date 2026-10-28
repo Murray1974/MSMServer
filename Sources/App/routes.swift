@@ -65,6 +65,24 @@ private struct InstructorContactView: Content {
     let vehicleColour: String?
 }
 
+private struct InstructorTrackingView: Content {
+    let bookingID: UUID
+    let studentName: String
+    let startedAt: Date
+    let endsAt: Date
+}
+
+private struct StudentTrackingView: Content {
+    let bookingID: UUID
+    let startedAt: Date
+    let endsAt: Date
+    let pickupLatitude: Double?
+    let pickupLongitude: Double?
+    let latitude: Double?
+    let longitude: Double?
+    let updatedAt: Date?
+}
+
 private struct LessonDiscountView: Content {
     let lessonID: UUID
     let priceSnapshot: Decimal
@@ -1724,6 +1742,118 @@ public func routes(_ app: Application) throws {
             vehicleModel: settings.vehicleModel,
             vehicleColour: settings.vehicleColour
         )
+    }
+
+    // MARK: - Live instructor location tracking
+    //
+    // Single-instructor system, so these routes resolve "the active session" without
+    // needing a session ID in the URL — same simplification used by InstructorSettings
+    // as a singleton elsewhere in this file. TrackingSchedulerLifecycle (TrackingService.swift)
+    // creates sessions automatically; these routes only handle pings, manual end, and reads.
+
+    func currentActiveTrackingSession(on db: Database) async throws -> TrackingSession? {
+        try await TrackingSession.query(on: db)
+            .filter(\.$endedAt == .null)
+            .sort(\.$startedAt, .descending)
+            .first()
+    }
+
+    struct TrackingLocationInput: Decodable {
+        let latitude: Double
+        let longitude: Double
+    }
+
+    // POST /instructor/tracking/location — a location ping from the instructor's phone.
+    financeProtected.post("instructor", "tracking", "location") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        let input = try req.content.decode(TrackingLocationInput.self)
+
+        guard let session = try await currentActiveTrackingSession(on: req.db) else {
+            return .noContent
+        }
+        session.lastLatitude = input.latitude
+        session.lastLongitude = input.longitude
+        session.lastUpdatedAt = Date()
+        try await session.save(on: req.db)
+
+        if let booking = try? await Booking.find(session.bookingID, on: req.db) {
+            req.application.deliverLocationToStudent(
+                studentID: booking.$user.id,
+                latitude: input.latitude,
+                longitude: input.longitude,
+                updatedAt: session.lastUpdatedAt ?? Date()
+            )
+        }
+        return .ok
+    }
+
+    // POST /instructor/tracking/end — instructor manually ends the active session early.
+    financeProtected.post("instructor", "tracking", "end") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        guard let session = try await currentActiveTrackingSession(on: req.db) else {
+            return .noContent
+        }
+        session.endedAt = Date()
+        session.endedReason = "manual"
+        try await session.save(on: req.db)
+
+        if let booking = try? await Booking.find(session.bookingID, on: req.db) {
+            req.application.deliverTrackingEndedToStudent(studentID: booking.$user.id)
+        }
+        req.logger.notice("[Tracking] Session manually ended bookingID=\(session.bookingID) by \(instructor.username)")
+        return .ok
+    }
+
+    // GET /instructor/tracking/active — for the instructor app's "Sharing with [name] · End" banner.
+    // Returns 204 (no body) rather than null/an error when nothing's active — Vapor's
+    // route-closure type inference doesn't play well with an Optional<Content> return type.
+    financeProtected.get("instructor", "tracking", "active") { req async throws -> Response in
+        guard let session = try await currentActiveTrackingSession(on: req.db),
+              let booking = try await Booking.find(session.bookingID, on: req.db)
+        else { return Response(status: .noContent) }
+        let student = try await booking.$user.get(on: req.db)
+        let view = InstructorTrackingView(
+            bookingID: session.bookingID,
+            studentName: student.displayName,
+            startedAt: session.startedAt,
+            endsAt: session.endsAt
+        )
+        return try await view.encodeResponse(for: req)
+    }
+
+    // GET /student/tracking/active — for the "Your instructor" tab's entry point and the
+    // live map screen's initial load (before the first WS push arrives). The number of
+    // concurrently-active sessions is tiny (single instructor), so this just loads each
+    // active session's booking and matches on student rather than joining in SQL.
+    studentProtected.get("tracking", "active") { req async throws -> Response in
+        let user = try req.auth.require(User.self)
+        let studentID = try user.requireID()
+
+        let activeSessions = try await TrackingSession.query(on: req.db)
+            .filter(\.$endedAt == .null)
+            .sort(\.$startedAt, .descending)
+            .all()
+
+        for session in activeSessions {
+            guard let booking = try await Booking.find(session.bookingID, on: req.db),
+                  booking.$user.id == studentID
+            else { continue }
+            let view = StudentTrackingView(
+                bookingID: session.bookingID,
+                startedAt: session.startedAt,
+                endsAt: session.endsAt,
+                pickupLatitude: booking.pickupLatitude,
+                pickupLongitude: booking.pickupLongitude,
+                latitude: session.lastLatitude,
+                longitude: session.lastLongitude,
+                updatedAt: session.lastUpdatedAt
+            )
+            return try await view.encodeResponse(for: req)
+        }
+        return Response(status: .noContent)
     }
 
     // POST /instructor/lessons/:lessonID/discount — applies a one-off, instructor's-

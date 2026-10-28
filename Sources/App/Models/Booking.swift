@@ -75,6 +75,15 @@ final class Booking: Model, Content, @unchecked Sendable {
     @OptionalField(key: "payment_warning_sent_at")
     var paymentWarningSentAt: Date?
 
+    /// Geocoded coordinates for `pickupLocation`, resolved and cached the first time a
+    /// live-tracking session needs a destination pin (see TrackingSchedulerLifecycle) —
+    /// never computed eagerly at booking-creation time, only lazily on first use.
+    @OptionalField(key: "pickup_latitude")
+    var pickupLatitude: Double?
+
+    @OptionalField(key: "pickup_longitude")
+    var pickupLongitude: Double?
+
     init() { }
 
     init(
