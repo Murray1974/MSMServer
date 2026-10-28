@@ -322,6 +322,59 @@ struct ChatController: Sendable {
         return .ok
     }
 
+    /// PATCH /instructor/chat/student/:studentID/unread — marks the conversation unread
+    /// again (Mail/Messages-style "Mark as Unread"), by resetting just the most recent
+    /// student→instructor message's read state — not the whole history — so the inbox
+    /// badge reappears without re-triggering read-receipt notifications for older messages.
+    func instructorMarkUnread(req: Request) async throws -> HTTPStatus {
+        let instructor = try req.auth.require(User.self)
+        let instructorID = try instructor.requireID()
+
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+
+        guard let mostRecent = try await ChatMessage.query(on: req.db)
+            .filter(\.$senderID == studentID)
+            .filter(\.$receiverID == instructorID)
+            .sort(\.$createdAt, .descending)
+            .first()
+        else { return .ok }
+
+        mostRecent.isRead = false
+        mostRecent.readAt = nil
+        try await mostRecent.update(on: req.db)
+        return .ok
+    }
+
+    /// DELETE /instructor/chat/student/:studentID/messages — deletes the entire
+    /// conversation (both directions) with this student. Hard delete, not recoverable —
+    /// matches "Delete" in a standard Mail/Messages-style inbox swipe/context action.
+    func instructorDeleteConversation(req: Request) async throws -> HTTPStatus {
+        let instructor = try req.auth.require(User.self)
+        let instructorID = try instructor.requireID()
+
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+
+        try await ChatMessage.query(on: req.db)
+            .group(.or) { g in
+                g.group(.and) { a in
+                    a.filter(\.$senderID == instructorID)
+                    a.filter(\.$receiverID == studentID)
+                }
+                g.group(.and) { a in
+                    a.filter(\.$senderID == studentID)
+                    a.filter(\.$receiverID == instructorID)
+                }
+            }
+            .delete()
+
+        req.logger.notice("[Chat] Conversation with student \(studentID) deleted by \(instructor.username)")
+        return .ok
+    }
+
     /// PATCH /instructor/chat/student/:studentID/messages/:messageID/read
     func instructorMarkMessageRead(req: Request) async throws -> HTTPStatus {
         let instructor = try req.auth.require(User.self)

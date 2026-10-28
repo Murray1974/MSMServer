@@ -2360,6 +2360,8 @@ public func routes(_ app: Application) throws {
     financeProtected.get("instructor",   "chat", "student", ":studentID", "messages",                  use: chatController.instructorGetMessages)
     financeProtected.post("instructor",  "chat", "student", ":studentID", "messages",                  use: chatController.instructorSendMessage)
     financeProtected.patch("instructor", "chat", "student", ":studentID", "read",                      use: chatController.instructorMarkRead)
+    financeProtected.patch("instructor", "chat", "student", ":studentID", "unread",                    use: chatController.instructorMarkUnread)
+    financeProtected.delete("instructor", "chat", "student", ":studentID", "messages",                 use: chatController.instructorDeleteConversation)
     financeProtected.patch("instructor", "chat", "student", ":studentID", "messages", ":messageID", "read", use: chatController.instructorMarkMessageRead)
     financeProtected.post("instructor",  "chat", "student", ":studentID", "typing",                    use: chatController.instructorTyping)
     financeProtected.get("instructor",   "student", ":studentID", "presence",                          use: chatController.studentPresence)
