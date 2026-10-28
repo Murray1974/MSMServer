@@ -35,6 +35,12 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
     @OptionalField(key: "vehicle_colour")
     var vehicleColour: String?
 
+    /// Local file path (relative to the working directory), same storage convention as
+    /// StudentProfile.profilePhotoPath — but this is a singleton row (one instructor),
+    /// so the file itself is always saved as a fixed "instructor.jpg", not userID-keyed.
+    @OptionalField(key: "profile_photo_path")
+    var profilePhotoPath: String?
+
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
@@ -47,7 +53,8 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
         vehicleRegistration: String? = nil,
         vehicleMake: String? = nil,
         vehicleModel: String? = nil,
-        vehicleColour: String? = nil
+        vehicleColour: String? = nil,
+        profilePhotoPath: String? = nil
     ) {
         self.id = id
         self.currentHourlyRatePence = currentHourlyRatePence
@@ -56,6 +63,7 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
         self.vehicleMake = vehicleMake
         self.vehicleModel = vehicleModel
         self.vehicleColour = vehicleColour
+        self.profilePhotoPath = profilePhotoPath
     }
 
     /// Fetches the singleton settings row, creating it with the default rate if it

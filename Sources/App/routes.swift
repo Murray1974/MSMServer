@@ -2227,6 +2227,12 @@ public func routes(_ app: Application) throws {
 
     // GET /instructor/student/:studentID/profile-photo — view the student's profile photo
     financeProtected.get("instructor", "student", ":studentID", "profile-photo", use: documentController.instructorGetProfilePhoto)
+    financeProtected.on(.POST, "instructor", "profile-photo", body: .collect(maxSize: "10mb"), use: documentController.uploadInstructorProfilePhoto)
+    // Same handler at both paths — it takes no studentID and the photo isn't sensitive
+    // to either auth group, so the instructor app previewing its own upload in Settings
+    // reuses the identical GET rather than a near-duplicate self-view variant.
+    financeProtected.get("instructor", "profile-photo", use: documentController.getInstructorProfilePhoto)
+    studentProtected.get("instructor", "profile-photo", use: documentController.getInstructorProfilePhoto)
 
     // Vehicle management
     // POST /instructor/vehicle/log

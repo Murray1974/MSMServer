@@ -247,6 +247,44 @@ struct DocumentController: RouteCollection {
         return try await streamProfilePhoto(for: studentID, req: req)
     }
 
+    // MARK: - POST /instructor/profile-photo — instructor's own photo, multipart upload.
+    // InstructorSettings is a singleton (one instructor), so the file is always saved
+    // as a fixed "instructor.jpg" rather than userID-keyed like student photos.
+
+    func uploadInstructorProfilePhoto(_ req: Request) async throws -> HTTPStatus {
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        struct PhotoInput: Content {
+            var photo: File
+        }
+        let input = try req.content.decode(PhotoInput.self)
+        guard input.photo.data.readableBytes > 0 else {
+            throw Abort(.badRequest, reason: "Photo data is empty.")
+        }
+
+        let uploadsDir = req.application.directory.workingDirectory + "uploads/profile_photos"
+        let filename = "instructor.jpg"
+        let path = uploadsDir + "/" + filename
+        try await req.fileio.writeFile(input.photo.data, at: path)
+
+        let settings = try await InstructorSettings.current(on: req.db)
+        settings.profilePhotoPath = "uploads/profile_photos/\(filename)"
+        try await settings.save(on: req.db)
+        return .ok
+    }
+
+    // MARK: - GET /student/instructor/profile-photo — student views the instructor's photo
+
+    func getInstructorProfilePhoto(_ req: Request) async throws -> Response {
+        let settings = try await InstructorSettings.current(on: req.db)
+        guard let photoPath = settings.profilePhotoPath else {
+            throw Abort(.notFound, reason: "No profile photo on file.")
+        }
+        let fullPath = req.application.directory.workingDirectory + photoPath
+        return req.fileio.streamFile(at: fullPath)
+    }
+
     // MARK: - Helper
 
     private func streamPhoto(for studentID: UUID, req: Request) async throws -> Response {
