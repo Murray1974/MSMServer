@@ -497,7 +497,12 @@ public func routes(_ app: Application) throws {
     //     {"startsAt":"2025-11-12T14:00:00Z","endsAt":"2025-11-12T16:00:00Z"}
     //   ]
     // }
-    app.post("instructor", "sync", "available") { req async throws -> SyncResult in
+    // Auth added 28 Oct 2026: this was registered directly on `app` with no auth group at
+    // all (unlike every other /instructor/* route, which goes through SessionTokenAuthenticator
+    // via InstructorLessonController's RouteCollection) — anyone who could reach the server
+    // could POST arbitrary lesson availability with no credentials. Found via audit.
+    app.grouped(SessionTokenAuthenticator(), User.guardMiddleware())
+        .post("instructor", "sync", "available") { req async throws -> SyncResult in
         struct SlotIn: Content {
             var id: UUID?
             var externalID: String?
