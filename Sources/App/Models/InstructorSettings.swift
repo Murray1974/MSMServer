@@ -17,14 +17,45 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
     @Field(key: "current_hourly_rate_pence")
     var currentHourlyRatePence: Int
 
+    /// Instructor-entered contact + vehicle details, surfaced to students via
+    /// GET /student/instructor-info (the "Your instructor" screen). All optional —
+    /// a field left blank just doesn't render on the student side.
+    @OptionalField(key: "contact_phone")
+    var contactPhone: String?
+
+    @OptionalField(key: "vehicle_registration")
+    var vehicleRegistration: String?
+
+    @OptionalField(key: "vehicle_make")
+    var vehicleMake: String?
+
+    @OptionalField(key: "vehicle_model")
+    var vehicleModel: String?
+
+    @OptionalField(key: "vehicle_colour")
+    var vehicleColour: String?
+
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
     init() {}
 
-    init(id: UUID? = nil, currentHourlyRatePence: Int = 4500) {
+    init(
+        id: UUID? = nil,
+        currentHourlyRatePence: Int = 4500,
+        contactPhone: String? = nil,
+        vehicleRegistration: String? = nil,
+        vehicleMake: String? = nil,
+        vehicleModel: String? = nil,
+        vehicleColour: String? = nil
+    ) {
         self.id = id
         self.currentHourlyRatePence = currentHourlyRatePence
+        self.contactPhone = contactPhone
+        self.vehicleRegistration = vehicleRegistration
+        self.vehicleMake = vehicleMake
+        self.vehicleModel = vehicleModel
+        self.vehicleColour = vehicleColour
     }
 
     /// Fetches the singleton settings row, creating it with the default rate if it

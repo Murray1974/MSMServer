@@ -37,6 +37,32 @@ private struct SyncResult: Content {
 
 private struct InstructorSettingsView: Content {
     let currentHourlyRatePence: Int
+    let contactPhone: String?
+    let vehicleRegistration: String?
+    let vehicleMake: String?
+    let vehicleModel: String?
+    let vehicleColour: String?
+
+    init(_ settings: InstructorSettings) {
+        self.currentHourlyRatePence = settings.currentHourlyRatePence
+        self.contactPhone = settings.contactPhone
+        self.vehicleRegistration = settings.vehicleRegistration
+        self.vehicleMake = settings.vehicleMake
+        self.vehicleModel = settings.vehicleModel
+        self.vehicleColour = settings.vehicleColour
+    }
+}
+
+/// Student-facing subset of InstructorSettings, for the "Your instructor" screen.
+/// Deliberately excludes currentHourlyRatePence (that's an instructor-internal pricing
+/// default, not something a student should see here).
+private struct InstructorContactView: Content {
+    let instructorName: String
+    let contactPhone: String?
+    let vehicleRegistration: String?
+    let vehicleMake: String?
+    let vehicleModel: String?
+    let vehicleColour: String?
 }
 
 private struct LessonDiscountView: Content {
@@ -1633,32 +1659,66 @@ public func routes(_ app: Application) throws {
         return .ok
     }
 
-    // GET /instructor/settings — current pricing defaults
+    // GET /instructor/settings — current pricing defaults + contact/vehicle details
     financeProtected.get("instructor", "settings") { req async throws -> InstructorSettingsView in
         let settings = try await InstructorSettings.current(on: req.db)
-        return InstructorSettingsView(currentHourlyRatePence: settings.currentHourlyRatePence)
+        return InstructorSettingsView(settings)
     }
 
     // PATCH /instructor/settings — updates the default hourly rate stamped onto new
     // students at registration. Never touches any existing StudentProfile.hourlyRatePence
     // — each student's rate is its own independent field, so changing this is exactly
     // "raise the price for new clients only" with existing clients kept on their legacy rate.
+    // Also accepts the contact/vehicle fields surfaced on the student "Your instructor"
+    // screen — all optional, a field omitted (nil) leaves the existing stored value
+    // untouched rather than clearing it, so a partial save never wipes other fields.
     financeProtected.patch("instructor", "settings") { req async throws -> InstructorSettingsView in
         let instructor = try req.auth.require(User.self)
         guard instructor.role == "instructor" else { throw Abort(.forbidden) }
 
-        struct Input: Decodable { let currentHourlyRatePence: Int }
-        let input = try req.content.decode(Input.self)
-        guard input.currentHourlyRatePence > 0 else {
-            throw Abort(.badRequest, reason: "Hourly rate must be greater than zero")
+        struct Input: Decodable {
+            let currentHourlyRatePence: Int?
+            let contactPhone: String?
+            let vehicleRegistration: String?
+            let vehicleMake: String?
+            let vehicleModel: String?
+            let vehicleColour: String?
         }
+        let input = try req.content.decode(Input.self)
 
         let settings = try await InstructorSettings.current(on: req.db)
-        settings.currentHourlyRatePence = input.currentHourlyRatePence
+        if let rate = input.currentHourlyRatePence {
+            guard rate > 0 else {
+                throw Abort(.badRequest, reason: "Hourly rate must be greater than zero")
+            }
+            settings.currentHourlyRatePence = rate
+        }
+        if let v = input.contactPhone { settings.contactPhone = v }
+        if let v = input.vehicleRegistration { settings.vehicleRegistration = v }
+        if let v = input.vehicleMake { settings.vehicleMake = v }
+        if let v = input.vehicleModel { settings.vehicleModel = v }
+        if let v = input.vehicleColour { settings.vehicleColour = v }
         try await settings.save(on: req.db)
 
-        req.logger.notice("[Settings] Current hourly rate set to \(input.currentHourlyRatePence)p by \(instructor.username)")
-        return InstructorSettingsView(currentHourlyRatePence: settings.currentHourlyRatePence)
+        req.logger.notice("[Settings] Updated by \(instructor.username)")
+        return InstructorSettingsView(settings)
+    }
+
+    // GET /student/instructor-info — "Your instructor" screen: name, phone, vehicle
+    // details. All instructor-entered via PATCH /instructor/settings above.
+    studentProtected.get("instructor-info") { req async throws -> InstructorContactView in
+        let settings = try await InstructorSettings.current(on: req.db)
+        let instructorUser = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()
+        return InstructorContactView(
+            instructorName: instructorUser?.displayName ?? "Your instructor",
+            contactPhone: settings.contactPhone,
+            vehicleRegistration: settings.vehicleRegistration,
+            vehicleMake: settings.vehicleMake,
+            vehicleModel: settings.vehicleModel,
+            vehicleColour: settings.vehicleColour
+        )
     }
 
     // POST /instructor/lessons/:lessonID/discount — applies a one-off, instructor's-

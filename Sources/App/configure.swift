@@ -139,6 +139,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateInstructorSettings())
     app.migrations.add(AddDiscountFieldsToLessonFinance())
     app.migrations.add(AddTheoryExpiryWarningFieldToStudentProfile())
+    app.migrations.add(AddContactAndVehicleFieldsToInstructorSettings())
 
     try app.autoMigrate().wait()
 
