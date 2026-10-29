@@ -939,6 +939,10 @@ struct InstructorLessonController: RouteCollection {
         // getting a chance to react to the cancellation). Found via a live repro.
         let cancelledStudent = try? await User.find(studentID, on: req.db)
         try req.broadcastCancelled(for: freedLesson, student: cancelledStudent, studentID: studentID, cancellationSource: "instructor")
+        // Missing here (unlike the sibling markLessonPersonal flow, which correctly
+        // calls both) — without this, browsing students' Book tab never repopulates
+        // with the freed slot until they manually pull-to-refresh.
+        req.broadcastBookingCleared(for: freedLesson, studentID: studentID)
         req.application.broadcastRecoveryCandidate(for: freedLesson)
 
         if let student = try? await User.find(studentID, on: req.db),
