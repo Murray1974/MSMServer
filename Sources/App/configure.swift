@@ -143,6 +143,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddProfilePhotoPathToInstructorSettings())
     app.migrations.add(AddPickupCoordinatesToBooking())
     app.migrations.add(CreateTrackingSession())
+    app.migrations.add(AddDropoffCoordinatesToBooking())
+    app.migrations.add(CreateLessonJourney())
 
     try app.autoMigrate().wait()
 

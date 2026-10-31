@@ -105,6 +105,24 @@ struct TrackingService {
             }
         }
 
+        // Same lazy-cache pattern for drop-off, used by lesson-journey tracking's
+        // client-side geofence — falls back to the pickup coordinates when no distinct
+        // drop-off address was given, since most lessons start and end at the same place.
+        if booking.dropoffLatitude == nil {
+            if let address = booking.dropoffLocation, !address.isEmpty {
+                let nominatim = NominatimService(client: app.client, logger: app.logger)
+                if let coords = await nominatim.geocode(address: address) {
+                    booking.dropoffLatitude = coords.latitude
+                    booking.dropoffLongitude = coords.longitude
+                    try? await booking.save(on: db)
+                }
+            } else if let lat = booking.pickupLatitude, let lon = booking.pickupLongitude {
+                booking.dropoffLatitude = lat
+                booking.dropoffLongitude = lon
+                try? await booking.save(on: db)
+            }
+        }
+
         let session = TrackingSession(bookingID: bookingID, startedAt: Date(), endsAt: lesson.endsAt)
         do {
             try await session.save(on: db)
@@ -126,11 +144,26 @@ struct TrackingService {
         if let instructor = try? await User.query(on: db).filter(\.$role == "instructor").first(),
            let instructorToken = instructor.fcmToken,
            let fcm = FCMNotificationService(app: app) {
+            // Pickup/drop-off coordinates ride along on this same push so the instructor
+            // app's JourneyTrackingManager can arm its geofences immediately on arrival,
+            // with no extra round-trip — mirrors how studentName is already threaded
+            // through here.
+            var data = [
+                "type": "tracking_session_activated",
+                "bookingID": bookingID.uuidString,
+                "studentName": student.displayName,
+                "endsAt": ISO8601DateFormatter().string(from: lesson.endsAt)
+            ]
+            if let lat = booking.pickupLatitude { data["pickupLatitude"] = String(lat) }
+            if let lon = booking.pickupLongitude { data["pickupLongitude"] = String(lon) }
+            if let lat = booking.dropoffLatitude { data["dropoffLatitude"] = String(lat) }
+            if let lon = booking.dropoffLongitude { data["dropoffLongitude"] = String(lon) }
+
             try? await fcm.send(
                 to: instructorToken,
                 title: "Location sharing started",
                 body: "Sharing your live location with \(student.displayName) for the next lesson.",
-                data: ["type": "tracking_session_activated", "bookingID": bookingID.uuidString, "studentName": student.displayName]
+                data: data
             )
         }
     }

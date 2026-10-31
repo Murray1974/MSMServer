@@ -70,6 +70,13 @@ private struct InstructorTrackingView: Content {
     let studentName: String
     let startedAt: Date
     let endsAt: Date
+    // Carried here for JourneyTrackingManager's scenePhase-active fallback poll — the
+    // push-arrival fast path gets the same four fields via the FCM data payload instead
+    // (see TrackingService.swift's activate()).
+    let pickupLatitude: Double?
+    let pickupLongitude: Double?
+    let dropoffLatitude: Double?
+    let dropoffLongitude: Double?
 }
 
 private struct StudentTrackingView: Content {
@@ -1819,7 +1826,11 @@ public func routes(_ app: Application) throws {
             bookingID: session.bookingID,
             studentName: student.displayName,
             startedAt: session.startedAt,
-            endsAt: session.endsAt
+            endsAt: session.endsAt,
+            pickupLatitude: booking.pickupLatitude,
+            pickupLongitude: booking.pickupLongitude,
+            dropoffLatitude: booking.dropoffLatitude,
+            dropoffLongitude: booking.dropoffLongitude
         )
         return try await view.encodeResponse(for: req)
     }
@@ -1854,6 +1865,118 @@ public func routes(_ app: Application) throws {
             return try await view.encodeResponse(for: req)
         }
         return Response(status: .noContent)
+    }
+
+    // MARK: - Lesson journey tracking
+    //
+    // Separate from live-location above — this records the instructor's full GPS route
+    // for an entire lesson (pickup to drop-off), for later map review. Unlike
+    // TrackingSession, there's no server-side "in progress" state: the instructor app's
+    // JourneyTrackingManager detects arrival/departure geofences and buffers points
+    // entirely client-side, then uploads the whole finished route as one batch here.
+
+    struct JourneyPointInput: Decodable {
+        let latitude: Double
+        let longitude: Double
+        let timestamp: Date
+    }
+
+    struct LessonJourneyUploadInput: Decodable {
+        let bookingID: UUID
+        let startedAt: Date
+        let endedAt: Date
+        let endedReason: String
+        let points: [JourneyPointInput]
+    }
+
+    /// Great-circle distance in metres between two coordinates.
+    func haversineMetres(_ a: (lat: Double, lon: Double), _ b: (lat: Double, lon: Double)) -> Double {
+        let earthRadius = 6_371_000.0
+        let lat1 = a.lat * .pi / 180, lat2 = b.lat * .pi / 180
+        let dLat = (b.lat - a.lat) * .pi / 180
+        let dLon = (b.lon - a.lon) * .pi / 180
+        let h = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
+        return earthRadius * 2 * atan2(h.squareRoot(), (1 - h).squareRoot())
+    }
+
+    /// Sums consecutive point-to-point distance (not a straight line start-to-end).
+    func routeDistanceMiles(_ points: [JourneyPointInput]) -> Double {
+        guard points.count > 1 else { return 0 }
+        var metres = 0.0
+        for i in 1..<points.count {
+            metres += haversineMetres(
+                (points[i - 1].latitude, points[i - 1].longitude),
+                (points[i].latitude, points[i].longitude)
+            )
+        }
+        return metres / 1609.344
+    }
+
+    /// Detects runs of points that stay within ~30m of each other for 5+ minutes —
+    /// purely informational, doesn't split the route. A simple single-pass clustering,
+    /// not a precise stop detector; good enough for "where did we pause to talk."
+    func detectStopMarkers(_ points: [JourneyPointInput]) -> [StopMarker] {
+        guard points.count > 1 else { return [] }
+        let stopRadiusMetres = 30.0
+        let minStopDuration: TimeInterval = 5 * 60
+        var markers: [StopMarker] = []
+        var clusterStart = 0
+
+        for i in 1..<points.count {
+            let distanceFromClusterStart = haversineMetres(
+                (points[clusterStart].latitude, points[clusterStart].longitude),
+                (points[i].latitude, points[i].longitude)
+            )
+            if distanceFromClusterStart > stopRadiusMetres {
+                let arrived = points[clusterStart].timestamp
+                let departed = points[i - 1].timestamp
+                if departed.timeIntervalSince(arrived) >= minStopDuration {
+                    markers.append(StopMarker(
+                        latitude: points[clusterStart].latitude,
+                        longitude: points[clusterStart].longitude,
+                        arrivedAt: arrived,
+                        departedAt: departed,
+                        durationMinutes: Int(departed.timeIntervalSince(arrived) / 60)
+                    ))
+                }
+                clusterStart = i
+            }
+        }
+        return markers
+    }
+
+    // POST /instructor/tracking/journey — one-shot batch upload of a completed route,
+    // sent once JourneyTrackingManager finalizes (geofence reached, manual end, or the
+    // 45-minute overrun safety net — all decided client-side, see the instructor app).
+    financeProtected.post("instructor", "tracking", "journey") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        let input = try req.content.decode(LessonJourneyUploadInput.self)
+
+        let journey = LessonJourney(
+            bookingID: input.bookingID,
+            startedAt: input.startedAt,
+            endedAt: input.endedAt,
+            endedReason: input.endedReason,
+            points: input.points.map { RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp) },
+            distanceMiles: routeDistanceMiles(input.points),
+            stopMarkers: detectStopMarkers(input.points)
+        )
+        try await journey.save(on: req.db)
+        req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
+        return .created
+    }
+
+    // GET /instructor/bookings/:bookingID/journey — for the "View Journey" map screen.
+    financeProtected.get("instructor", "bookings", ":bookingID", "journey") { req async throws -> Response in
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+        guard let journey = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == bookingID)
+            .first()
+        else { return Response(status: .noContent) }
+        return try await journey.encodeResponse(for: req)
     }
 
     // POST /instructor/lessons/:lessonID/discount — applies a one-off, instructor's-

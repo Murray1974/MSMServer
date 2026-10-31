@@ -84,6 +84,16 @@ final class Booking: Model, Content, @unchecked Sendable {
     @OptionalField(key: "pickup_longitude")
     var pickupLongitude: Double?
 
+    /// Geocoded coordinates for `dropoffLocation`, resolved and cached lazily the same
+    /// way as `pickupLatitude`/`pickupLongitude` (see TrackingSchedulerLifecycle). When
+    /// `dropoffLocation` is nil, these fall back to the pickup coordinates instead —
+    /// most lessons start and end at the same address.
+    @OptionalField(key: "dropoff_latitude")
+    var dropoffLatitude: Double?
+
+    @OptionalField(key: "dropoff_longitude")
+    var dropoffLongitude: Double?
+
     init() { }
 
     init(
