@@ -1879,6 +1879,7 @@ public func routes(_ app: Application) throws {
         let latitude: Double
         let longitude: Double
         let timestamp: Date
+        let speedMph: Double?
     }
 
     struct LessonJourneyUploadInput: Decodable {
@@ -1945,6 +1946,61 @@ public func routes(_ app: Application) throws {
         return markers
     }
 
+    /// Highest valid GPS speed sample in the route, 0 if none were valid.
+    func topSpeedMph(_ points: [JourneyPointInput]) -> Double {
+        points.compactMap { $0.speedMph }.max() ?? 0
+    }
+
+    /// True trip average (distance / duration), not a mean of noisy instantaneous
+    /// GPS samples — those are sampled unevenly (more often at speed, almost never
+    /// while stationary) and would skew a simple average.
+    func averageSpeedMph(distanceMiles: Double, durationSeconds: Double) -> Double {
+        guard durationSeconds > 0 else { return 0 }
+        return distanceMiles / (durationSeconds / 3600)
+    }
+
+    /// Detects sudden GPS speed changes between consecutive points — a GPS-only
+    /// heuristic (not accelerometer-fused), so treat results as approximate; thresholds
+    /// below are hand-picked starting points, not calibrated against real driving data.
+    /// Skips pairs with no valid speed on either side, or whose timestamp gap is too
+    /// small (noise) or too large (sparse samples, e.g. across a stop) to mean anything.
+    func detectDrivingEvents(_ points: [JourneyPointInput]) -> [DrivingEvent] {
+        guard points.count > 1 else { return [] }
+        let hardBrakeThreshold = -6.0   // mph per second, deceleration
+        let rapidAccelThreshold = 5.0   // mph per second, acceleration
+        let minDt = 0.5
+        let maxDt = 8.0
+
+        var events: [DrivingEvent] = []
+        for i in 1..<points.count {
+            guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph else { continue }
+            let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            guard dt >= minDt, dt <= maxDt else { continue }
+
+            let mphPerSecond = (toSpeed - fromSpeed) / dt
+            let type: String?
+            if mphPerSecond <= hardBrakeThreshold {
+                type = "hardBrake"
+            } else if mphPerSecond >= rapidAccelThreshold {
+                type = "rapidAccel"
+            } else {
+                type = nil
+            }
+            if let type {
+                events.append(DrivingEvent(
+                    type: type,
+                    latitude: points[i].latitude,
+                    longitude: points[i].longitude,
+                    timestamp: points[i].timestamp,
+                    fromMph: fromSpeed,
+                    toMph: toSpeed,
+                    deltaMph: toSpeed - fromSpeed
+                ))
+            }
+        }
+        return events
+    }
+
     // POST /instructor/tracking/journey — one-shot batch upload of a completed route,
     // sent once JourneyTrackingManager finalizes (geofence reached, manual end, or the
     // 45-minute overrun safety net — all decided client-side, see the instructor app).
@@ -1953,14 +2009,22 @@ public func routes(_ app: Application) throws {
         guard instructor.role == "instructor" else { throw Abort(.forbidden) }
         let input = try req.content.decode(LessonJourneyUploadInput.self)
 
+        let distanceMiles = routeDistanceMiles(input.points)
+        let durationSeconds = input.endedAt.timeIntervalSince(input.startedAt)
+
         let journey = LessonJourney(
             bookingID: input.bookingID,
             startedAt: input.startedAt,
             endedAt: input.endedAt,
             endedReason: input.endedReason,
-            points: input.points.map { RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp) },
-            distanceMiles: routeDistanceMiles(input.points),
-            stopMarkers: detectStopMarkers(input.points)
+            points: input.points.map {
+                RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph)
+            },
+            distanceMiles: distanceMiles,
+            stopMarkers: detectStopMarkers(input.points),
+            topSpeedMph: topSpeedMph(input.points),
+            averageSpeedMph: averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds),
+            drivingEvents: detectDrivingEvents(input.points)
         )
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")

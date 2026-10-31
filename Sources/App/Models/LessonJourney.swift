@@ -9,6 +9,9 @@ struct RoutePoint: Codable {
     let latitude: Double
     let longitude: Double
     let timestamp: Date
+    /// GPS-reported ground speed in mph, nil when the device reported an invalid
+    /// reading (CLLocation.speed < 0) — converted to mph client-side at capture time.
+    let speedMph: Double?
 }
 
 /// A single stationary period (≥5 minutes) detected within a recorded route — purely
@@ -19,6 +22,20 @@ struct StopMarker: Codable {
     let arrivedAt: Date
     let departedAt: Date
     let durationMinutes: Int
+}
+
+/// A sudden speed change detected from consecutive GPS speed samples — a GPS-only
+/// heuristic (not accelerometer-fused), so treat as approximate. See
+/// `detectDrivingEvents` in routes.swift for the detection thresholds.
+struct DrivingEvent: Codable {
+    /// "hardBrake" | "rapidAccel"
+    let type: String
+    let latitude: Double
+    let longitude: Double
+    let timestamp: Date
+    let fromMph: Double
+    let toMph: Double
+    let deltaMph: Double
 }
 
 /// The complete recorded GPS route for one lesson, uploaded as a single batch by the
@@ -58,6 +75,15 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "stop_markers")
     var stopMarkers: [StopMarker]
 
+    @Field(key: "top_speed_mph")
+    var topSpeedMph: Double
+
+    @Field(key: "average_speed_mph")
+    var averageSpeedMph: Double
+
+    @Field(key: "driving_events")
+    var drivingEvents: [DrivingEvent]
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -71,7 +97,10 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         endedReason: String,
         points: [RoutePoint],
         distanceMiles: Double,
-        stopMarkers: [StopMarker]
+        stopMarkers: [StopMarker],
+        topSpeedMph: Double,
+        averageSpeedMph: Double,
+        drivingEvents: [DrivingEvent]
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -81,5 +110,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.points = points
         self.distanceMiles = distanceMiles
         self.stopMarkers = stopMarkers
+        self.topSpeedMph = topSpeedMph
+        self.averageSpeedMph = averageSpeedMph
+        self.drivingEvents = drivingEvents
     }
 }

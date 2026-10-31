@@ -145,6 +145,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateTrackingSession())
     app.migrations.add(AddDropoffCoordinatesToBooking())
     app.migrations.add(CreateLessonJourney())
+    app.migrations.add(AddDrivingMetricsToLessonJourney())
 
     try app.autoMigrate().wait()
 
