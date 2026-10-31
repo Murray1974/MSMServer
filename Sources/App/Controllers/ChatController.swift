@@ -153,16 +153,26 @@ struct ChatController: Sendable {
         )
 
         if let fcmToken = instructor.fcmToken {
-            try? await FCMNotificationService(req: req)?.send(
-                to: fcmToken,
-                title: student.displayName,
-                body: body.content,
-                data: [
-                    "type": "chat_message",
-                    "studentID": studentID.uuidString,
-                    "studentName": student.displayName
-                ]
-            )
+            if let fcm = FCMNotificationService(req: req) {
+                do {
+                    try await fcm.send(
+                        to: fcmToken,
+                        title: student.displayName,
+                        body: body.content,
+                        data: [
+                            "type": "chat_message",
+                            "studentID": studentID.uuidString,
+                            "studentName": student.displayName
+                        ]
+                    )
+                } catch {
+                    req.logger.error("[studentSendMessage] fcm.send failed — instructorID=\(instructorID) error=\(error)")
+                }
+            } else {
+                req.logger.warning("[studentSendMessage] FCMNotificationService init failed — instructor push not sent")
+            }
+        } else {
+            req.logger.warning("[studentSendMessage] instructor has no fcmToken registered — push not sent")
         }
 
         return dto(from: message, instructorID: instructorID)
@@ -282,12 +292,22 @@ struct ChatController: Sendable {
         )
 
         if let fcmToken = student.fcmToken {
-            try? await FCMNotificationService(req: req)?.send(
-                to: fcmToken,
-                title: "New message from Instructor",
-                body: body.content,
-                data: ["type": "chat_message"]
-            )
+            if let fcm = FCMNotificationService(req: req) {
+                do {
+                    try await fcm.send(
+                        to: fcmToken,
+                        title: "New message from Instructor",
+                        body: body.content,
+                        data: ["type": "chat_message"]
+                    )
+                } catch {
+                    req.logger.error("[instructorSendMessage] fcm.send failed — studentID=\(studentID) error=\(error)")
+                }
+            } else {
+                req.logger.warning("[instructorSendMessage] FCMNotificationService init failed — student push not sent")
+            }
+        } else {
+            req.logger.warning("[instructorSendMessage] student has no fcmToken registered — push not sent")
         }
 
         return dto(from: message, instructorID: instructorID)
