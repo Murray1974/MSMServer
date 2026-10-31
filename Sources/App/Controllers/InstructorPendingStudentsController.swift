@@ -46,6 +46,7 @@ struct InstructorPendingStudentsController: RouteCollection {
         let approvalStatus: String
         let profileComplete: Bool
         let tcBodyText: String?
+        let mustChangePassword: Bool
     }
 
     struct CreateStudentAccountRequest: Content {
@@ -237,7 +238,8 @@ struct InstructorPendingStudentsController: RouteCollection {
         return StatusResponse(
             approvalStatus: profile.approvalStatus,
             profileComplete: profileComplete,
-            tcBodyText: profile.tcBodyText
+            tcBodyText: profile.tcBodyText,
+            mustChangePassword: user.mustChangePassword
         )
     }
 
@@ -339,7 +341,8 @@ struct InstructorPendingStudentsController: RouteCollection {
             passwordHash: hash,
             firstName: firstName,
             lastName: lastName.isEmpty ? nil : lastName,
-            role: "student"
+            role: "student",
+            mustChangePassword: true
         )
         try await user.save(on: req.db)
         let userID = try user.requireID()

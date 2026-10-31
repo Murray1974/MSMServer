@@ -48,7 +48,8 @@ struct AdminUserController: RouteCollection {
             passwordHash: hash,
             firstName: input.firstName,
             lastName: input.lastName,
-            role: input.role
+            role: input.role,
+            mustChangePassword: true
         )
         try await user.save(on: req.db)
 

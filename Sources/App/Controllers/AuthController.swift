@@ -59,6 +59,7 @@ struct AuthController: RouteCollection {
         let token: String
         let approvalStatus: String?
         let profileComplete: Bool?
+        let mustChangePassword: Bool
     }
 
     struct ForgotPasswordRequest: Content {
@@ -211,7 +212,7 @@ struct AuthController: RouteCollection {
             )
         }
 
-        return .init(token: raw, approvalStatus: "pending", profileComplete: true)
+        return .init(token: raw, approvalStatus: "pending", profileComplete: true, mustChangePassword: false)
     }
 
     /// POST /auth/send-verification-code
@@ -338,7 +339,7 @@ struct AuthController: RouteCollection {
                 && $0.tcAcceptedAt != nil && $0.eyesightConfirmedAt != nil
         }
 
-        return .init(token: raw, approvalStatus: profile?.approvalStatus, profileComplete: profileComplete)
+        return .init(token: raw, approvalStatus: profile?.approvalStatus, profileComplete: profileComplete, mustChangePassword: user.mustChangePassword)
     }
 
     /// POST /auth/logout
@@ -434,6 +435,7 @@ struct AuthController: RouteCollection {
         try await token.save(on: req.db)
 
         user.passwordHash = try Bcrypt.hash(input.newPassword)
+        user.mustChangePassword = false
         try await user.save(on: req.db)
 
         // Invalidate all existing session tokens so old sessions are booted.

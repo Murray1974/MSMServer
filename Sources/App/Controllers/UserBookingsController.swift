@@ -415,6 +415,7 @@ struct UserBookingsController: RouteCollection {
         try PasswordPolicy.validate(input.newPassword)
 
         user.passwordHash = try Bcrypt.hash(input.newPassword)
+        user.mustChangePassword = false
         try await user.save(on: req.db)
 
         // Revoke every other session (other devices) — but not the one making this

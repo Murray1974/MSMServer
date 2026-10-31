@@ -146,6 +146,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddDropoffCoordinatesToBooking())
     app.migrations.add(CreateLessonJourney())
     app.migrations.add(AddDrivingMetricsToLessonJourney())
+    app.migrations.add(AddMustChangePasswordToUser())
 
     try app.autoMigrate().wait()
 

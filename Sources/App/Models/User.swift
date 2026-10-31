@@ -45,15 +45,23 @@ final class User: Model, Content {
     @Field(key: "test_min_weeks")
     var testMinWeeks: Int
 
+    /// True when someone *other* than the account holder chose this password (instructor
+    /// create flows, or the pre-this-feature shared starter password) — forces the student
+    /// app to show a blocking "set a new password" screen until cleared. Self-chosen
+    /// passwords (register, forgot-password reset) leave this false.
+    @Field(key: "must_change_password")
+    var mustChangePassword: Bool
+
     init() {}
 
-    init(id: UUID? = nil, username: String, passwordHash: String, firstName: String? = nil, lastName: String? = nil, role: String = "student") {
+    init(id: UUID? = nil, username: String, passwordHash: String, firstName: String? = nil, lastName: String? = nil, role: String = "student", mustChangePassword: Bool = false) {
         self.id = id
         self.username = username
         self.passwordHash = passwordHash
         self.firstName = firstName
         self.lastName = lastName
         self.role = role
+        self.mustChangePassword = mustChangePassword
     }
 }
 
