@@ -49,9 +49,9 @@ struct FCMNotificationService: Sendable {
 
     // MARK: - Public API
 
-    func send(to fcmToken: String, title: String, body: String, badge: Int? = nil, data: [String: String]? = nil) async throws {
+    func send(to fcmToken: String, title: String, body: String, badge: Int? = nil, data: [String: String]? = nil, contentAvailable: Bool = false) async throws {
         let accessToken = try await fetchAccessToken()
-        try await sendMessage(to: fcmToken, title: title, body: body, badge: badge, data: data, accessToken: accessToken)
+        try await sendMessage(to: fcmToken, title: title, body: body, badge: badge, data: data, contentAvailable: contentAvailable, accessToken: accessToken)
     }
 
     // MARK: - Private
@@ -126,6 +126,11 @@ struct FCMNotificationService: Sendable {
                         let alert: Alert
                         let sound: String
                         let badge: Int?
+                        let contentAvailable: Int?
+                        enum CodingKeys: String, CodingKey {
+                            case alert, sound, badge
+                            case contentAvailable = "content-available"
+                        }
                     }
                     let aps: APS
                 }
@@ -141,14 +146,14 @@ struct FCMNotificationService: Sendable {
         let message: Message
     }
 
-    private func sendMessage(to fcmToken: String, title: String, body: String, badge: Int?, data: [String: String]?, accessToken: String) async throws {
+    private func sendMessage(to fcmToken: String, title: String, body: String, badge: Int?, data: [String: String]?, contentAvailable: Bool = false, accessToken: String) async throws {
         let payload = FCMPayload(message: .init(
             token: fcmToken,
             notification: .init(title: title, body: body),
             android: .init(notification: .init(sound: "default")),
             apns: .init(
                 headers: .init(apnsPushType: "alert", apnsPriority: "10"),
-                payload: .init(aps: .init(alert: .init(title: title, body: body), sound: "default", badge: badge))
+                payload: .init(aps: .init(alert: .init(title: title, body: body), sound: "default", badge: badge, contentAvailable: contentAvailable ? 1 : nil))
             ),
             data: data
         ))

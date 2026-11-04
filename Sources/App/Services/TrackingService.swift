@@ -159,11 +159,14 @@ struct TrackingService {
             if let lat = booking.dropoffLatitude { data["dropoffLatitude"] = String(lat) }
             if let lon = booking.dropoffLongitude { data["dropoffLongitude"] = String(lon) }
 
+            // contentAvailable wakes the app in the background to arm journey tracking
+            // immediately, rather than relying on the instructor tapping the banner.
             try? await fcm.send(
                 to: instructorToken,
                 title: "Location sharing started",
                 body: "Sharing your live location with \(student.displayName) for the next lesson.",
-                data: data
+                data: data,
+                contentAvailable: true
             )
         }
     }
