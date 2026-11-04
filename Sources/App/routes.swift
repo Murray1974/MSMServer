@@ -248,6 +248,15 @@ public func routes(_ app: Application) throws {
         return res
     }
 
+    // GET /account-deletion — static page linked from Google Play Console's Data safety
+    // declaration (required whenever an app supports account creation).
+    app.get("account-deletion") { req -> Response in
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "text/html; charset=utf-8")
+        res.body = .init(string: accountDeletionHTML)
+        return res
+    }
+
     // POST /stripe/webhook — unauthenticated (Stripe uses HMAC-SHA256 signatures, not Bearer tokens).
     // body: .collect ensures the raw bytes are buffered before the handler runs; required for
     // signature verification, which must see the exact bytes Stripe sent.
