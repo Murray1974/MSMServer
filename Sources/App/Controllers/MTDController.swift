@@ -21,15 +21,21 @@ struct MTDQuartersResponse: Content {
     let taxYear: Int
     let taxYearLabel: String
     let vehicleCostMethod: String?
+    let isDualControlVehicle: Bool?
     let quarters: [MTDQuarterRow]
 }
 
 struct VehicleCostMethodView: Content {
     let method: String?
+    let isDualControlVehicle: Bool?
 }
 
 struct SetVehicleCostMethodRequest: Content {
     let method: String
+}
+
+struct SetDualControlVehicleRequest: Content {
+    let isDualControlVehicle: Bool
 }
 
 /// Making Tax Digital support — quarterly income/expense summaries matching HMRC's standard
@@ -138,6 +144,7 @@ struct MTDController {
             taxYear: taxYear,
             taxYearLabel: "\(taxYear)/\(String(format: "%02d", (taxYear + 1) % 100))",
             vehicleCostMethod: method,
+            isDualControlVehicle: user.isDualControlVehicle,
             quarters: rows
         )
     }
@@ -146,7 +153,7 @@ struct MTDController {
 
     func getVehicleCostMethod(req: Request) async throws -> VehicleCostMethodView {
         let user = try req.auth.require(User.self)
-        return VehicleCostMethodView(method: user.vehicleCostMethod)
+        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
     }
 
     func setVehicleCostMethod(req: Request) async throws -> VehicleCostMethodView {
@@ -157,7 +164,15 @@ struct MTDController {
         }
         user.vehicleCostMethod = body.method
         try await user.save(on: req.db)
-        return VehicleCostMethodView(method: user.vehicleCostMethod)
+        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
+    }
+
+    func setDualControlVehicle(req: Request) async throws -> VehicleCostMethodView {
+        let user = try req.auth.require(User.self)
+        let body = try req.content.decode(SetDualControlVehicleRequest.self)
+        user.isDualControlVehicle = body.isDualControlVehicle
+        try await user.save(on: req.db)
+        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
     }
 
     // MARK: - GET /instructor/mtd/quarters/:index/export?taxYear=

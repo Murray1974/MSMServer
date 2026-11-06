@@ -59,6 +59,13 @@ final class User: Model, Content {
     @OptionalField(key: "vehicle_cost_method")
     var vehicleCostMethod: String?
 
+    /// Whether the instructor's vehicle has dual controls. HMRC excludes cars "designed for
+    /// commercial use, for example black cabs or dual control driving instructor cars" from
+    /// the simplified mileage scheme (BIM75005) — a dual-control vehicle must use actual
+    /// costs. `nil` means not yet set.
+    @OptionalField(key: "is_dual_control_vehicle")
+    var isDualControlVehicle: Bool?
+
     init() {}
 
     init(id: UUID? = nil, username: String, passwordHash: String, firstName: String? = nil, lastName: String? = nil, role: String = "student", mustChangePassword: Bool = false) {

@@ -2542,11 +2542,13 @@ public func routes(_ app: Application) throws {
     // GET  /instructor/mtd/quarters?taxYear=
     // GET  /instructor/mtd/vehicle-cost-method
     // POST /instructor/mtd/vehicle-cost-method
+    // POST /instructor/mtd/dual-control-vehicle
     // GET  /instructor/mtd/quarters/:index/export?taxYear=
     let mtd = MTDController()
     financeProtected.get("instructor",  "mtd", "quarters",                    use: mtd.quarters)
     financeProtected.get("instructor",  "mtd", "vehicle-cost-method",         use: mtd.getVehicleCostMethod)
     financeProtected.post("instructor", "mtd", "vehicle-cost-method",         use: mtd.setVehicleCostMethod)
+    financeProtected.post("instructor", "mtd", "dual-control-vehicle",        use: mtd.setDualControlVehicle)
     financeProtected.get("instructor",  "mtd", "quarters", ":index", "export", use: mtd.exportQuarterCSV)
 
     // GET  /instructor/student/:studentID/progress
