@@ -151,6 +151,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddIsDualControlVehicleToUser())
     app.migrations.add(AddEstimatedArrivalAtToTrackingSession())
     app.migrations.add(AddArrivalNotifiedToTrackingSession())
+    app.migrations.add(AddHomeLocationToInstructorSettings())
 
     try app.autoMigrate().wait()
 

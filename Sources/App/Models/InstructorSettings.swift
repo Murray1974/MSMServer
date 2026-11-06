@@ -41,6 +41,19 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
     @OptionalField(key: "profile_photo_path")
     var profilePhotoPath: String?
 
+    /// Centre + radius of a privacy zone (typically home) that live location tracking
+    /// won't reveal to the student — see POST /instructor/tracking/location. `nil`
+    /// latitude/longitude means the feature is off (today's behaviour: every ping is
+    /// revealed immediately). Radius defaults to 500m when unset but a centre is.
+    @OptionalField(key: "home_latitude")
+    var homeLatitude: Double?
+
+    @OptionalField(key: "home_longitude")
+    var homeLongitude: Double?
+
+    @OptionalField(key: "home_privacy_radius_metres")
+    var homePrivacyRadiusMetres: Double?
+
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 

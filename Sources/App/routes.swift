@@ -42,6 +42,9 @@ private struct InstructorSettingsView: Content {
     let vehicleMake: String?
     let vehicleModel: String?
     let vehicleColour: String?
+    let homeLatitude: Double?
+    let homeLongitude: Double?
+    let homePrivacyRadiusMetres: Double?
 
     init(_ settings: InstructorSettings) {
         self.currentHourlyRatePence = settings.currentHourlyRatePence
@@ -50,6 +53,9 @@ private struct InstructorSettingsView: Content {
         self.vehicleMake = settings.vehicleMake
         self.vehicleModel = settings.vehicleModel
         self.vehicleColour = settings.vehicleColour
+        self.homeLatitude = settings.homeLatitude
+        self.homeLongitude = settings.homeLongitude
+        self.homePrivacyRadiusMetres = settings.homePrivacyRadiusMetres
     }
 }
 
@@ -90,6 +96,10 @@ private struct StudentTrackingView: Content {
     let longitude: Double?
     let updatedAt: Date?
     let estimatedArrivalAt: Date?
+    /// True while the instructor is still inside their home privacy zone (see POST
+    /// /instructor/tracking/location) — `latitude`/`longitude` stay nil the whole time
+    /// this is true, since no position is ever stored for the student while it holds.
+    let isAwaitingDeparture: Bool
 }
 
 private struct LessonDiscountView: Content {
@@ -1733,6 +1743,14 @@ public func routes(_ app: Application) throws {
             let vehicleMake: String?
             let vehicleModel: String?
             let vehicleColour: String?
+            // Home privacy zone for live location tracking (see POST
+            // /instructor/tracking/location). Unlike the fields above, explicitly
+            // supports clearing: sending `clearHomeLocation: true` turns the feature
+            // off again, since a privacy control needs an undo, not just a set-once.
+            let homeLatitude: Double?
+            let homeLongitude: Double?
+            let homePrivacyRadiusMetres: Double?
+            let clearHomeLocation: Bool?
         }
         let input = try req.content.decode(Input.self)
 
@@ -1748,6 +1766,20 @@ public func routes(_ app: Application) throws {
         if let v = input.vehicleMake { settings.vehicleMake = v }
         if let v = input.vehicleModel { settings.vehicleModel = v }
         if let v = input.vehicleColour { settings.vehicleColour = v }
+        if input.clearHomeLocation == true {
+            settings.homeLatitude = nil
+            settings.homeLongitude = nil
+            settings.homePrivacyRadiusMetres = nil
+        } else {
+            if let v = input.homeLatitude { settings.homeLatitude = v }
+            if let v = input.homeLongitude { settings.homeLongitude = v }
+            if let v = input.homePrivacyRadiusMetres {
+                guard v > 0 else {
+                    throw Abort(.badRequest, reason: "homePrivacyRadiusMetres must be greater than zero")
+                }
+                settings.homePrivacyRadiusMetres = v
+            }
+        }
         try await settings.save(on: req.db)
 
         req.logger.notice("[Settings] Updated by \(instructor.username)")
@@ -1800,9 +1832,26 @@ public func routes(_ app: Application) throws {
         guard let session = try await currentActiveTrackingSession(on: req.db) else {
             return .noContent
         }
-        session.lastLatitude = input.latitude
-        session.lastLongitude = input.longitude
-        session.lastUpdatedAt = Date()
+
+        // Home privacy zone: while the instructor is still inside it, never store or
+        // reveal their raw position to the student at all — this is what stops a
+        // student who lives close by from seeing the live dot sitting at the
+        // instructor's house for the few minutes before they set off. Everything
+        // else (ETA, the arrival push below) still works as normal throughout.
+        let instructorSettings = try await InstructorSettings.current(on: req.db)
+        let isAwaitingDeparture: Bool
+        if let homeLat = instructorSettings.homeLatitude, let homeLon = instructorSettings.homeLongitude {
+            let radius = instructorSettings.homePrivacyRadiusMetres ?? 500
+            isAwaitingDeparture = haversineMetres((input.latitude, input.longitude), (homeLat, homeLon)) <= radius
+        } else {
+            isAwaitingDeparture = false
+        }
+
+        if !isAwaitingDeparture {
+            session.lastLatitude = input.latitude
+            session.lastLongitude = input.longitude
+            session.lastUpdatedAt = Date()
+        }
         // Only overwrite with a real value — the client reuses its last-computed ETA
         // on pings between MapKit recomputes, but still omits the field entirely if it
         // never got one (e.g. no pickup coordinates), so don't blow away a stale-but-
@@ -1815,6 +1864,8 @@ public func routes(_ app: Application) throws {
             // detect pickup arrival (for a dual purpose: starting its own GPS route
             // recording) — reusing it here keeps "arrived" meaning one consistent
             // thing across both features rather than two different arbitrary numbers.
+            // Deliberately independent of the home-zone check above — "arrived" can
+            // still fire even if, in some edge case, pickup itself sits inside it.
             if !session.arrivalNotified,
                let pickupLat = booking.pickupLatitude, let pickupLon = booking.pickupLongitude,
                haversineMetres((input.latitude, input.longitude), (pickupLat, pickupLon)) <= 100 {
@@ -1831,13 +1882,15 @@ public func routes(_ app: Application) throws {
                 }
             }
 
-            req.application.deliverLocationToStudent(
-                studentID: booking.$user.id,
-                latitude: input.latitude,
-                longitude: input.longitude,
-                updatedAt: session.lastUpdatedAt ?? Date(),
-                estimatedArrivalAt: session.estimatedArrivalAt
-            )
+            if !isAwaitingDeparture {
+                req.application.deliverLocationToStudent(
+                    studentID: booking.$user.id,
+                    latitude: input.latitude,
+                    longitude: input.longitude,
+                    updatedAt: session.lastUpdatedAt ?? Date(),
+                    estimatedArrivalAt: session.estimatedArrivalAt
+                )
+            }
         }
         try await session.save(on: req.db)
         return .ok
@@ -1910,7 +1963,10 @@ public func routes(_ app: Application) throws {
                 latitude: session.lastLatitude,
                 longitude: session.lastLongitude,
                 updatedAt: session.lastUpdatedAt,
-                estimatedArrivalAt: session.estimatedArrivalAt
+                estimatedArrivalAt: session.estimatedArrivalAt,
+                // No position has been revealed yet iff the instructor hasn't left
+                // their home privacy zone — see POST /instructor/tracking/location.
+                isAwaitingDeparture: session.lastLatitude == nil
             )
             return try await view.encodeResponse(for: req)
         }
