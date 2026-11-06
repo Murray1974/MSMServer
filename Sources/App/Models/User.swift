@@ -52,6 +52,13 @@ final class User: Model, Content {
     @Field(key: "must_change_password")
     var mustChangePassword: Bool
 
+    /// Which method this instructor claims vehicle costs under for Making Tax Digital —
+    /// `"actual"` (real fuel/MOT/insurance/etc. expenses) or `"simplified_mileage"` (HMRC's
+    /// 45p/25p per-mile allowance). HMRC only allows one method per vehicle, so this is a
+    /// single toggle rather than per-expense. `nil` means not yet chosen.
+    @OptionalField(key: "vehicle_cost_method")
+    var vehicleCostMethod: String?
+
     init() {}
 
     init(id: UUID? = nil, username: String, passwordHash: String, firstName: String? = nil, lastName: String? = nil, role: String = "student", mustChangePassword: Bool = false) {

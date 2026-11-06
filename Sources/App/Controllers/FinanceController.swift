@@ -310,16 +310,7 @@ struct FinanceController {
     /// net-income figure. Centralized here so the monthly/weekly breakdown below computes
     /// tax identically to the headline Tax Year figure — same bands, same rates.
     private func estimateTax(onNet net: Decimal) -> Decimal {
-        let personalAllowance = Decimal(12570)
-        let taxableIncome = max(Decimal(0), net - personalAllowance)
-        let incomeTax = taxableIncome * Decimal(0.20)
-
-        let lowerProfitsLimit = Decimal(12570)
-        let upperProfitsLimit = Decimal(50270)
-        let class4Basic = max(Decimal(0), min(net, upperProfitsLimit) - lowerProfitsLimit) * Decimal(0.06)
-        let class4Upper = max(Decimal(0), net - upperProfitsLimit) * Decimal(0.02)
-
-        return incomeTax + class4Basic + class4Upper
+        TaxEstimator.estimate(onNet: net)
     }
 
     struct WeeklyTaxRow: Content {

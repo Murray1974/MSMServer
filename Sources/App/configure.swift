@@ -147,6 +147,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateLessonJourney())
     app.migrations.add(AddDrivingMetricsToLessonJourney())
     app.migrations.add(AddMustChangePasswordToUser())
+    app.migrations.add(AddVehicleCostMethodToUser())
 
     try app.autoMigrate().wait()
 

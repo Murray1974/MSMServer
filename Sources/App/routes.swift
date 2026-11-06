@@ -2538,6 +2538,17 @@ public func routes(_ app: Application) throws {
     financeProtected.post("instructor", "finance", "ledger", ":entryID", "void",   use: finance.voidEntry)
     financeProtected.post("instructor", "finance", "ledger", ":entryID", "refund", use: finance.refundEntry)
 
+    // Making Tax Digital — quarterly summaries, vehicle cost method toggle, CSV export
+    // GET  /instructor/mtd/quarters?taxYear=
+    // GET  /instructor/mtd/vehicle-cost-method
+    // POST /instructor/mtd/vehicle-cost-method
+    // GET  /instructor/mtd/quarters/:index/export?taxYear=
+    let mtd = MTDController()
+    financeProtected.get("instructor",  "mtd", "quarters",                    use: mtd.quarters)
+    financeProtected.get("instructor",  "mtd", "vehicle-cost-method",         use: mtd.getVehicleCostMethod)
+    financeProtected.post("instructor", "mtd", "vehicle-cost-method",         use: mtd.setVehicleCostMethod)
+    financeProtected.get("instructor",  "mtd", "quarters", ":index", "export", use: mtd.exportQuarterCSV)
+
     // GET  /instructor/student/:studentID/progress
     // PATCH /instructor/student/:studentID/progress
     financeProtected.get("instructor",   "student", ":studentID", "progress", use: progressController.instructorGetProgress)
