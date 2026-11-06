@@ -152,6 +152,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddEstimatedArrivalAtToTrackingSession())
     app.migrations.add(AddArrivalNotifiedToTrackingSession())
     app.migrations.add(AddHomeLocationToInstructorSettings())
+    app.migrations.add(FixLessonJourneyArrayColumnTypes())
 
     try app.autoMigrate().wait()
 
