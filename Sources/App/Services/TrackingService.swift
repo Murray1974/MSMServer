@@ -69,14 +69,26 @@ struct TrackingService {
         }
         guard !bookings.isEmpty else { return }
 
+        // Keyed on (bookingID, endsAt) rather than just bookingID — a booking row can be
+        // rescheduled to a different lesson occurrence while keeping the same id (e.g. a
+        // recurring weekly slot), and TrackingSession.endsAt mirrors whichever lesson's
+        // endsAt was current when that session was created. Deduping on bookingID alone
+        // meant a booking that had ever been tracked once was permanently blocked from
+        // ever being tracked again for any later occurrence — confirmed in production:
+        // a booking tracked on 5 Nov never activated for its rescheduled 6 Nov 14:00
+        // lesson despite being well within the 10-minute activation window.
+        struct TrackedOccurrence: Hashable {
+            let bookingID: UUID
+            let endsAt: Date
+        }
         let bookingIDs = bookings.compactMap { $0.id }
-        let alreadyTracked: Set<UUID>
+        let alreadyTracked: Set<TrackedOccurrence>
         do {
             alreadyTracked = Set(
                 try await TrackingSession.query(on: db)
                     .filter(\.$bookingID ~~ bookingIDs)
                     .all()
-                    .map { $0.bookingID }
+                    .map { TrackedOccurrence(bookingID: $0.bookingID, endsAt: $0.endsAt) }
             )
         } catch {
             app.logger.warning("[Tracking] Failed to query existing sessions: \(error)")
@@ -84,7 +96,9 @@ struct TrackingService {
         }
 
         for booking in bookings {
-            guard let bookingID = booking.id, !alreadyTracked.contains(bookingID) else { continue }
+            guard let bookingID = booking.id else { continue }
+            let occurrence = TrackedOccurrence(bookingID: bookingID, endsAt: booking.lesson.endsAt)
+            guard !alreadyTracked.contains(occurrence) else { continue }
             await activate(booking: booking, on: db)
         }
     }
