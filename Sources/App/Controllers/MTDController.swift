@@ -20,30 +20,20 @@ struct MTDQuarterRow: Content {
 struct MTDQuartersResponse: Content {
     let taxYear: Int
     let taxYearLabel: String
-    let vehicleCostMethod: String?
-    let isDualControlVehicle: Bool?
     let quarters: [MTDQuarterRow]
 }
 
-struct VehicleCostMethodView: Content {
-    let method: String?
-    let isDualControlVehicle: Bool?
-}
-
-struct SetVehicleCostMethodRequest: Content {
-    let method: String
-}
-
-struct SetDualControlVehicleRequest: Content {
-    let isDualControlVehicle: Bool
-}
-
 /// Making Tax Digital support — quarterly income/expense summaries matching HMRC's standard
-/// update periods, a vehicle-cost-method toggle (actual costs vs simplified mileage — HMRC
-/// only allows one per vehicle), and a per-quarter CSV export. Deliberately does not talk to
-/// HMRC's own API (OAuth/fraud-prevention headers/software recognition) — the CSV export is
-/// the practical bridge to existing cheap bridging software. See
-/// `peaceful-meandering-whisper.md` for the full rationale.
+/// update periods, and a per-quarter CSV export. Deliberately does not talk to HMRC's own API
+/// (OAuth/fraud-prevention headers/software recognition) — the CSV export is the practical
+/// bridge to existing cheap bridging software. See `peaceful-meandering-whisper.md` for the
+/// full rationale.
+///
+/// Expenses always use actual costs. HMRC excludes "cars designed for commercial use, for
+/// example black cabs or dual control driving instructor cars" from the simplified mileage
+/// scheme (BIM75005) — every instructor car this app serves has dual controls, so there's no
+/// real choice to offer. `simplifiedMileageAllowance` is still returned per quarter purely as
+/// an informational comparison figure for the client.
 struct MTDController {
 
     // MARK: - GET /instructor/mtd/quarters?taxYear=
@@ -97,10 +87,8 @@ struct MTDController {
             return Decimal(Self.hmrcMileageAllowance(for: miles))
         }
 
-        let method = user.vehicleCostMethod
         func cumulativeNet(asOf date: Date) -> Decimal {
-            let expenses = method == "simplified_mileage" ? cumulativeMileageAllowance(asOf: date) : cumulativeActualExpenses(asOf: date)
-            return cumulativeIncome(asOf: date) - expenses
+            cumulativeIncome(asOf: date) - cumulativeActualExpenses(asOf: date)
         }
 
         var previousIncome = Decimal.zero
@@ -119,7 +107,6 @@ struct MTDController {
             let quarterActual = cumActual - previousActual
             let quarterMileage = cumMileage - previousMileage
             let quarterTax = cumTax - previousTax
-            let quarterExpensesUnderActiveMethod = method == "simplified_mileage" ? quarterMileage : quarterActual
 
             rows.append(MTDQuarterRow(
                 index: boundary.index,
@@ -130,7 +117,7 @@ struct MTDController {
                 income: quarterIncome,
                 actualCostExpenses: quarterActual,
                 simplifiedMileageAllowance: quarterMileage,
-                netProfit: quarterIncome - quarterExpensesUnderActiveMethod,
+                netProfit: quarterIncome - quarterActual,
                 estimatedTax: quarterTax
             ))
 
@@ -143,36 +130,8 @@ struct MTDController {
         return MTDQuartersResponse(
             taxYear: taxYear,
             taxYearLabel: "\(taxYear)/\(String(format: "%02d", (taxYear + 1) % 100))",
-            vehicleCostMethod: method,
-            isDualControlVehicle: user.isDualControlVehicle,
             quarters: rows
         )
-    }
-
-    // MARK: - Vehicle cost method
-
-    func getVehicleCostMethod(req: Request) async throws -> VehicleCostMethodView {
-        let user = try req.auth.require(User.self)
-        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
-    }
-
-    func setVehicleCostMethod(req: Request) async throws -> VehicleCostMethodView {
-        let user = try req.auth.require(User.self)
-        let body = try req.content.decode(SetVehicleCostMethodRequest.self)
-        guard ["actual", "simplified_mileage"].contains(body.method) else {
-            throw Abort(.badRequest, reason: "method must be 'actual' or 'simplified_mileage'")
-        }
-        user.vehicleCostMethod = body.method
-        try await user.save(on: req.db)
-        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
-    }
-
-    func setDualControlVehicle(req: Request) async throws -> VehicleCostMethodView {
-        let user = try req.auth.require(User.self)
-        let body = try req.content.decode(SetDualControlVehicleRequest.self)
-        user.isDualControlVehicle = body.isDualControlVehicle
-        try await user.save(on: req.db)
-        return VehicleCostMethodView(method: user.vehicleCostMethod, isDualControlVehicle: user.isDualControlVehicle)
     }
 
     // MARK: - GET /instructor/mtd/quarters/:index/export?taxYear=
