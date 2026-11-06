@@ -155,41 +155,51 @@ struct AuthController: RouteCollection {
                 ? nil
                 : input.lastName.trimmingCharacters(in: .whitespaces)
         )
-        try await user.save(on: req.db)
-        let userID = try user.requireID()
 
         let now = Date()
-        let profile = StudentProfile(
-            userID: userID,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            mobile: input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines),
-            email: email,
-            addressLine1: input.addressLine1,
-            addressLine2: input.addressLine2,
-            city: input.city,
-            postcode: input.postcode,
-            county: input.county,
-            provisionalLicenceNumber: input.provisionalLicenceNumber,
-            licenceExpiryDate: input.licenceExpiryDate,
-            theoryCertificateNumber: input.theoryCertificateNumber,
-            hourlyRatePence: try await InstructorSettings.currentRatePence(on: req.db),
-            medicalConditions: input.medicalConditions,
-            theoryTestPassed: input.theoryTestPassed ?? false,
-            theoryTestDate: input.theoryTestDate,
-            tcAcceptedAt: now,
-            tcVersion: input.tcVersion,
-            tcBodyText: input.tcBodyText,
-            gdprConsentAt: input.gdprConsent ? now : nil,
-            dashcamConsentAt: input.dashcamConsent ? now : nil,
-            socialMediaOptIn: input.socialMediaOptIn,
-            eyesightConfirmedAt: input.eyesightConfirmed ? now : nil,
-            dateOfBirth: input.dateOfBirth,
-            transmissionPreference: input.transmissionPreference,
-            previousHours: input.previousHours,
-            approvalStatus: "pending"
-        )
-        try await profile.save(on: req.db)
+        let defaultRatePence = try await InstructorSettings.currentRatePence(on: req.db)
+
+        // User + StudentProfile must land together — a crash between two separate saves
+        // (confirmed in production: 13 accounts ended up with a User row and no
+        // StudentProfile, silently breaking payment presets and pickup-address defaults)
+        // left real orphaned accounts. See BackfillMissingStudentProfiles.swift.
+        try await req.db.transaction { db in
+            try await user.save(on: db)
+            let userID = try user.requireID()
+
+            let profile = StudentProfile(
+                userID: userID,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                mobile: input.mobile?.trimmingCharacters(in: .whitespacesAndNewlines),
+                email: email,
+                addressLine1: input.addressLine1,
+                addressLine2: input.addressLine2,
+                city: input.city,
+                postcode: input.postcode,
+                county: input.county,
+                provisionalLicenceNumber: input.provisionalLicenceNumber,
+                licenceExpiryDate: input.licenceExpiryDate,
+                theoryCertificateNumber: input.theoryCertificateNumber,
+                hourlyRatePence: defaultRatePence,
+                medicalConditions: input.medicalConditions,
+                theoryTestPassed: input.theoryTestPassed ?? false,
+                theoryTestDate: input.theoryTestDate,
+                tcAcceptedAt: now,
+                tcVersion: input.tcVersion,
+                tcBodyText: input.tcBodyText,
+                gdprConsentAt: input.gdprConsent ? now : nil,
+                dashcamConsentAt: input.dashcamConsent ? now : nil,
+                socialMediaOptIn: input.socialMediaOptIn,
+                eyesightConfirmedAt: input.eyesightConfirmed ? now : nil,
+                dateOfBirth: input.dateOfBirth,
+                transmissionPreference: input.transmissionPreference,
+                previousHours: input.previousHours,
+                approvalStatus: "pending"
+            )
+            try await profile.save(on: db)
+        }
+        let userID = try user.requireID()
 
         let (raw, token) = try SessionToken.generate(for: user, ttl: 60 * 60 * 24 * 30)
         try await token.save(on: req.db)
@@ -200,7 +210,7 @@ struct AuthController: RouteCollection {
         if let instructor = try? await User.query(on: req.db).filter(\.$role == "instructor").first(),
            let fcmToken = instructor.fcmToken,
            let fcm = FCMNotificationService(app: req.application) {
-            let name = [profile.firstName, profile.lastName].compactMap { $0 }.joined(separator: " ")
+            let name = [user.firstName, user.lastName].compactMap { $0 }.joined(separator: " ")
             let pendingCount = try? await StudentProfile.query(on: req.db)
                 .filter(\.$approvalStatus == "pending")
                 .count()

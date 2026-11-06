@@ -344,18 +344,25 @@ struct InstructorPendingStudentsController: RouteCollection {
             role: "student",
             mustChangePassword: true
         )
-        try await user.save(on: req.db)
-        let userID = try user.requireID()
+        let defaultRatePence = try await InstructorSettings.currentRatePence(on: req.db)
 
-        let profile = StudentProfile(
-            userID: userID,
-            firstName: firstName,
-            lastName: lastName.isEmpty ? nil : lastName,
-            mobile: (mobile?.isEmpty ?? true) ? nil : mobile,
-            email: email,
-            hourlyRatePence: try await InstructorSettings.currentRatePence(on: req.db)
-        )
-        try await profile.save(on: req.db)
+        // See BackfillMissingStudentProfiles.swift — User+StudentProfile must land
+        // together, or a mid-request failure orphans a User with no profile.
+        try await req.db.transaction { db in
+            try await user.save(on: db)
+            let userID = try user.requireID()
+
+            let profile = StudentProfile(
+                userID: userID,
+                firstName: firstName,
+                lastName: lastName.isEmpty ? nil : lastName,
+                mobile: (mobile?.isEmpty ?? true) ? nil : mobile,
+                email: email,
+                hourlyRatePence: defaultRatePence
+            )
+            try await profile.save(on: db)
+        }
+        let userID = try user.requireID()
 
         req.logger.notice("[Students] Instructor-created account: '\(email)'")
         return CreateStudentAccountResponse(userID: userID, email: email)
