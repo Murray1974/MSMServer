@@ -154,6 +154,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddHomeLocationToInstructorSettings())
     app.migrations.add(FixLessonJourneyArrayColumnTypes())
     app.migrations.add(BackfillMissingStudentProfiles())
+    app.migrations.add(AuditMissingHourlyRatePresets())
 
     try app.autoMigrate().wait()
 
