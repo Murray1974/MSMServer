@@ -150,6 +150,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddVehicleCostMethodToUser())
     app.migrations.add(AddIsDualControlVehicleToUser())
     app.migrations.add(AddEstimatedArrivalAtToTrackingSession())
+    app.migrations.add(AddArrivalNotifiedToTrackingSession())
 
     try app.autoMigrate().wait()
 

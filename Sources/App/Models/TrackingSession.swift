@@ -45,6 +45,12 @@ final class TrackingSession: Model, Content, @unchecked Sendable {
     @OptionalField(key: "estimated_arrival_at")
     var estimatedArrivalAt: Date?
 
+    /// Set once the instructor's reported position first comes within the arrival
+    /// geofence of the pickup address, so the "your instructor has arrived" push only
+    /// fires once per session rather than on every subsequent ping while parked there.
+    @Field(key: "arrival_notified")
+    var arrivalNotified: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -62,5 +68,6 @@ final class TrackingSession: Model, Content, @unchecked Sendable {
         self.bookingID = bookingID
         self.startedAt = startedAt
         self.endsAt = endsAt
+        self.arrivalNotified = false
     }
 }

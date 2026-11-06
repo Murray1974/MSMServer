@@ -1810,9 +1810,27 @@ public func routes(_ app: Application) throws {
         if let estimatedArrivalAt = input.estimatedArrivalAt {
             session.estimatedArrivalAt = estimatedArrivalAt
         }
-        try await session.save(on: req.db)
-
         if let booking = try? await Booking.find(session.bookingID, on: req.db) {
+            // Same 100m radius JourneyTrackingManager already uses client-side to
+            // detect pickup arrival (for a dual purpose: starting its own GPS route
+            // recording) — reusing it here keeps "arrived" meaning one consistent
+            // thing across both features rather than two different arbitrary numbers.
+            if !session.arrivalNotified,
+               let pickupLat = booking.pickupLatitude, let pickupLon = booking.pickupLongitude,
+               haversineMetres((input.latitude, input.longitude), (pickupLat, pickupLon)) <= 100 {
+                session.arrivalNotified = true
+                if let student = try? await booking.$user.get(on: req.db),
+                   let studentToken = student.fcmToken,
+                   let fcm = FCMNotificationService(app: req.application) {
+                    try? await fcm.send(
+                        to: studentToken,
+                        title: "Your instructor has arrived",
+                        body: "They're at the pickup location now.",
+                        data: ["type": "instructor_arrived", "bookingID": session.bookingID.uuidString]
+                    )
+                }
+            }
+
             req.application.deliverLocationToStudent(
                 studentID: booking.$user.id,
                 latitude: input.latitude,
@@ -1821,6 +1839,7 @@ public func routes(_ app: Application) throws {
                 estimatedArrivalAt: session.estimatedArrivalAt
             )
         }
+        try await session.save(on: req.db)
         return .ok
     }
 
