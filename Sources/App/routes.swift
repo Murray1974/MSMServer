@@ -83,6 +83,7 @@ private struct StudentTrackingView: Content {
     let bookingID: UUID
     let startedAt: Date
     let endsAt: Date
+    let pickupAddress: String?
     let pickupLatitude: Double?
     let pickupLongitude: Double?
     let latitude: Double?
@@ -1884,6 +1885,7 @@ public func routes(_ app: Application) throws {
                 bookingID: session.bookingID,
                 startedAt: session.startedAt,
                 endsAt: session.endsAt,
+                pickupAddress: booking.pickupLocation,
                 pickupLatitude: booking.pickupLatitude,
                 pickupLongitude: booking.pickupLongitude,
                 latitude: session.lastLatitude,
