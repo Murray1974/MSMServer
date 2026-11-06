@@ -442,13 +442,16 @@ extension Application {
 
     /// Live instructor-location-tracking push — sent on every location ping while a
     /// TrackingSession is active for this student's booking.
-    func deliverLocationToStudent(studentID: UUID, latitude: Double, longitude: Double, updatedAt: Date) {
-        let payload: [String: Any] = [
+    func deliverLocationToStudent(studentID: UUID, latitude: Double, longitude: Double, updatedAt: Date, estimatedArrivalAt: Date? = nil) {
+        var payload: [String: Any] = [
             "type": "instructor_location",
             "latitude": latitude,
             "longitude": longitude,
             "updatedAt": ISO8601DateFormatter().string(from: updatedAt)
         ]
+        if let estimatedArrivalAt {
+            payload["estimatedArrivalAt"] = ISO8601DateFormatter().string(from: estimatedArrivalAt)
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8) else { return }
         let live = (msmStudentSockets[studentID] ?? []).filter { !$0.isClosed }

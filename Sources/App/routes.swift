@@ -88,6 +88,7 @@ private struct StudentTrackingView: Content {
     let latitude: Double?
     let longitude: Double?
     let updatedAt: Date?
+    let estimatedArrivalAt: Date?
 }
 
 private struct LessonDiscountView: Content {
@@ -1786,6 +1787,7 @@ public func routes(_ app: Application) throws {
     struct TrackingLocationInput: Decodable {
         let latitude: Double
         let longitude: Double
+        let estimatedArrivalAt: Date?
     }
 
     // POST /instructor/tracking/location — a location ping from the instructor's phone.
@@ -1800,6 +1802,13 @@ public func routes(_ app: Application) throws {
         session.lastLatitude = input.latitude
         session.lastLongitude = input.longitude
         session.lastUpdatedAt = Date()
+        // Only overwrite with a real value — the client reuses its last-computed ETA
+        // on pings between MapKit recomputes, but still omits the field entirely if it
+        // never got one (e.g. no pickup coordinates), so don't blow away a stale-but-
+        // still-useful existing value with nil in that case.
+        if let estimatedArrivalAt = input.estimatedArrivalAt {
+            session.estimatedArrivalAt = estimatedArrivalAt
+        }
         try await session.save(on: req.db)
 
         if let booking = try? await Booking.find(session.bookingID, on: req.db) {
@@ -1807,7 +1816,8 @@ public func routes(_ app: Application) throws {
                 studentID: booking.$user.id,
                 latitude: input.latitude,
                 longitude: input.longitude,
-                updatedAt: session.lastUpdatedAt ?? Date()
+                updatedAt: session.lastUpdatedAt ?? Date(),
+                estimatedArrivalAt: session.estimatedArrivalAt
             )
         }
         return .ok
@@ -1878,7 +1888,8 @@ public func routes(_ app: Application) throws {
                 pickupLongitude: booking.pickupLongitude,
                 latitude: session.lastLatitude,
                 longitude: session.lastLongitude,
-                updatedAt: session.lastUpdatedAt
+                updatedAt: session.lastUpdatedAt,
+                estimatedArrivalAt: session.estimatedArrivalAt
             )
             return try await view.encodeResponse(for: req)
         }

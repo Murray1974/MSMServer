@@ -39,6 +39,12 @@ final class TrackingSession: Model, Content, @unchecked Sendable {
     @OptionalField(key: "last_updated_at")
     var lastUpdatedAt: Date?
 
+    /// Drive-time ETA to the pickup address, computed client-side by the instructor
+    /// app via MapKit routing and sent along with each location ping — absolute
+    /// timestamp rather than a duration so it doesn't go stale between pings.
+    @OptionalField(key: "estimated_arrival_at")
+    var estimatedArrivalAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 

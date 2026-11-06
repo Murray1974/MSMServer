@@ -149,6 +149,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddMustChangePasswordToUser())
     app.migrations.add(AddVehicleCostMethodToUser())
     app.migrations.add(AddIsDualControlVehicleToUser())
+    app.migrations.add(AddEstimatedArrivalAtToTrackingSession())
 
     try app.autoMigrate().wait()
 
