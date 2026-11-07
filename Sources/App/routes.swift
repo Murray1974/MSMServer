@@ -45,6 +45,8 @@ private struct InstructorSettingsView: Content {
     let homeLatitude: Double?
     let homeLongitude: Double?
     let homePrivacyRadiusMetres: Double?
+    let facebookURL: String?
+    let youtubeURL: String?
 
     init(_ settings: InstructorSettings) {
         self.currentHourlyRatePence = settings.currentHourlyRatePence
@@ -56,6 +58,8 @@ private struct InstructorSettingsView: Content {
         self.homeLatitude = settings.homeLatitude
         self.homeLongitude = settings.homeLongitude
         self.homePrivacyRadiusMetres = settings.homePrivacyRadiusMetres
+        self.facebookURL = settings.facebookURL
+        self.youtubeURL = settings.youtubeURL
     }
 }
 
@@ -266,6 +270,122 @@ public func routes(_ app: Application) throws {
         let res = Response(status: .ok)
         res.headers.replaceOrAdd(name: .contentType, value: "text/html; charset=utf-8")
         res.body = .init(string: accountDeletionHTML)
+        return res
+    }
+
+    // GET /card — public (unauthenticated) digital business card, replacing the
+    // third-party DigitalBusinessCard.com page. The QR code shown on the student app's
+    // "Your instructor" screen encodes this URL, so an existing student can show it to a
+    // prospective new client — their phone's camera opens it directly, no app required.
+    // Unlike GET /student/instructor-info, this deliberately DOES show the current hourly
+    // rate: here the audience is a prospective client being quoted a price, not an
+    // existing student. Pulls live from InstructorSettings, so it never goes stale when
+    // the rate changes in Settings → Pricing.
+    app.get("card") { req async throws -> Response in
+        let settings = try await InstructorSettings.current(on: req.db)
+        let instructorUser = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()
+        let name = instructorUser?.displayName ?? "Your Instructor"
+        let rate = String(format: "£%.2f", Double(settings.currentHourlyRatePence) / 100)
+
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+
+        var linksHTML = ""
+        if let fb = settings.facebookURL, !fb.isEmpty {
+            linksHTML += "<a class=\"social\" href=\"\(esc(fb))\">Facebook</a>"
+        }
+        if let yt = settings.youtubeURL, !yt.isEmpty {
+            linksHTML += "<a class=\"social\" href=\"\(esc(yt))\">YouTube</a>"
+        }
+        var callHTML = ""
+        if let phone = settings.contactPhone, !phone.isEmpty {
+            callHTML = "<a class=\"btn secondary\" href=\"tel:\(esc(phone))\">Call</a>"
+        }
+
+        let html = """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>\(esc(name)) — Murray School of Motoring</title>
+        <style>
+          body { margin: 0; background: #0d0d0d; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; justify-content: center; padding: 24px 16px; }
+          .card { background: #fff; border-radius: 20px; max-width: 360px; width: 100%; padding: 28px 24px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+          .avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; background: #ddd; margin-bottom: 14px; }
+          h1 { font-size: 22px; margin: 0 0 4px; color: #111; }
+          .headline { color: #666; font-size: 14px; margin: 0 0 18px; }
+          .rate { display: inline-block; background: #e9f9ee; color: #1a7f3c; font-weight: 700; font-size: 20px; padding: 8px 20px; border-radius: 12px; margin-bottom: 20px; }
+          .rate span { display: block; font-size: 11px; font-weight: 600; color: #4a9c64; text-transform: uppercase; letter-spacing: 0.04em; }
+          .btn { display: block; background: #111; color: #fff; text-decoration: none; font-weight: 600; padding: 13px; border-radius: 12px; margin-bottom: 10px; }
+          .btn.secondary { background: #f1f1f1; color: #111; }
+          .social { display: inline-block; margin: 4px 10px; color: #1a56db; text-decoration: none; font-weight: 600; font-size: 14px; }
+        </style>
+        </head>
+        <body>
+          <div class="card">
+            <img class="avatar" src="/card/photo" onerror="this.style.display='none'">
+            <h1>\(esc(name))</h1>
+            <p class="headline">Driving Instructor at Murray School of Motoring</p>
+            <div class="rate"><span>Lesson rate</span>\(rate) / hr</div>
+            <a class="btn" href="/card/vcard">Save Contact</a>
+            \(callHTML)
+            <div>\(linksHTML)</div>
+          </div>
+        </body>
+        </html>
+        """
+
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "text/html; charset=utf-8")
+        res.body = .init(string: html)
+        return res
+    }
+
+    // GET /card/photo — public passthrough of the instructor's profile photo, reusing
+    // the same controller method already used by the authenticated student/finance
+    // routes below (it does its own nil-check internally; no auth logic to duplicate).
+    app.get("card", "photo", use: DocumentController().getInstructorProfilePhoto)
+
+    // GET /card/vcard — "Save Contact" download for the card above. Standard vCard so
+    // it opens straight into Contacts on iOS/Android without needing the MSM app.
+    app.get("card", "vcard") { req async throws -> Response in
+        let settings = try await InstructorSettings.current(on: req.db)
+        let instructorUser = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()
+        let name = instructorUser?.displayName ?? "Your Instructor"
+        let rate = String(format: "£%.2f", Double(settings.currentHourlyRatePence) / 100)
+
+        var lines = [
+            "BEGIN:VCARD",
+            "VERSION:3.0",
+            "FN:\(name)",
+            "ORG:Murray School of Motoring",
+            "TITLE:Driving Instructor"
+        ]
+        if let phone = settings.contactPhone, !phone.isEmpty {
+            lines.append("TEL;TYPE=CELL:\(phone)")
+        }
+        if let fb = settings.facebookURL, !fb.isEmpty {
+            lines.append("URL;TYPE=Facebook:\(fb)")
+        }
+        if let yt = settings.youtubeURL, !yt.isEmpty {
+            lines.append("URL;TYPE=YouTube:\(yt)")
+        }
+        lines.append("NOTE:Current lesson rate: \(rate)/hr")
+        lines.append("END:VCARD")
+
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "text/vcard; charset=utf-8")
+        res.headers.replaceOrAdd(name: .contentDisposition, value: "attachment; filename=\"\(name).vcf\"")
+        res.body = .init(string: lines.joined(separator: "\r\n"))
         return res
     }
 
@@ -1743,6 +1863,10 @@ public func routes(_ app: Application) throws {
             let vehicleMake: String?
             let vehicleModel: String?
             let vehicleColour: String?
+            // Shown on the public digital business card (GET /card), not the in-app
+            // "Your instructor" screen.
+            let facebookURL: String?
+            let youtubeURL: String?
             // Home privacy zone for live location tracking (see POST
             // /instructor/tracking/location). Unlike the fields above, explicitly
             // supports clearing: sending `clearHomeLocation: true` turns the feature
@@ -1766,6 +1890,8 @@ public func routes(_ app: Application) throws {
         if let v = input.vehicleMake { settings.vehicleMake = v }
         if let v = input.vehicleModel { settings.vehicleModel = v }
         if let v = input.vehicleColour { settings.vehicleColour = v }
+        if let v = input.facebookURL { settings.facebookURL = v }
+        if let v = input.youtubeURL { settings.youtubeURL = v }
         if input.clearHomeLocation == true {
             settings.homeLatitude = nil
             settings.homeLongitude = nil

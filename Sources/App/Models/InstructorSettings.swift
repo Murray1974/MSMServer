@@ -41,6 +41,14 @@ final class InstructorSettings: Model, Content, @unchecked Sendable {
     @OptionalField(key: "profile_photo_path")
     var profilePhotoPath: String?
 
+    /// Shown on the public digital business card (GET /card) alongside the current
+    /// hourly rate — not surfaced on the in-app "Your instructor" screen.
+    @OptionalField(key: "facebook_url")
+    var facebookURL: String?
+
+    @OptionalField(key: "youtube_url")
+    var youtubeURL: String?
+
     /// Centre + radius of a privacy zone (typically home) that live location tracking
     /// won't reveal to the student — see POST /instructor/tracking/location. `nil`
     /// latitude/longitude means the feature is off (today's behaviour: every ping is
