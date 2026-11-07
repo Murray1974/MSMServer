@@ -158,6 +158,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AuditDanielMeredith())
     app.migrations.add(AuditAllStudentAccounts())
     app.migrations.add(ListAllStudentNamesAndStatus())
+    app.migrations.add(CorrectStudentStatusMisclassifications())
 
     try app.autoMigrate().wait()
 
