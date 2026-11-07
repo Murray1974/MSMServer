@@ -160,6 +160,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(ListAllStudentNamesAndStatus())
     app.migrations.add(CorrectStudentStatusMisclassifications())
     app.migrations.add(CorrectOwnCarTestPasses())
+    app.migrations.add(VerifyStatusCorrections())
 
     try app.autoMigrate().wait()
 
