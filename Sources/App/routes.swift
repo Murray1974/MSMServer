@@ -296,17 +296,30 @@ public func routes(_ app: Application) throws {
                 .replacingOccurrences(of: "\"", with: "&quot;")
         }
 
+        let facebookIcon = """
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="#1877F2"><path d="M22 12c0-5.52-4.48-10-10-10S2 6.48 2 12c0 4.84 3.44 8.87 8 9.8V15H8v-3h2V9.5C10 7.57 11.57 6 13.5 6H16v3h-2c-.55 0-1 .45-1 1v2h3v3h-3v6.95c5.05-.5 9-4.76 9-9.95z"/></svg>
+        """
+        let youtubeIcon = """
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="#FF0000"><path d="M23.5 6.2c-.3-1.1-1.1-1.9-2.2-2.2C19.3 3.5 12 3.5 12 3.5s-7.3 0-9.3.5c-1.1.3-1.9 1.1-2.2 2.2C0 8.2 0 12 0 12s0 3.8.5 5.8c.3 1.1 1.1 1.9 2.2 2.2 2 .5 9.3.5 9.3.5s7.3 0 9.3-.5c1.1-.3 1.9-1.1 2.2-2.2.5-2 .5-5.8.5-5.8s0-3.8-.5-5.8zM9.6 15.6V8.4l6.4 3.6-6.4 3.6z"/></svg>
+        """
+
         var linksHTML = ""
         if let fb = settings.facebookURL, !fb.isEmpty {
-            linksHTML += "<a class=\"social\" href=\"\(esc(fb))\">Facebook</a>"
+            linksHTML += "<a class=\"social\" href=\"\(esc(fb))\">\(facebookIcon)Facebook</a>"
         }
         if let yt = settings.youtubeURL, !yt.isEmpty {
-            linksHTML += "<a class=\"social\" href=\"\(esc(yt))\">YouTube</a>"
+            linksHTML += "<a class=\"social\" href=\"\(esc(yt))\">\(youtubeIcon)YouTube</a>"
         }
         var callHTML = ""
         if let phone = settings.contactPhone, !phone.isEmpty {
             callHTML = "<a class=\"btn secondary\" href=\"tel:\(esc(phone))\">Call</a>"
         }
+
+        // Google Play's listing URL only needs the package name, so it's live now even
+        // ahead of publish (it'll 404 on Google's side until the app goes live). The App
+        // Store needs a numeric app ID assigned in App Store Connect — not known yet, so
+        // that badge stays a disabled "Coming soon" placeholder until it's supplied.
+        let playStoreURL = "https://play.google.com/store/apps/details?id=com.michaelmurray.msmstudent"
 
         let html = """
         <!doctype html>
@@ -325,7 +338,11 @@ public func routes(_ app: Application) throws {
           .rate span { display: block; font-size: 11px; font-weight: 600; color: #4a9c64; text-transform: uppercase; letter-spacing: 0.04em; }
           .btn { display: block; background: #111; color: #fff; text-decoration: none; font-weight: 600; padding: 13px; border-radius: 12px; margin-bottom: 10px; }
           .btn.secondary { background: #f1f1f1; color: #111; }
-          .social { display: inline-block; margin: 4px 10px; color: #1a56db; text-decoration: none; font-weight: 600; font-size: 14px; }
+          .social { display: inline-flex; align-items: center; gap: 6px; margin: 4px 10px; color: #1a56db; text-decoration: none; font-weight: 600; font-size: 14px; }
+          .apps { margin-top: 22px; padding-top: 18px; border-top: 1px solid #eee; }
+          .apps-label { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+          .store-badge { display: inline-flex; align-items: center; gap: 7px; background: #111; color: #fff; text-decoration: none; font-weight: 600; font-size: 13px; padding: 9px 14px; border-radius: 10px; margin: 0 4px; }
+          .store-badge.disabled { background: #eee; color: #999; pointer-events: none; }
         </style>
         </head>
         <body>
@@ -337,6 +354,11 @@ public func routes(_ app: Application) throws {
             <a class="btn" href="/card/vcard">Save Contact</a>
             \(callHTML)
             <div>\(linksHTML)</div>
+            <div class="apps">
+              <div class="apps-label">Get the MSM Student App</div>
+              <a class="store-badge disabled" href="#">App Store — Coming soon</a>
+              <a class="store-badge" href="\(playStoreURL)">Google Play</a>
+            </div>
           </div>
         </body>
         </html>
