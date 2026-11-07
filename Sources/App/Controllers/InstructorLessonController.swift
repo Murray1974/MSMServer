@@ -574,6 +574,15 @@ struct InstructorLessonController: RouteCollection {
         try await LessonFinance.reassignOrCreate(lessonID: lessonAID, studentID: try studentB.requireID(), on: req.db)
         try await LessonFinance.reassignOrCreate(lessonID: lessonBID, studentID: try studentA.requireID(), on: req.db)
 
+        // A swap places each student into a real future lesson, same as any other
+        // booking-creation path — see StudentProfile.reactivateIfInactive.
+        if try await StudentProfile.reactivateIfInactive(studentID: try studentA.requireID(), on: req.db) {
+            req.application.broadcastAccountStatusUpdated(studentID: try studentA.requireID(), status: "active", to: .students)
+        }
+        if try await StudentProfile.reactivateIfInactive(studentID: try studentB.requireID(), on: req.db) {
+            req.application.broadcastAccountStatusUpdated(studentID: try studentB.requireID(), status: "active", to: .students)
+        }
+
         // Broadcast to both students — each retitles their new lesson in place.
         // Deliberately NOT broadcastRescheduled: see broadcastSwapped's doc comment for
         // why reusing single-sided reschedule semantics here clobbers one side of
@@ -654,6 +663,13 @@ struct InstructorLessonController: RouteCollection {
         // The new lesson needs its own finance record pointing at this student.
         try await LessonFinance.deleteIfOrphaned(lessonID: try oldLesson.requireID(), on: req.db)
         try await LessonFinance.reassignOrCreate(lessonID: try newLesson.requireID(), studentID: try student.requireID(), on: req.db)
+
+        // Rescheduling places the student into a real future lesson, same as any other
+        // booking-creation path — see StudentProfile.reactivateIfInactive.
+        let studentID = try student.requireID()
+        if try await StudentProfile.reactivateIfInactive(studentID: studentID, on: req.db) {
+            req.application.broadcastAccountStatusUpdated(studentID: studentID, status: "active", to: .students)
+        }
 
         req.broadcastRescheduled(old: oldLesson, new: newLesson, explicitStudent: student)
 
