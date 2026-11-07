@@ -282,6 +282,13 @@ struct DocumentController: RouteCollection {
             throw Abort(.notFound, reason: "No profile photo on file.")
         }
         let fullPath = req.application.directory.workingDirectory + photoPath
+        // The uploads directory lives on the container's local disk, not a persistent
+        // volume, so a stored path can outlive the actual file across a redeploy —
+        // streamFile(at:) throws an unhandled error (500, empty body) rather than 404
+        // for a missing path, so check existence first.
+        guard FileManager.default.fileExists(atPath: fullPath) else {
+            throw Abort(.notFound, reason: "Profile photo file is missing on disk.")
+        }
         return req.fileio.streamFile(at: fullPath)
     }
 
@@ -295,6 +302,9 @@ struct DocumentController: RouteCollection {
             throw Abort(.notFound, reason: "No licence photo on file.")
         }
         let fullPath = req.application.directory.workingDirectory + photoPath
+        guard FileManager.default.fileExists(atPath: fullPath) else {
+            throw Abort(.notFound, reason: "Licence photo file is missing on disk.")
+        }
         return req.fileio.streamFile(at: fullPath)
     }
 
@@ -306,6 +316,9 @@ struct DocumentController: RouteCollection {
             throw Abort(.notFound, reason: "No profile photo on file.")
         }
         let fullPath = req.application.directory.workingDirectory + photoPath
+        guard FileManager.default.fileExists(atPath: fullPath) else {
+            throw Abort(.notFound, reason: "Profile photo file is missing on disk.")
+        }
         return req.fileio.streamFile(at: fullPath)
     }
 }

@@ -43,9 +43,14 @@ services:
       # Locally, prefer dropping the file into .secrets/ (mounted below).
     volumes:
       - ./.secrets:/run/.secrets:ro
+      # Previously unmounted — every uploaded licence/profile/receipt photo was being
+      # silently deleted on every deploy (`docker compose down` + `up --build` wipes the
+      # container's local filesystem). Found 7 Nov 2026 while adding GET /card/photo.
+      - msm_uploads:/run/uploads
     ports:
       - "8080:8080"
     restart: unless-stopped
 
 volumes:
   msm_pgdata:
+  msm_uploads:
