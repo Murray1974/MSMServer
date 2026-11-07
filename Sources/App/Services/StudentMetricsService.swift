@@ -10,7 +10,10 @@ import Fluent
 ///     intervening reactivation. A student reactivating out of a "temporary" hold that never
 ///     reached the 12-week mark was never counted as a loss, so that reactivation is not
 ///     "regained" — they were retained the whole time.
-///   - Completions: "passed_test" archives — a success, tracked separately from loss/retention.
+///   - Completions: "passed_test" or "passed_test_own_car" archives — a success, tracked
+///     separately from loss/retention. "_own_car" means the pass happened in the student's
+///     own car rather than the instructor's — still a completion here, but kept distinct so
+///     a future instructor-car-only pass-rate metric can exclude it.
 ///   - Retention rate (per month): of students who'd already had a first lesson 12 months before
 ///     that month's end, what fraction are not currently in a "lost" state as of that month end
 ///     (this includes students still mid-way through an unresolved "temporary" hold).
@@ -32,6 +35,7 @@ struct StudentMetricsService {
     }
 
     static let lossReasons: Set<String> = ["permanent", "auto_archive", "reclassified_to_loss"]
+    static let completionReasons: Set<String> = ["passed_test", "passed_test_own_car"]
 
     private static func londonCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -74,7 +78,7 @@ struct StudentMetricsService {
                         regained += 1
                     }
                 }
-                if event.reason == "passed_test" {
+                if let reason = event.reason, Self.completionReasons.contains(reason) {
                     completions += 1
                 }
             }
