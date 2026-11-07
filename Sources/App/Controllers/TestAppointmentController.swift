@@ -171,6 +171,11 @@ struct TestAppointmentController: RouteCollection {
         var dateOfBirth: Date?
         var accountStatus: String
         var hasUpcomingLesson: Bool
+        /// Reason on the most recent active->inactive StudentStatusEvent, nil if currently
+        /// active or no such event exists. Lets the Instructor app's reconcile sweep tag a
+        /// server-driven archive correctly (e.g. "passed_test" -> ArchiveReason.passedTest)
+        /// instead of assuming every server-side deactivation was a self-toggle.
+        var latestInactiveReason: String?
     }
 
     func listStudents(_ req: Request) async throws -> [StudentPickerRow] {
@@ -183,6 +188,16 @@ struct TestAppointmentController: RouteCollection {
             .all()
         let dobByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.dateOfBirth) })
         let statusByUserID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.$user.id, $0.accountStatus) })
+
+        let inactiveEvents = try await StudentStatusEvent.query(on: req.db)
+            .filter(\.$student.$id ~~ userIDs)
+            .filter(\.$toStatus == "inactive")
+            .sort(\.$occurredAt, .descending)
+            .all()
+        var latestReasonByUserID: [UUID: String] = [:]
+        for event in inactiveEvents where latestReasonByUserID[event.$student.id] == nil {
+            latestReasonByUserID[event.$student.id] = event.reason
+        }
 
         // Lightweight presence check (not a full booking fetch) — used client-side by the
         // Instructor app to auto-restore an archived client once they've actually booked a
@@ -204,7 +219,8 @@ struct TestAppointmentController: RouteCollection {
                 displayName: u.displayName,
                 dateOfBirth: dobByUserID[id] ?? nil,
                 accountStatus: statusByUserID[id] ?? "active",
-                hasUpcomingLesson: studentIDsWithUpcoming.contains(id)
+                hasUpcomingLesson: studentIDsWithUpcoming.contains(id),
+                latestInactiveReason: latestReasonByUserID[id]
             )
         }
         .sorted { ($0.displayName ?? $0.username) < ($1.displayName ?? $1.username) }
@@ -248,15 +264,36 @@ struct TestAppointmentController: RouteCollection {
         guard input.status == "active" || input.status == "inactive" else {
             throw Abort(.badRequest, reason: "status must be 'active' or 'inactive'")
         }
+        guard try await setStudentAccountStatus(studentID: studentID, status: input.status, reason: input.reason, on: req) else {
+            throw Abort(.notFound, reason: "Student profile not found.")
+        }
+        return .ok
+    }
+
+    /// Shared by the instructor's manual archive/restore toggle and the automatic "test
+    /// passed" archive in `addResult` — flips accountStatus, logs the StudentStatusEvent,
+    /// broadcasts to the student hub, and sends an FCM push. Returns false if the student
+    /// has no StudentProfile (nothing to update) or is already in the requested status.
+    @discardableResult
+    private func setStudentAccountStatus(
+        studentID: UUID,
+        status: String,
+        reason: String?,
+        notificationTitle: String? = nil,
+        notificationBody: String? = nil,
+        on req: Request
+    ) async throws -> Bool {
         guard let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == studentID)
             .first()
         else {
-            throw Abort(.notFound, reason: "Student profile not found.")
+            return false
         }
         let previousStatus = profile.accountStatus
-        profile.accountStatus = input.status
-        if input.status == "active" {
+        guard previousStatus != status else { return true }
+
+        profile.accountStatus = status
+        if status == "active" {
             // Reactivating always starts a fresh inactivity clock.
             profile.inactivityStage14SentAt = nil
             profile.inactivityStage21SentAt = nil
@@ -264,31 +301,29 @@ struct TestAppointmentController: RouteCollection {
         }
         try await profile.save(on: req.db)
 
-        if previousStatus != input.status {
-            let event = StudentStatusEvent(
-                studentID: studentID,
-                fromStatus: previousStatus,
-                toStatus: input.status,
-                reason: input.status == "inactive" ? (input.reason ?? "temporary") : nil
-            )
-            try? await event.save(on: req.db)
-        }
+        let event = StudentStatusEvent(
+            studentID: studentID,
+            fromStatus: previousStatus,
+            toStatus: status,
+            reason: status == "inactive" ? (reason ?? "temporary") : nil
+        )
+        try? await event.save(on: req.db)
 
-        req.application.broadcastAccountStatusUpdated(studentID: studentID, status: input.status, to: .students)
+        req.application.broadcastAccountStatusUpdated(studentID: studentID, status: status, to: .students)
 
         if let user = try? await User.find(studentID, on: req.db),
            let fcmToken = user.fcmToken,
            let fcm = FCMNotificationService(app: req.application) {
             try? await fcm.send(
                 to: fcmToken,
-                title: input.status == "active" ? "Account reactivated" : "Account set to inactive",
-                body: input.status == "active"
+                title: notificationTitle ?? (status == "active" ? "Account reactivated" : "Account set to inactive"),
+                body: notificationBody ?? (status == "active"
                     ? "Your instructor has reactivated your account."
-                    : "Your instructor has set your account to inactive. You can reactivate any time in the app."
+                    : "Your instructor has set your account to inactive. You can reactivate any time in the app.")
             )
         }
 
-        return .ok
+        return true
     }
 
     // MARK: - GET /instructor/students/metrics/turnover
@@ -549,6 +584,21 @@ struct TestAppointmentController: RouteCollection {
         )
         appt.faults = encodeFaultSheet(sheet)
         try await appt.save(on: req.db)
+
+        if body.outcome == "pass" {
+            // Auto-archives the student as a completion (not a loss) the moment a pass is
+            // recorded, instead of requiring the instructor to separately tap "Passed Test" —
+            // see CLAUDE.md's StudentStatusEvent reason conventions.
+            try await setStudentAccountStatus(
+                studentID: appt.$user.id,
+                status: "inactive",
+                reason: "passed_test",
+                notificationTitle: "🎉 Congratulations!",
+                notificationBody: "Well done on passing your driving test! Your instructor has been notified.",
+                on: req
+            )
+        }
+
         return dto(from: appt)
     }
 
