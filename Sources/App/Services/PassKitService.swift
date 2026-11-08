@@ -27,7 +27,7 @@ struct PassKitService {
             && fm.fileExists(atPath: secretsDir.appendingPathComponent("AppleWWDRCAG4.pem").path)
     }
 
-    func generateBusinessCardPass(name: String, rate: String, contactPhone: String?, cardURL: String) throws -> Data {
+    func generateBusinessCardPass(name: String, rate: String, contactPhone: String?, cardURL: String, profilePhotoFullPath: String?) throws -> Data {
         guard isConfigured else {
             throw Abort(.serviceUnavailable, reason: "Apple Wallet signing isn't configured yet.")
         }
@@ -75,6 +75,17 @@ struct PassKitService {
             try FileManager.default.copyItem(at: src, to: tempDir.appendingPathComponent(assetName))
         }
 
+        // Square "thumbnail" image (shown on the right edge of a generic pass) generated
+        // live from whatever's currently at profilePhotoFullPath — never cached, so it
+        // always matches the instructor's latest upload. Falls back to no thumbnail
+        // (rather than failing the whole pass) if there's no photo on file, or the
+        // resize fails for any reason.
+        if let profilePhotoFullPath, FileManager.default.fileExists(atPath: profilePhotoFullPath) {
+            try? makeThumbnail(from: profilePhotoFullPath, sizePoints: 90, suffix: "", in: tempDir)
+            try? makeThumbnail(from: profilePhotoFullPath, sizePoints: 90, suffix: "@2x", scale: 2, in: tempDir)
+            try? makeThumbnail(from: profilePhotoFullPath, sizePoints: 90, suffix: "@3x", scale: 3, in: tempDir)
+        }
+
         // manifest.json: SHA-1 of every included file, required by the PassKit package format.
         var manifest: [String: String] = [:]
         for filename in try FileManager.default.contentsOfDirectory(atPath: tempDir.path) {
@@ -91,6 +102,30 @@ struct PassKitService {
         try zipContents(of: tempDir, excluding: "card.pkpass", to: pkpassURL)
 
         return try Data(contentsOf: pkpassURL)
+    }
+
+    /// Resizes-and-center-crops an arbitrary-aspect source photo to a square thumbnail
+    /// via ImageMagick's `convert` — there's no pure-Swift image-resizing library
+    /// already in this project, and this is the one step PassKit genuinely needs an
+    /// actual image decode/re-encode for (everything else just copies/hashes bytes).
+    private func makeThumbnail(from sourcePath: String, sizePoints: Int, suffix: String, scale: Int = 1, in tempDir: URL) throws {
+        let pixels = sizePoints * scale
+        let geometry = "\(pixels)x\(pixels)"
+        let outputURL = tempDir.appendingPathComponent("thumbnail\(suffix).png")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "convert", sourcePath,
+            "-resize", "\(geometry)^",
+            "-gravity", "center",
+            "-extent", geometry,
+            outputURL.path
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw Abort(.internalServerError, reason: "Failed to generate Wallet pass thumbnail.")
+        }
     }
 
     private func signManifest(at manifestURL: URL, in tempDir: URL) throws {

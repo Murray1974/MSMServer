@@ -453,8 +453,10 @@ public func routes(_ app: Application) throws {
         guard passKit.isConfigured else {
             throw Abort(.serviceUnavailable, reason: "Apple Wallet isn't set up yet.")
         }
+        let profilePhotoFullPath = settings.profilePhotoPath.map { req.application.directory.workingDirectory + $0 }
         let pkpassData = try passKit.generateBusinessCardPass(
-            name: name, rate: rate, contactPhone: settings.contactPhone, cardURL: cardURL
+            name: name, rate: rate, contactPhone: settings.contactPhone, cardURL: cardURL,
+            profilePhotoFullPath: profilePhotoFullPath
         )
 
         let res = Response(status: .ok)
