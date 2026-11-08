@@ -175,73 +175,24 @@ struct WebsiteController {
     }
 
     // MARK: - Book a Lesson
+    //
+    // Points to the student app rather than a direct enquiry form for now — simpler,
+    // and sidesteps the SendGrid dependency entirely. Revisit the enquiry-form approach
+    // later if wanted; WebsiteController+Enquiry.swift.disabled-ish isn't kept around,
+    // just removed outright since it's trivial to rebuild from this commit if needed.
 
     private struct BookContext: Encodable {
         let title, description: String
         let instructorName, rate, contactPhone, currentYear: String
-        let submitted: Bool
-        let errorMessage: String?
     }
 
     func bookShow(_ req: Request) async throws -> View {
         let basics = try await siteBasics(on: req.db)
         let context = BookContext(
             title: "Book a Lesson",
-            description: "Get in touch to book driving lessons with Murray School of Motoring.",
+            description: "Download the MSM Student app to book driving lessons with Murray School of Motoring.",
             instructorName: basics.instructorName, rate: basics.rate,
-            contactPhone: basics.contactPhone, currentYear: basics.currentYear,
-            submitted: false, errorMessage: nil
-        )
-        return try await req.view.render("book", context)
-    }
-
-    struct BookInput: Content {
-        var name: String
-        var phone: String
-        var email: String?
-        var area: String?
-        var message: String?
-        /// Honeypot — real visitors never see or fill this field (hidden via CSS on the
-        /// form). Any non-empty value here means it was filled by a bot, so the
-        /// submission is silently dropped without sending an email, while still
-        /// showing the normal "thanks" confirmation so the bot doesn't learn anything.
-        var website: String?
-    }
-
-    func bookSubmit(_ req: Request) async throws -> View {
-        let basics = try await siteBasics(on: req.db)
-        let input = try req.content.decode(BookInput.self)
-
-        func showError(_ message: String) async throws -> View {
-            let context = BookContext(
-                title: "Book a Lesson",
-                description: "Get in touch to book driving lessons with Murray School of Motoring.",
-                instructorName: basics.instructorName, rate: basics.rate,
-                contactPhone: basics.contactPhone, currentYear: basics.currentYear,
-                submitted: false, errorMessage: message
-            )
-            return try await req.view.render("book", context)
-        }
-
-        guard !input.name.trimmingCharacters(in: .whitespaces).isEmpty,
-              !input.phone.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return try await showError("Please fill in your name and phone number.")
-        }
-
-        let isBot = !(input.website ?? "").isEmpty
-        if !isBot, let sg = SendGridService(req: req) {
-            try await sg.sendLessonEnquiry(
-                name: input.name, phone: input.phone, email: input.email,
-                area: input.area, message: input.message
-            )
-        }
-
-        let context = BookContext(
-            title: "Book a Lesson",
-            description: "Get in touch to book driving lessons with Murray School of Motoring.",
-            instructorName: basics.instructorName, rate: basics.rate,
-            contactPhone: basics.contactPhone, currentYear: basics.currentYear,
-            submitted: true, errorMessage: nil
+            contactPhone: basics.contactPhone, currentYear: basics.currentYear
         )
         return try await req.view.render("book", context)
     }

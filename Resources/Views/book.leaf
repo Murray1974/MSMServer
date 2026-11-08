@@ -1,37 +1,13 @@
 #extend("base"):
 #export("body"):
 <h1>Book a Lesson</h1>
-#if(submitted):
-<p class="pill">Thanks — your enquiry has been sent!</p>
-<p>I'll get back to you as soon as I can.</p>
-#else:
-<p class="lede">Fill in your details and I'll get back to you to arrange your first lesson.</p>
-#if(errorMessage):
-<p style="color:#b00020; font-weight:600;">#(errorMessage)</p>
-#endif
-<form method="POST" action="/book" style="max-width:480px;">
-  <label style="display:block; font-weight:600; margin-bottom:6px;">Name</label>
-  <input type="text" name="name" required style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+<p class="lede">Booking and managing your lessons happens through the MSM Student app — download it, register, and you'll be able to request lessons, see pricing and manage your balance all in one place.</p>
 
-  <label style="display:block; font-weight:600; margin-bottom:6px;">Phone</label>
-  <input type="tel" name="phone" required style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+<div class="store-badges" style="margin: 24px 0;">
+  <span class="store-badge disabled" style="font-size:16px; padding:12px 20px;">App Store — Coming soon</span>
+  <a class="store-badge" style="font-size:16px; padding:12px 20px;" href="https://play.google.com/store/apps/details?id=com.michaelmurray.msmstudent">Google Play</a>
+</div>
 
-  <label style="display:block; font-weight:600; margin-bottom:6px;">Email (optional)</label>
-  <input type="email" name="email" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
-
-  <label style="display:block; font-weight:600; margin-bottom:6px;">Area</label>
-  <input type="text" name="area" placeholder="e.g. Crediton" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
-
-  <label style="display:block; font-weight:600; margin-bottom:6px;">Message (optional)</label>
-  <textarea name="message" rows="4" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;"></textarea>
-
-  <div style="position:absolute; left:-9999px;" aria-hidden="true">
-    <label>Leave this field blank</label>
-    <input type="text" name="website" tabindex="-1" autocomplete="off">
-  </div>
-
-  <button type="submit" class="hero-cta" style="border:none; cursor:pointer; font-size:16px;">Send Enquiry</button>
-</form>
-#endif
+<p>Prefer to speak first? #if(contactPhone):<a href="tel:#(contactPhone)">Call #(contactPhone)</a>#else:Get in touch directly.#endif</p>
 #endexport
 #endextend

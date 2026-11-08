@@ -487,7 +487,6 @@ public func routes(_ app: Application) throws {
     app.get("reviews", use: website.reviews)
     app.get("faq", use: website.faq)
     app.get("book", use: website.bookShow)
-    app.on(.POST, "book", body: .collect(maxSize: "16kb"), use: website.bookSubmit)
 
     // GET /sitemap.xml, /robots.txt — basic SEO scaffolding for the new site.
     app.get("sitemap.xml") { req -> Response in
