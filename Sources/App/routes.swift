@@ -352,6 +352,7 @@ public func routes(_ app: Application) throws {
             <p class="headline">Driving Instructor at Murray School of Motoring</p>
             <div class="rate"><span>Lesson rate</span>\(rate) / hr</div>
             <a class="btn" href="/card/vcard">Save Contact</a>
+            <a class="btn secondary" href="/card/pass">Add to Apple Wallet</a>
             \(callHTML)
             <div>\(linksHTML)</div>
             <div class="apps">
@@ -433,6 +434,33 @@ public func routes(_ app: Application) throws {
         res.headers.replaceOrAdd(name: .contentType, value: "text/vcard; charset=utf-8")
         res.headers.replaceOrAdd(name: .contentDisposition, value: "attachment; filename=\"\(name).vcf\"")
         res.body = .init(string: lines.joined(separator: "\r\n"))
+        return res
+    }
+
+    // GET /card/pass — "Add to Apple Wallet" download for the card above. 404s with a
+    // plain-text explanation if the signing certificate hasn't been installed yet
+    // (see PassKitService.isConfigured) rather than a generic 500.
+    app.get("card", "pass") { req async throws -> Response in
+        let settings = try await InstructorSettings.current(on: req.db)
+        let instructorUser = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()
+        let name = instructorUser?.displayName ?? "Your Instructor"
+        let rate = String(format: "£%.2f / hr", Double(settings.currentHourlyRatePence) / 100)
+        let cardURL = "https://api.murrayschoolofmotoring.co.uk/card"
+
+        let passKit = PassKitService(app: req.application)
+        guard passKit.isConfigured else {
+            throw Abort(.serviceUnavailable, reason: "Apple Wallet isn't set up yet.")
+        }
+        let pkpassData = try passKit.generateBusinessCardPass(
+            name: name, rate: rate, contactPhone: settings.contactPhone, cardURL: cardURL
+        )
+
+        let res = Response(status: .ok)
+        res.headers.replaceOrAdd(name: .contentType, value: "application/vnd.apple.pkpass")
+        res.headers.replaceOrAdd(name: .contentDisposition, value: "attachment; filename=\"MurraySchoolOfMotoring.pkpass\"")
+        res.body = .init(data: pkpassData)
         return res
     }
 

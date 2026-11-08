@@ -14,7 +14,7 @@ RUN swift build -c release --static-swift-stdlib
 FROM ubuntu:22.04 AS run
 WORKDIR /run
 RUN apt-get update && apt-get install -y \
-  ca-certificates tzdata libsqlite3-0 && \
+  ca-certificates tzdata libsqlite3-0 openssl zip && \
   rm -rf /var/lib/apt/lists/*
 
 # Binary
