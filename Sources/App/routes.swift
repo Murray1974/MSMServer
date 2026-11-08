@@ -401,6 +401,31 @@ public func routes(_ app: Application) throws {
         if let yt = settings.youtubeURL, !yt.isEmpty {
             lines.append("URL;TYPE=YouTube:\(yt)")
         }
+        // Embed the profile photo so it shows up on the saved Contacts entry, not just
+        // on the /card webpage. vCard 3.0 requires base64 lines folded at 75 octets with
+        // a single leading space on each continuation line (RFC 2426 §5.8.1).
+        if let photoPath = settings.profilePhotoPath {
+            let fullPath = req.application.directory.workingDirectory + photoPath
+            if let photoData = FileManager.default.contents(atPath: fullPath) {
+                let base64 = photoData.base64EncodedString()
+                var folded = "PHOTO;ENCODING=b;TYPE=JPEG:"
+                var remaining = Substring(base64)
+                let firstChunkLen = 75 - folded.count
+                if remaining.count > firstChunkLen {
+                    folded += remaining.prefix(firstChunkLen)
+                    remaining = remaining.dropFirst(firstChunkLen)
+                } else {
+                    folded += remaining
+                    remaining = ""
+                }
+                while !remaining.isEmpty {
+                    let chunk = remaining.prefix(74)
+                    folded += "\r\n \(chunk)"
+                    remaining = remaining.dropFirst(chunk.count)
+                }
+                lines.append(folded)
+            }
+        }
         lines.append("NOTE:Current lesson rate: \(rate)/hr")
         lines.append("END:VCARD")
 
