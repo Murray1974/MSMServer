@@ -19,6 +19,8 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     // RS256 JWT signing for FCM HTTP v1 access-token exchange
     .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
+    // HTML templating for the public marketing website (Resources/Views/)
+    .package(url: "https://github.com/vapor/leaf.git", from: "4.4.0"),
   ],
   targets: [
     .target(
@@ -29,6 +31,7 @@ let package = Package(
         .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
         .product(name: "Crypto", package: "swift-crypto"),
         .product(name: "JWTKit", package: "jwt-kit"),
+        .product(name: "Leaf", package: "leaf"),
       ],
       path: "Sources/App"
     ),

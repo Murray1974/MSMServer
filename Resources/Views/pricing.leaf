@@ -1,0 +1,15 @@
+#extend("base"):
+#export("body"):
+<h1>Lessons &amp; Pricing</h1>
+<p class="pill">Current rate: #(rate)</p>
+<p>Lessons are tailored to you — whether that's regular weekly lessons building up to your test, or an intensive course over a shorter period if you're working to a deadline.</p>
+
+<h2>What's included</h2>
+<p>Every lesson includes pickup and drop-off at a convenient address, use of a dual-control insured vehicle, and a calm, patient teaching style built around your pace rather than a fixed script.</p>
+
+<h2>Paying for lessons</h2>
+<p>Lessons can be paid for through the MSM Student app, which also tracks your balance, booking history and progress. See the <a href="/faq">FAQ</a> for more on how payment works.</p>
+
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend

@@ -1,0 +1,13 @@
+#extend("base"):
+#export("body"):
+<h1>Reviews</h1>
+<p class="pill">100% recommend, real pupil reviews</p>
+#for(t in testimonials):
+<div style="border-left: 3px solid var(--green); padding: 4px 0 4px 16px; margin-bottom: 22px;">
+  <p style="font-style: italic;">&ldquo;#(t.quote)&rdquo;</p>
+  <p style="color: var(--muted); font-size: 13px; margin-top: -8px;">— #(t.name)</p>
+</div>
+#endfor
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend

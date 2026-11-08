@@ -105,6 +105,44 @@ struct SendGridService {
             logger.notice("[SendGrid] Verification email sent to \(email).")
         }
     }
+    /// "Book a lesson" enquiry from the public website — sent to the instructor's own
+    /// inbox, not the enquirer. replyTo is set to the enquirer's email (when given) so
+    /// replying in Mail goes straight back to them rather than to noreply@.
+    func sendLessonEnquiry(name: String, phone: String, email: String?, area: String?, message: String?) async throws {
+        var body = """
+        New lesson enquiry from the website:
+
+        Name: \(name)
+        Phone: \(phone)
+        """
+        if let email, !email.isEmpty { body += "\nEmail: \(email)" }
+        if let area, !area.isEmpty { body += "\nArea: \(area)" }
+        if let message, !message.isEmpty { body += "\n\nMessage:\n\(message)" }
+
+        let payload = SendGridBody(
+            personalizations: [.init(to: [.init(email: "Murray2007@icloud.com")])],
+            from: .init(email: "noreply@murrayschoolofmotoring.co.uk", name: "MSM Website"),
+            subject: "New lesson enquiry — \(name)",
+            content: [.init(type: "text/plain", value: body)],
+            replyTo: (email?.isEmpty == false) ? .init(email: email!, name: name) : nil
+        )
+
+        let response = try await client.post(
+            URI(string: "https://api.sendgrid.com/v3/mail/send"),
+            headers: [
+                "Authorization": "Bearer \(apiKey)",
+                "Content-Type": "application/json",
+            ]
+        ) { req in
+            try req.content.encode(payload, as: .json)
+        }
+
+        if response.status.code >= 400 {
+            logger.error("[SendGrid] Failed to send lesson enquiry email — status \(response.status.code)")
+        } else {
+            logger.notice("[SendGrid] Lesson enquiry email sent for \(name).")
+        }
+    }
 }
 
 // MARK: - SendGrid v3 mail/send payload
@@ -114,6 +152,12 @@ private struct SendGridBody: Content {
     let from: Address
     let subject: String
     let content: [ContentBlock]
+    var replyTo: Address? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case personalizations, from, subject, content
+        case replyTo = "reply_to"
+    }
 
     struct Personalization: Content {
         let to: [Address]

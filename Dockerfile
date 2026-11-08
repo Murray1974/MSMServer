@@ -23,9 +23,8 @@ COPY --from=build /app/.build/release/Run /run/Run
 # Static assets (optional). Keep Public since you have it.
 COPY --from=build /app/Public /run/Public
 
-# No Resources folder in your repo, so don’t copy it.
-# If you later add one, you can re-add:
-# COPY --from=build /app/Resources /run/Resources
+# Leaf templates for the public marketing website.
+COPY --from=build /app/Resources /run/Resources
 
 EXPOSE 8080
 ENV PORT=8080

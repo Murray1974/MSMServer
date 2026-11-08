@@ -1,0 +1,14 @@
+#extend("base"):
+#export("body"):
+<h1>Areas Covered</h1>
+<p class="lede">Driving lessons covering:</p>
+<ul style="font-size:18px; line-height:2;">
+#for(area in areas):
+  <li>#(area)</li>
+#endfor
+  <li>...and surrounding areas</li>
+</ul>
+<p>Not sure if your address is covered? Just ask — <a href="/book">get in touch</a> and I'll let you know.</p>
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend

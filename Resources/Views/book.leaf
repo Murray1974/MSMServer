@@ -1,0 +1,37 @@
+#extend("base"):
+#export("body"):
+<h1>Book a Lesson</h1>
+#if(submitted):
+<p class="pill">Thanks — your enquiry has been sent!</p>
+<p>I'll get back to you as soon as I can.</p>
+#else:
+<p class="lede">Fill in your details and I'll get back to you to arrange your first lesson.</p>
+#if(errorMessage):
+<p style="color:#b00020; font-weight:600;">#(errorMessage)</p>
+#endif
+<form method="POST" action="/book" style="max-width:480px;">
+  <label style="display:block; font-weight:600; margin-bottom:6px;">Name</label>
+  <input type="text" name="name" required style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+
+  <label style="display:block; font-weight:600; margin-bottom:6px;">Phone</label>
+  <input type="tel" name="phone" required style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+
+  <label style="display:block; font-weight:600; margin-bottom:6px;">Email (optional)</label>
+  <input type="email" name="email" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+
+  <label style="display:block; font-weight:600; margin-bottom:6px;">Area</label>
+  <input type="text" name="area" placeholder="e.g. Crediton" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;">
+
+  <label style="display:block; font-weight:600; margin-bottom:6px;">Message (optional)</label>
+  <textarea name="message" rows="4" style="width:100%; padding:12px; margin-bottom:16px; border:1px solid #ddd; border-radius:10px; font-size:15px;"></textarea>
+
+  <div style="position:absolute; left:-9999px;" aria-hidden="true">
+    <label>Leave this field blank</label>
+    <input type="text" name="website" tabindex="-1" autocomplete="off">
+  </div>
+
+  <button type="submit" class="hero-cta" style="border:none; cursor:pointer; font-size:16px;">Send Enquiry</button>
+</form>
+#endif
+#endexport
+#endextend

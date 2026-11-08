@@ -1,0 +1,12 @@
+#extend("base"):
+#export("body"):
+<h1>Frequently Asked Questions</h1>
+#for(item in faqs):
+<div style="margin-bottom: 24px;">
+  <h2 style="margin: 0 0 6px; font-size: 18px;">#(item.question)</h2>
+  <p>#(item.answer)</p>
+</div>
+#endfor
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend

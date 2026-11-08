@@ -1,0 +1,30 @@
+#extend("base"):
+#export("body"):
+<div style="text-align:center; padding: 10px 0 10px;">
+  <img src="/card/photo" alt="#(instructorName)" style="width:120px;height:120px;border-radius:50%;object-fit:cover;background:#eee;" onerror="this.style.display='none'">
+  <h1 style="margin-top:18px;">Learn to drive with #(instructorName)</h1>
+  <p class="lede">Calm, patient driving lessons covering Exeter, Crediton, Copplestone, Bow, Tiverton and surrounding areas.</p>
+  <p class="pill">Lessons from #(rate)</p>
+  <div style="margin-top:22px;">
+    <a class="hero-cta" href="/book">Book a Lesson</a>
+    <a class="hero-cta secondary" href="/card" style="margin-left:10px;">View Digital Card</a>
+  </div>
+</div>
+
+<h2>Why learn with me</h2>
+<p>Every pupil learns differently, so lessons are built around your pace — not a script. Whether you're a nervous beginner, switching after an instructor who wasn't the right fit, or working towards a test date with an intensive course, the goal is the same: a genuinely safe, confident driver, not just a pass certificate.</p>
+
+<h2>What pupils say</h2>
+#for(t in testimonials):
+<div style="border-left: 3px solid var(--green); padding: 4px 0 4px 16px; margin-bottom: 18px;">
+  <p style="font-style: italic;">&ldquo;#(t.quote)&rdquo;</p>
+  <p style="color: var(--muted); font-size: 13px; margin-top: -8px;">— #(t.name)</p>
+</div>
+#endfor
+<p><a href="/reviews">Read more reviews →</a></p>
+
+<h2>Ready to get started?</h2>
+<p>Get in touch to book your first lesson, or have a look at the current <a href="/lessons-pricing">lesson rates</a>.</p>
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend

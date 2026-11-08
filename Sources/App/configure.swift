@@ -1,11 +1,15 @@
 import Vapor
 import Fluent
 import FluentPostgresDriver
+import Leaf
 
 public func configure(_ app: Application) throws {
 
     let bootStamp = ISO8601DateFormatter().string(from: Date())
     app.logger.notice("[SERVER] 🚀 configure() bootStamp=\(bootStamp) env=\(app.environment.name)")
+
+    // Public marketing website templates live in Resources/Views/.
+    app.views.use(.leaf)
 
     // Encode all Date fields as ISO8601 strings so every client can decode them uniformly.
     // Without this, Vapor's default JSONEncoder uses numeric Apple-reference-date timestamps
@@ -59,6 +63,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddUserRole())
     app.sessions.use(.memory)
     app.middleware.use(SessionsMiddleware(session: app.sessions.driver))
+    // Serves Public/ statically (pass_assets icons/logos for the website favicon, etc.)
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
     app.http.server.configuration.hostname = "0.0.0.0"
     app.migrations.add(AddCalendarNameToLesson())
     app.migrations.add(AddStateToLesson())

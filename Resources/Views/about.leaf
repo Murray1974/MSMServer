@@ -1,0 +1,11 @@
+#extend("base"):
+#export("body"):
+<h1>About Mike</h1>
+<img src="/card/photo" alt="#(instructorName)" style="width:140px;height:140px;border-radius:50%;object-fit:cover;background:#eee;float:right;margin-left:20px;" onerror="this.style.display='none'">
+<p>Hi, I'm Mike — the instructor behind Murray School of Motoring. I've been teaching people to drive across Exeter, Crediton, Copplestone, Bow, Tiverton and the surrounding areas, and what I enjoy most is turning nervous beginners into confident, safe drivers.</p>
+<p>Every pupil learns differently, so lessons are built around your pace, not a script — whether that means working through a fear of driving you've carried for years, picking things up after an instructor who wasn't the right fit, or getting exam-ready with an intensive course. I'd rather you take a few extra lessons and leave a genuinely safe driver than rush you through just to tick a box.</p>
+<p>You'll find lessons calm, patient and pressure-free — and whatever it takes to get you there, I won't give up on you.</p>
+
+<a class="hero-cta" href="/book">Book a Lesson</a>
+#endexport
+#endextend
