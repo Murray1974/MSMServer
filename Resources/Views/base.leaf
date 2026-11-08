@@ -39,7 +39,7 @@
     border-bottom: 4px solid var(--green);
   }
   header.site .header-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
-  .brand-logo { height: 78px; width: auto; display: block; }
+  .brand-logo { height: 110px; width: auto; display: block; }
   .nav-toggle-checkbox { display: none; }
   .nav-toggle-btn { display: none; cursor: pointer; color: #fff; font-size: 28px; line-height: 1; padding: 4px 10px; user-select: none; }
   nav.site { display: flex; flex-wrap: wrap; }
@@ -59,7 +59,7 @@
     }
     .nav-toggle-checkbox:checked ~ nav.site { display: flex; }
     nav.site a { margin: 10px 0 0 !important; }
-    .brand-logo { height: 58px; }
+    .brand-logo { height: 80px; }
   }
   .hero-cta { display: inline-block; background: var(--green); color: #fff !important; padding: 12px 22px; border-radius: 12px; font-weight: 700; text-decoration: none; }
   .hero-cta.secondary { background: #111; }
