@@ -444,11 +444,68 @@ public func routes(_ app: Application) throws {
         try await webhookController.handleWebhook(req)
     }
 
-    // Convenience root route so hitting http://HOST:PORT/ in a browser isn't a 404.
-    app.get { req -> Response in
+    // GET / — minimal public homepage, replacing the bare "MSMServer running" health
+    // check text. This domain (murrayschoolofmotoring.co.uk) is used as the business
+    // website / customer support URL on the Google Pay & Wallet Console business
+    // profile, so it needs to actually present the business rather than a raw status
+    // string. Deliberately simple — same static-HTML convention as /privacy-policy and
+    // /card — pulling live contact details from InstructorSettings so it never goes
+    // stale when they change in Settings.
+    app.get { req async throws -> Response in
+        let settings = try await InstructorSettings.current(on: req.db)
+        let instructorUser = try await User.query(on: req.db)
+            .filter(\.$role == "instructor")
+            .first()
+        let name = instructorUser?.displayName ?? "Your Instructor"
+
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+
+        var contactHTML = ""
+        if let phone = settings.contactPhone, !phone.isEmpty {
+            contactHTML += "<a class=\"contact-link\" href=\"tel:\(esc(phone))\">\(esc(phone))</a>"
+        }
+        contactHTML += "<a class=\"contact-link\" href=\"mailto:Murray2007@icloud.com\">Murray2007@icloud.com</a>"
+
+        let html = """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Murray School of Motoring</title>
+        <style>
+          body { margin: 0; background: #0d0d0d; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; justify-content: center; padding: 48px 16px; }
+          .card { background: #fff; border-radius: 20px; max-width: 420px; width: 100%; padding: 36px 28px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+          h1 { font-size: 26px; margin: 0 0 6px; color: #111; }
+          .headline { color: #666; font-size: 15px; margin: 0 0 28px; }
+          .btn { display: block; background: #111; color: #fff; text-decoration: none; font-weight: 600; padding: 13px; border-radius: 12px; margin-bottom: 10px; }
+          .contact { margin-top: 24px; padding-top: 20px; border-top: 1px solid #eee; }
+          .contact-label { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+          .contact-link { display: block; color: #1a56db; text-decoration: none; font-weight: 600; font-size: 14px; margin: 4px 0; }
+        </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>\(esc(name))</h1>
+            <p class="headline">Driving Instructor at Murray School of Motoring</p>
+            <a class="btn" href="/card">View Digital Business Card</a>
+            <div class="contact">
+              <div class="contact-label">Get in touch</div>
+              \(contactHTML)
+            </div>
+          </div>
+        </body>
+        </html>
+        """
+
         let res = Response(status: .ok)
-        res.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
-        res.body = .init(string: "MSMServer running")
+        res.headers.replaceOrAdd(name: .contentType, value: "text/html; charset=utf-8")
+        res.body = .init(string: html)
         return res
     }
     // MARK: - Realtime Availability WebSocket (session cookie presence)
