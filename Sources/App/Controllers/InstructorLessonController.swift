@@ -47,7 +47,12 @@ struct InstructorLessonController: RouteCollection {
         // A student's saved pickup addresses (Home/Work/College/School) — lets the
         // instructor apply one to a booking's pickup via setPickupLocation above,
         // instead of only ever typing a fresh address in by hand.
-        instructor.get("students", ":studentID", "pickup-locations", use: studentPickupLocations)
+        // NOTE: must use :userID, not :studentID — Vapor's router requires the same
+        // parameter name at a shared trie position (students/{param}/...) across every
+        // route registered there (also used by lesson-history/tests); a mismatched name
+        // fatal-errors at boot, which took the whole server down on first deploy of this
+        // route (confirmed in production 9 Nov 2026).
+        instructor.get("students", ":userID", "pickup-locations", use: studentPickupLocations)
 
         // Instructor cancels any booking without late-cancel charges
         instructor.delete("bookings", ":bookingID", use: instructorCancelBooking)
@@ -863,8 +868,8 @@ struct InstructorLessonController: RouteCollection {
     }
 
     func studentPickupLocations(_ req: Request) async throws -> StudentPickupLocationsResponse {
-        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "studentID missing or invalid")
+        guard let studentID = req.parameters.get("userID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "userID missing or invalid")
         }
         guard let profile = try await StudentProfile.query(on: req.db)
             .filter(\.$user.$id == studentID)
