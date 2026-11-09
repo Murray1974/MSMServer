@@ -44,6 +44,11 @@ struct InstructorLessonController: RouteCollection {
         // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
         instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
 
+        // A student's saved pickup addresses (Home/Work/College/School) — lets the
+        // instructor apply one to a booking's pickup via setPickupLocation above,
+        // instead of only ever typing a fresh address in by hand.
+        instructor.get("students", ":studentID", "pickup-locations", use: studentPickupLocations)
+
         // Instructor cancels any booking without late-cancel charges
         instructor.delete("bookings", ":bookingID", use: instructorCancelBooking)
 
@@ -846,6 +851,33 @@ struct InstructorLessonController: RouteCollection {
 
         req.logger.info("instructor.backfillGeocodes: scanned=\(bookings.count) pickupGeocoded=\(pickupGeocoded)")
         return BackfillGeocodesResponse(bookingsScanned: bookings.count, pickupGeocoded: pickupGeocoded)
+    }
+
+    // MARK: - GET /instructor/students/:studentID/pickup-locations
+    struct StudentPickupLocationsResponse: Content {
+        let pickupHome: String?
+        let pickupWork: String?
+        let pickupCollege: String?
+        let pickupSchool: String?
+        let defaultPickupLocation: String?
+    }
+
+    func studentPickupLocations(_ req: Request) async throws -> StudentPickupLocationsResponse {
+        guard let studentID = req.parameters.get("studentID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "studentID missing or invalid")
+        }
+        guard let profile = try await StudentProfile.query(on: req.db)
+            .filter(\.$user.$id == studentID)
+            .first() else {
+            throw Abort(.notFound, reason: "No profile found for this student")
+        }
+        return StudentPickupLocationsResponse(
+            pickupHome: profile.pickupHome,
+            pickupWork: profile.pickupWork,
+            pickupCollege: profile.pickupCollege,
+            pickupSchool: profile.pickupSchool,
+            defaultPickupLocation: profile.defaultPickupLocation
+        )
     }
 
     // MARK: - POST /instructor/students/:studentID/bookings
