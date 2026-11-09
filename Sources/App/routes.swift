@@ -2365,13 +2365,64 @@ public func routes(_ app: Application) throws {
         return events
     }
 
-    /// Detects sudden GPS speed changes between consecutive points — a GPS-only
-    /// heuristic (not accelerometer-fused), so treat results as approximate; thresholds
-    /// below are hand-picked starting points, not calibrated against real driving data.
-    /// Skips pairs with no valid speed on either side, or whose timestamp gap is too
-    /// small (noise) or too large (sparse samples, e.g. across a stop) to mean anything.
+    /// Detects harsh braking/acceleration from the phone's accelerometer
+    /// (`accelMagnitudeG`), the way commercial telematics products do it (commonly
+    /// 0.3-0.45g for a light vehicle) — not from GPS speed deltas, which get smoothed
+    /// by CoreLocation before the app ever sees them and in practice almost never cross
+    /// a hand-picked mph/s threshold: confirmed against a real 22-mile/~2hr lesson on
+    /// 9 Nov 2026, where the hardest GPS-derived deceleration seen all lesson was only
+    /// -3.9 mph/s, well under the old -6 mph/s threshold, and zero events fired despite
+    /// real braking happening throughout the drive.
+    ///
+    /// `accelMagnitudeG` is unsigned (gravity-removed vector magnitude, no direction),
+    /// so it can't say "braking" vs "accelerating" by itself — the GPS speed trend over
+    /// the same interval is used only to label which one it was, not to decide whether
+    /// an event fired. A minimum speed is required so a low-speed parking-manoeuvre
+    /// wiggle (already handled by `detectManoeuvres`) never gets mislabelled as a harsh
+    /// driving event here.
+    ///
+    /// Falls back to the old GPS-speed-delta heuristic for journeys with no
+    /// accelerometer data at all (recorded before motion-sensor capture was added).
     func detectDrivingEvents(_ points: [JourneyPointInput]) -> [DrivingEvent] {
         guard points.count > 1 else { return [] }
+        guard points.contains(where: { $0.accelMagnitudeG != nil }) else {
+            return detectDrivingEventsFromGPSDeltaFallback(points)
+        }
+
+        let harshAccelG = 0.3
+        let minSpeedMph = 5.0
+        let minDeltaMph = 1.0
+        let minDt = 0.5
+        let maxDt = 8.0
+
+        var events: [DrivingEvent] = []
+        for i in 1..<points.count {
+            guard let accel = points[i].accelMagnitudeG, accel >= harshAccelG else { continue }
+            guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph else { continue }
+            guard max(fromSpeed, toSpeed) >= minSpeedMph else { continue }
+            let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            guard dt >= minDt, dt <= maxDt else { continue }
+            let deltaMph = toSpeed - fromSpeed
+            guard abs(deltaMph) >= minDeltaMph else { continue }
+
+            events.append(DrivingEvent(
+                type: deltaMph < 0 ? "hardBrake" : "rapidAccel",
+                latitude: points[i].latitude,
+                longitude: points[i].longitude,
+                timestamp: points[i].timestamp,
+                fromMph: fromSpeed,
+                toMph: toSpeed,
+                deltaMph: deltaMph
+            ))
+        }
+        return events
+    }
+
+    /// Original GPS-speed-delta heuristic — kept only as a fallback for journeys
+    /// recorded before motion-sensor capture existed, so old data still gets *some*
+    /// signal rather than none. See `detectDrivingEvents` for why this isn't the
+    /// primary path any more.
+    func detectDrivingEventsFromGPSDeltaFallback(_ points: [JourneyPointInput]) -> [DrivingEvent] {
         let hardBrakeThreshold = -6.0   // mph per second, deceleration
         let rapidAccelThreshold = 5.0   // mph per second, acceleration
         let minDt = 0.5
@@ -2450,7 +2501,13 @@ public func routes(_ app: Application) throws {
         let maxSpeedForManoeuvre = 8.0
         let minYawRateDegPerSec = 15.0
         let minAccelG = 0.15
-        let minEpisodeDuration: TimeInterval = 8
+        // Was 8s — real candidate samples land every 2-4s, so an 8s floor needed 3+
+        // consecutive qualifying samples and rejected genuine short manoeuvres that
+        // only spanned 2; confirmed against a real lesson on 9 Nov 2026 where several
+        // isolated single-sample low-speed/high-yaw blips (consistent with tight
+        // junction turns, not a sustained manoeuvre) correctly stayed excluded either
+        // way, since lowering this doesn't turn a lone sample into a multi-sample run.
+        let minEpisodeDuration: TimeInterval = 4
         let maxGapBetweenCandidates: TimeInterval = 6
         let pauseSpeedThresholdMph = 1.5
         let turnInRoadRotationDegrees = 120.0
