@@ -2233,14 +2233,21 @@ public func routes(_ app: Application) throws {
     }
 
     /// Sums consecutive point-to-point distance (not a straight line start-to-end).
+    /// Skips a segment that implies an impossible speed (a GPS teleport/multipath glitch,
+    /// not real movement) — one bad fix can otherwise add a large chunk of phantom
+    /// distance, often twice over if the next fix snaps back toward the true position.
     func routeDistanceMiles(_ points: [JourneyPointInput]) -> Double {
         guard points.count > 1 else { return 0 }
+        let maxPlausibleMph = 120.0
         var metres = 0.0
         for i in 1..<points.count {
-            metres += haversineMetres(
+            let segment = haversineMetres(
                 (points[i - 1].latitude, points[i - 1].longitude),
                 (points[i].latitude, points[i].longitude)
             )
+            let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            if dt > 0, (segment / dt) * 2.236936 > maxPlausibleMph { continue }
+            metres += segment
         }
         return metres / 1609.344
     }
@@ -2278,9 +2285,12 @@ public func routes(_ app: Application) throws {
         return markers
     }
 
-    /// Highest valid GPS speed sample in the route, 0 if none were valid.
+    /// Highest valid GPS speed sample in the route, 0 if none were valid. Discards
+    /// anything above a plausible ceiling for a lesson car — GPS multipath/jitter can
+    /// occasionally report a wildly wrong instantaneous speed on an otherwise-good fix.
     func topSpeedMph(_ points: [JourneyPointInput]) -> Double {
-        points.compactMap { $0.speedMph }.max() ?? 0
+        let plausibleMaxMph = 100.0
+        return points.compactMap { $0.speedMph }.filter { $0 >= 0 && $0 <= plausibleMaxMph }.max() ?? 0
     }
 
     /// True trip average (distance / duration), not a mean of noisy instantaneous
@@ -2333,9 +2343,13 @@ public func routes(_ app: Application) throws {
         return events
     }
 
-    // POST /instructor/tracking/journey — one-shot batch upload of a completed route,
-    // sent once JourneyTrackingManager finalizes (geofence reached, manual end, or the
-    // 45-minute overrun safety net — all decided client-side, see the instructor app).
+    // POST /instructor/tracking/journey — batch upload of a route. Sent once when
+    // JourneyTrackingManager finalizes (geofence reached, manual end, or the 45-minute
+    // overrun safety net), and also periodically *during* an active recording
+    // (endedReason "in_progress") as a crash/data-loss safety net — see
+    // JourneyTrackingManager's periodic sync. Upserts by bookingID so both cases share
+    // this one endpoint: a periodic sync just overwrites the same row with the fuller
+    // point set recorded so far, the eventual terminal call is what actually "finishes" it.
     financeProtected.post("instructor", "tracking", "journey") { req async throws -> HTTPStatus in
         let instructor = try req.auth.require(User.self)
         guard instructor.role == "instructor" else { throw Abort(.forbidden) }
@@ -2343,21 +2357,28 @@ public func routes(_ app: Application) throws {
 
         let distanceMiles = routeDistanceMiles(input.points)
         let durationSeconds = input.endedAt.timeIntervalSince(input.startedAt)
+        let points = input.points.map {
+            RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph)
+        }
 
-        let journey = LessonJourney(
-            bookingID: input.bookingID,
-            startedAt: input.startedAt,
-            endedAt: input.endedAt,
-            endedReason: input.endedReason,
-            points: input.points.map {
-                RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph)
-            },
-            distanceMiles: distanceMiles,
-            stopMarkers: detectStopMarkers(input.points),
-            topSpeedMph: topSpeedMph(input.points),
-            averageSpeedMph: averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds),
-            drivingEvents: detectDrivingEvents(input.points)
-        )
+        let journey: LessonJourney
+        if let existing = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == input.bookingID)
+            .first() {
+            journey = existing
+        } else {
+            journey = LessonJourney()
+            journey.bookingID = input.bookingID
+        }
+        journey.startedAt = input.startedAt
+        journey.endedAt = input.endedAt
+        journey.endedReason = input.endedReason
+        journey.points = points
+        journey.distanceMiles = distanceMiles
+        journey.stopMarkers = detectStopMarkers(input.points)
+        journey.topSpeedMph = topSpeedMph(input.points)
+        journey.averageSpeedMph = averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds)
+        journey.drivingEvents = detectDrivingEvents(input.points)
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
         return .created

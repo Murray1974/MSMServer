@@ -38,12 +38,13 @@ struct DrivingEvent: Codable {
     let deltaMph: Double
 }
 
-/// The complete recorded GPS route for one lesson, uploaded as a single batch by the
-/// instructor's phone once the journey finishes (geofence reached, manually ended, or
-/// auto-expired) — see JourneyTrackingManager (Instructor-server-side-app) for how the
-/// route is captured client-side, and `POST /instructor/tracking/journey` for the
-/// upload. Unlike `TrackingSession`, this row only ever gets created once, fully formed,
-/// at upload time — there's no "in progress" server-side state to track.
+/// The recorded GPS route for one lesson, uploaded by the instructor's phone — see
+/// JourneyTrackingManager (Instructor-server-side-app) for how the route is captured
+/// client-side, and `POST /instructor/tracking/journey` for the upload. One row per
+/// booking, upserted: a periodic sync while the lesson is still in progress
+/// (`endedReason == "in_progress"`) overwrites the same row with the fuller point set
+/// recorded so far, and the eventual terminal call (geofence/manual/auto_expired)
+/// overwrites it one last time with the finished route.
 ///
 /// `bookingID` is a plain field (not `@Parent`), matching `TrackingSession`'s pattern —
 /// every read site already has the booking resolved via its own query.
@@ -62,7 +63,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "ended_at")
     var endedAt: Date
 
-    /// "geofence" | "manual" | "auto_expired"
+    /// "geofence" | "manual" | "auto_expired" | "in_progress" (periodic safety-net sync
+    /// while the lesson is still being recorded — not a terminal state)
     @Field(key: "ended_reason")
     var endedReason: String
 
