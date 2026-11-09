@@ -136,4 +136,24 @@ final class Booking: Model, Content, @unchecked Sendable {
         dropoffLongitude = coords.longitude
         try? await save(on: db)
     }
+
+    /// Re-geocodes `pickupLocation` and overwrites `pickupLatitude`/`pickupLongitude`,
+    /// unconditionally — the pickup counterpart to `reGeocodeDropoff`. Call this whenever
+    /// `pickupLocation` is changed after tracking may already be active, otherwise the
+    /// cached lat/lon from the lazy geocode (TrackingSchedulerLifecycle) goes stale — and
+    /// since `dropoffLocation` falls back to these same coordinates when unset, a stale
+    /// pickup also silently drags a stale drop-off along with it.
+    func reGeocodePickup(client: Client, logger: Logger, on db: Database) async {
+        guard let address = pickupLocation, !address.isEmpty else {
+            pickupLatitude = nil
+            pickupLongitude = nil
+            try? await save(on: db)
+            return
+        }
+        let nominatim = NominatimService(client: client, logger: logger)
+        guard let coords = await nominatim.geocode(address: address) else { return }
+        pickupLatitude = coords.latitude
+        pickupLongitude = coords.longitude
+        try? await save(on: db)
+    }
 }

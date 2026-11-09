@@ -788,6 +788,12 @@ struct StudentBookingsController: RouteCollection {
         booking.pickupSource = input.pickupSource
 
         try await booking.save(on: req.db)
+        await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
+        // Dropoff falls back to pickup's coordinates when it was never set itself
+        // (see reGeocodeDropoff), so a changed pickup needs that re-derived too.
+        if booking.dropoffLocation == nil {
+            await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+        }
 
         let userID = try user.requireID()
         let profile = try? await StudentProfile.query(on: req.db)

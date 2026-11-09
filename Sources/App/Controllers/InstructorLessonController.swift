@@ -32,6 +32,11 @@ struct InstructorLessonController: RouteCollection {
         // Set or clear an alternate drop-off location on a booking
         instructor.patch("bookings", ":bookingID", "dropoff", use: setDropoffLocation)
 
+        // Set or clear the pickup location on a booking (mirrors setDropoffLocation) —
+        // keeps the server's authoritative pickupLocation in sync with instructor edits,
+        // instead of those edits only ever landing in the local Calendar event.
+        instructor.patch("bookings", ":bookingID", "pickup", use: setPickupLocation)
+
         // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
         instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
 
@@ -776,11 +781,40 @@ struct InstructorLessonController: RouteCollection {
         return .ok
     }
 
+    // MARK: - PATCH /instructor/bookings/:bookingID/pickup
+    func setPickupLocation(_ req: Request) async throws -> HTTPStatus {
+        struct Body: Content {
+            var pickupLocation: String?
+        }
+
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingID missing or invalid")
+        }
+
+        guard let booking = try await Booking.find(bookingID, on: req.db) else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+
+        let body = (try? req.content.decode(Body.self)) ?? Body(pickupLocation: nil)
+        let raw = body.pickupLocation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        booking.pickupLocation = raw.isEmpty ? nil : raw
+        booking.pickupSource = booking.pickupLocation != nil ? "instructor" : nil
+        try await booking.save(on: req.db)
+        await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
+        // Pickup coordinates feed dropoff's fallback (see reGeocodeDropoff), so a
+        // dropoff that was itself never explicitly set needs re-deriving here too.
+        if booking.dropoffLocation == nil || booking.dropoffLocation!.isEmpty {
+            await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+        }
+        return .ok
+    }
+
     // MARK: - POST /instructor/students/:studentID/bookings
 
     struct InstructorCreateBookingInput: Content {
         let lessonID: UUID
         let pickupLocation: String?
+        let dropoffLocation: String?
     }
 
     struct InstructorCreateBookingResponse: Content {
@@ -834,10 +868,22 @@ struct InstructorLessonController: RouteCollection {
         )
         booking.pickupLocation = input.pickupLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
         booking.pickupSource = booking.pickupLocation != nil ? "instructor" : nil
+        let trimmedDropoff = input.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        booking.dropoffLocation = (trimmedDropoff?.isEmpty ?? true) ? nil : trimmedDropoff
         try await booking.save(on: req.db)
 
         let bookingID = try booking.requireID()
         req.logger.info("instructor.createBookingForStudent: created bookingID=\(bookingID) for studentID=\(studentID) lessonID=\(lesson.id?.uuidString ?? "?")")
+
+        // Geocode whatever was supplied at creation so the journey-tracking geofence
+        // (TrackingService) doesn't silently fall back to pickup-as-dropoff the first
+        // time this lesson's tracking activates — see reGeocodeDropoff's doc comment.
+        if booking.pickupLocation != nil {
+            await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
+        }
+        if booking.dropoffLocation != nil {
+            await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+        }
 
         // Create or reassign a LessonFinance record so coverage/charge status works.
         let lessonID = input.lessonID
