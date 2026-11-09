@@ -836,6 +836,7 @@ struct StudentBookingsController: RouteCollection {
 
         booking.dropoffLocation = input.dropoffLocation
         try await booking.save(on: req.db)
+        await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
         req.broadcastLocationChanged(lessonID: booking.$lesson.id, field: "dropoff")
 
         if let lesson = try? await booking.$lesson.get(on: req.db) {

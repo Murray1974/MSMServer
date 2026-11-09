@@ -115,4 +115,25 @@ final class Booking: Model, Content, @unchecked Sendable {
         self.pickupSource = pickupSource
         self.paymentStatus = paymentStatus
     }
+
+    /// Re-geocodes `dropoffLocation` and overwrites `dropoffLatitude`/`dropoffLongitude`,
+    /// unconditionally (unlike TrackingSchedulerLifecycle's lazy one-time geocode, which
+    /// only fills these in when they're still nil). Call this whenever `dropoffLocation`
+    /// is changed after tracking may already be active — otherwise the cached lat/lon
+    /// from the lazy geocode goes stale and the journey-recording geofence keeps
+    /// targeting the old drop-off point. Falls back to the pickup coordinates when the
+    /// address is cleared, same as the initial lazy-geocode logic.
+    func reGeocodeDropoff(client: Client, logger: Logger, on db: Database) async {
+        guard let address = dropoffLocation, !address.isEmpty else {
+            dropoffLatitude = pickupLatitude
+            dropoffLongitude = pickupLongitude
+            try? await save(on: db)
+            return
+        }
+        let nominatim = NominatimService(client: client, logger: logger)
+        guard let coords = await nominatim.geocode(address: address) else { return }
+        dropoffLatitude = coords.latitude
+        dropoffLongitude = coords.longitude
+        try? await save(on: db)
+    }
 }

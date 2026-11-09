@@ -772,6 +772,7 @@ struct InstructorLessonController: RouteCollection {
         let raw = body.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         booking.dropoffLocation = raw.isEmpty ? nil : raw
         try await booking.save(on: req.db)
+        await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
         return .ok
     }
 
