@@ -24,18 +24,34 @@ struct StopMarker: Codable {
     let durationMinutes: Int
 }
 
-/// A sudden speed change detected from consecutive GPS speed samples — a GPS-only
-/// heuristic (not accelerometer-fused), so treat as approximate. See
-/// `detectDrivingEvents` in routes.swift for the detection thresholds.
+/// A sudden speed change, or a sharp turn, detected purely from GPS samples — no
+/// accelerometer involved, so treat as approximate. See `detectDrivingEvents` and
+/// `detectHarshCornering` in routes.swift for the detection thresholds.
 struct DrivingEvent: Codable {
-    /// "hardBrake" | "rapidAccel"
+    /// "hardBrake" | "rapidAccel" | "harshCornering"
     let type: String
     let latitude: Double
     let longitude: Double
     let timestamp: Date
+    /// For "harshCornering", fromMph == toMph (speed at the turn) and deltaMph is 0 —
+    /// there's no speed-delta concept for a turn; see `lateralG` instead.
     let fromMph: Double
     let toMph: Double
     let deltaMph: Double
+    /// Estimated lateral g-force, only set for "harshCornering" events.
+    let lateralG: Double?
+
+    init(type: String, latitude: Double, longitude: Double, timestamp: Date,
+         fromMph: Double, toMph: Double, deltaMph: Double, lateralG: Double? = nil) {
+        self.type = type
+        self.latitude = latitude
+        self.longitude = longitude
+        self.timestamp = timestamp
+        self.fromMph = fromMph
+        self.toMph = toMph
+        self.deltaMph = deltaMph
+        self.lateralG = lateralG
+    }
 }
 
 /// The recorded GPS route for one lesson, uploaded by the instructor's phone — see

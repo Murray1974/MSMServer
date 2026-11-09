@@ -2301,6 +2301,68 @@ public func routes(_ app: Application) throws {
         return distanceMiles / (durationSeconds / 3600)
     }
 
+    /// Initial compass bearing (0–360°) from point a to point b.
+    func bearingDegrees(_ a: (lat: Double, lon: Double), _ b: (lat: Double, lon: Double)) -> Double {
+        let lat1 = a.lat * .pi / 180, lat2 = b.lat * .pi / 180
+        let dLon = (b.lon - a.lon) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let bearing = atan2(y, x) * 180 / .pi
+        return (bearing + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    /// Detects sharp turns from GPS heading change alone — no accelerometer involved.
+    /// Estimates lateral g-force from how fast the bearing is rotating combined with
+    /// speed (centripetal acceleration ≈ v × dθ/dt). GPS-only, so noisier than real
+    /// accelerometer-based telematics; thresholds below are hand-picked starting points,
+    /// not calibrated against real driving data (same caveat as detectDrivingEvents).
+    /// Requires a minimum speed — heading is meaningless/noisy near-stationary, so
+    /// without this a three-point turn or tight parking maneuver would register as
+    /// constant harsh cornering.
+    func detectHarshCornering(_ points: [JourneyPointInput]) -> [DrivingEvent] {
+        guard points.count > 2 else { return [] }
+        let minSpeedMph = 10.0
+        let minDt = 1.0
+        let maxDt = 12.0
+        let harshLateralG = 0.3
+
+        var events: [DrivingEvent] = []
+        for i in 1..<(points.count - 1) {
+            guard let speed = points[i].speedMph, speed >= minSpeedMph else { continue }
+            let dt = points[i + 1].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            guard dt >= minDt, dt <= maxDt else { continue }
+
+            let bearing1 = bearingDegrees(
+                (points[i - 1].latitude, points[i - 1].longitude),
+                (points[i].latitude, points[i].longitude)
+            )
+            let bearing2 = bearingDegrees(
+                (points[i].latitude, points[i].longitude),
+                (points[i + 1].latitude, points[i + 1].longitude)
+            )
+            let rawDelta = bearing2 - bearing1
+            let delta = ((rawDelta + 540).truncatingRemainder(dividingBy: 360)) - 180 // signed, -180...180
+
+            let turnRateRadPerSec = abs(delta) * .pi / 180 / dt
+            let speedMetresPerSec = speed * 0.44704
+            let lateralG = (speedMetresPerSec * turnRateRadPerSec) / 9.81
+
+            if lateralG >= harshLateralG {
+                events.append(DrivingEvent(
+                    type: "harshCornering",
+                    latitude: points[i].latitude,
+                    longitude: points[i].longitude,
+                    timestamp: points[i].timestamp,
+                    fromMph: speed,
+                    toMph: speed,
+                    deltaMph: 0,
+                    lateralG: lateralG
+                ))
+            }
+        }
+        return events
+    }
+
     /// Detects sudden GPS speed changes between consecutive points — a GPS-only
     /// heuristic (not accelerometer-fused), so treat results as approximate; thresholds
     /// below are hand-picked starting points, not calibrated against real driving data.
@@ -2378,7 +2440,7 @@ public func routes(_ app: Application) throws {
         journey.stopMarkers = detectStopMarkers(input.points)
         journey.topSpeedMph = topSpeedMph(input.points)
         journey.averageSpeedMph = averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds)
-        journey.drivingEvents = detectDrivingEvents(input.points)
+        journey.drivingEvents = detectDrivingEvents(input.points) + detectHarshCornering(input.points)
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
         return .created
