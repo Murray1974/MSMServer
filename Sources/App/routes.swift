@@ -2212,6 +2212,8 @@ public func routes(_ app: Application) throws {
         let longitude: Double
         let timestamp: Date
         let speedMph: Double?
+        let yawRateDegPerSec: Double?
+        let accelMagnitudeG: Double?
     }
 
     struct LessonJourneyUploadInput: Decodable {
@@ -2405,6 +2407,121 @@ public func routes(_ app: Application) throws {
         return events
     }
 
+    /// Detects turn-in-the-road / parking-type manoeuvres (from fused GPS + motion
+    /// sensor data) and emergency stops (from GPS speed alone, since that one doesn't
+    /// need to know travel direction). Needs `yawRateDegPerSec`/`accelMagnitudeG` on
+    /// points for the first category — returns gracefully without them (journeys
+    /// recorded before motion-sensor capture was added, or where CoreMotion was
+    /// unavailable), still detecting emergency stops.
+    ///
+    /// Honest limit, worth keeping in mind before trusting the output too far: GPS
+    /// speed has no sign, so forward vs reverse is never directly knowable from this
+    /// phone alone. "turnInRoad" vs "parkingManoeuvre" is distinguished only by how
+    /// much the car's net heading rotated during the episode, not by confirming actual
+    /// direction changes — and specific parking types (parallel/bay/reverse-and-pull-up)
+    /// aren't distinguished at all, since they share the same low-speed,
+    /// high-steering-activity, pause-then-continue signature. See `ManoeuvreEvent`'s
+    /// doc comment.
+    func detectManoeuvres(_ points: [JourneyPointInput]) -> [ManoeuvreEvent] {
+        guard points.count > 2 else { return [] }
+        var events: [ManoeuvreEvent] = []
+
+        // MARK: Emergency stop — sharper than detectDrivingEvents' "hardBrake", and
+        // requires actually reaching a stop, not just a big speed drop.
+        let minSpeedBeforeStopMph = 15.0
+        let stoppedThresholdMph = 2.0
+        let hardestBrakeThreshold = -10.0 // mph/sec
+        for i in 1..<points.count {
+            guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph,
+                  fromSpeed >= minSpeedBeforeStopMph, toSpeed <= stoppedThresholdMph else { continue }
+            let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            guard dt > 0, dt <= 4, (toSpeed - fromSpeed) / dt <= hardestBrakeThreshold else { continue }
+            events.append(ManoeuvreEvent(
+                type: "emergencyStop",
+                latitude: points[i].latitude, longitude: points[i].longitude,
+                startedAt: points[i - 1].timestamp, endedAt: points[i].timestamp,
+                rotationDegrees: 0, pauseCount: 0
+            ))
+        }
+
+        // MARK: Turn-in-road / parking manoeuvres — needs motion-sensor data.
+        guard points.contains(where: { $0.yawRateDegPerSec != nil }) else { return events }
+
+        let maxSpeedForManoeuvre = 8.0
+        let minYawRateDegPerSec = 15.0
+        let minAccelG = 0.15
+        let minEpisodeDuration: TimeInterval = 8
+        let maxGapBetweenCandidates: TimeInterval = 6
+        let pauseSpeedThresholdMph = 1.5
+        let turnInRoadRotationDegrees = 120.0
+
+        func isCandidate(_ p: JourneyPointInput) -> Bool {
+            if let speed = p.speedMph, speed > maxSpeedForManoeuvre { return false }
+            let highYaw = p.yawRateDegPerSec.map { abs($0) >= minYawRateDegPerSec } ?? false
+            let highAccel = p.accelMagnitudeG.map { $0 >= minAccelG } ?? false
+            return highYaw || highAccel
+        }
+
+        func closeWindow(_ start: Int, _ end: Int) {
+            guard end > start else { return }
+            let startedAt = points[start].timestamp
+            let endedAt = points[end].timestamp
+            guard endedAt.timeIntervalSince(startedAt) >= minEpisodeDuration else { return }
+
+            // Net rotation across the window — a three-point turn's ~180° net swing
+            // looks very different from a parking manoeuvre's lock-unlock wiggle, which
+            // mostly cancels out.
+            var netRotation = 0.0
+            for j in (start + 1)...end {
+                guard let yawRate = points[j].yawRateDegPerSec else { continue }
+                let dt = points[j].timestamp.timeIntervalSince(points[j - 1].timestamp)
+                guard dt > 0, dt <= 3 else { continue }
+                netRotation += yawRate * dt
+            }
+            let rotationDegrees = abs(netRotation)
+
+            // Pause points: GPS speed dropping near-zero then rising again — a proxy
+            // for a gear change between forward/reverse phases, without needing to know
+            // which direction was which.
+            var pauseCount = 0
+            var wasPaused = false
+            for j in start...end {
+                let isPaused = (points[j].speedMph ?? 0) <= pauseSpeedThresholdMph
+                if isPaused, !wasPaused { pauseCount += 1 }
+                wasPaused = isPaused
+            }
+
+            let midIndex = (start + end) / 2
+            events.append(ManoeuvreEvent(
+                type: rotationDegrees >= turnInRoadRotationDegrees ? "turnInRoad" : "parkingManoeuvre",
+                latitude: points[midIndex].latitude, longitude: points[midIndex].longitude,
+                startedAt: startedAt, endedAt: endedAt,
+                rotationDegrees: rotationDegrees, pauseCount: pauseCount
+            ))
+        }
+
+        var windowStart: Int?
+        var lastCandidateIndex: Int?
+        for i in 0..<points.count {
+            if isCandidate(points[i]) {
+                if windowStart == nil { windowStart = i }
+                lastCandidateIndex = i
+            } else if let start = windowStart, let lastIdx = lastCandidateIndex {
+                let gap = points[i].timestamp.timeIntervalSince(points[lastIdx].timestamp)
+                if gap > maxGapBetweenCandidates {
+                    closeWindow(start, lastIdx)
+                    windowStart = nil
+                    lastCandidateIndex = nil
+                }
+            }
+        }
+        if let start = windowStart, let lastIdx = lastCandidateIndex {
+            closeWindow(start, lastIdx)
+        }
+
+        return events
+    }
+
     // POST /instructor/tracking/journey — batch upload of a route. Sent once when
     // JourneyTrackingManager finalizes (geofence reached, manual end, or the 45-minute
     // overrun safety net), and also periodically *during* an active recording
@@ -2420,7 +2537,8 @@ public func routes(_ app: Application) throws {
         let distanceMiles = routeDistanceMiles(input.points)
         let durationSeconds = input.endedAt.timeIntervalSince(input.startedAt)
         let points = input.points.map {
-            RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph)
+            RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph,
+                       yawRateDegPerSec: $0.yawRateDegPerSec, accelMagnitudeG: $0.accelMagnitudeG)
         }
 
         let journey: LessonJourney
@@ -2441,6 +2559,7 @@ public func routes(_ app: Application) throws {
         journey.topSpeedMph = topSpeedMph(input.points)
         journey.averageSpeedMph = averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds)
         journey.drivingEvents = detectDrivingEvents(input.points) + detectHarshCornering(input.points)
+        journey.manoeuvreEvents = detectManoeuvres(input.points)
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
         return .created

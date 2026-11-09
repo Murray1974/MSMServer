@@ -12,6 +12,58 @@ struct RoutePoint: Codable {
     /// GPS-reported ground speed in mph, nil when the device reported an invalid
     /// reading (CLLocation.speed < 0) — converted to mph client-side at capture time.
     let speedMph: Double?
+    /// Yaw rotation rate (deg/s), from the phone's fused motion sensors
+    /// (CMDeviceMotion.attitude.yaw, gyro+accelerometer+compass), sampled at the same
+    /// moment as this GPS fix. World-referenced (rotation about the vertical/gravity
+    /// axis), so — unlike GPS course — it stays meaningful even when the car is moving
+    /// too slowly for GPS bearing to be reliable; this is what makes manoeuvre
+    /// detection (see `detectManoeuvres` in routes.swift) possible at parking speeds.
+    /// Only populated while the phone is mounted securely enough to be rigid with the
+    /// car (currently assumed true for this single-instructor app — see CLAUDE.md).
+    /// nil for journeys recorded before this was added, or if CoreMotion was
+    /// unavailable.
+    let yawRateDegPerSec: Double?
+    /// Magnitude of gravity-removed acceleration (g), from
+    /// CMDeviceMotion.userAcceleration. Frame-independent (doesn't depend on how the
+    /// phone is mounted/tilted), used to spot a sharp acceleration/deceleration (e.g.
+    /// an emergency stop) with more precision than GPS speed deltas alone, which are
+    /// limited by GPS fix spacing/timing.
+    let accelMagnitudeG: Double?
+
+    init(latitude: Double, longitude: Double, timestamp: Date, speedMph: Double?,
+         yawRateDegPerSec: Double? = nil, accelMagnitudeG: Double? = nil) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.timestamp = timestamp
+        self.speedMph = speedMph
+        self.yawRateDegPerSec = yawRateDegPerSec
+        self.accelMagnitudeG = accelMagnitudeG
+    }
+}
+
+/// A low-speed, high-steering-activity episode detected from fused GPS + motion-sensor
+/// data — e.g. a turn-in-the-road or a parking manoeuvre. See `detectManoeuvres` in
+/// routes.swift for the detection logic and its honest limits: GPS speed has no sign
+/// (forward vs reverse is never directly knowable), so this can reliably flag *that* a
+/// manoeuvre happened and roughly how much turning it involved, but can't reliably tell
+/// parallel parking apart from bay parking or a reverse-and-pull-up — those all share
+/// the same low-speed/high-rotation/pause-point signature from the sensors available.
+struct ManoeuvreEvent: Codable {
+    /// "turnInRoad" (large net rotation, e.g. a three-point turn) |
+    /// "parkingManoeuvre" (smaller rotation, e.g. parallel/bay parking or a reverse) |
+    /// "emergencyStop" (sharp deceleration to a stop — the one type this can identify
+    /// with real confidence, since it doesn't depend on knowing travel direction)
+    let type: String
+    let latitude: Double
+    let longitude: Double
+    let startedAt: Date
+    let endedAt: Date
+    /// Total net heading change across the episode, in degrees (unsigned). 0 for
+    /// "emergencyStop".
+    let rotationDegrees: Double
+    /// Count of near-complete stops within the episode (likely gear-change points
+    /// between forward/reverse phases). 0 for "emergencyStop".
+    let pauseCount: Int
 }
 
 /// A single stationary period (≥5 minutes) detected within a recorded route — purely
@@ -102,6 +154,9 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "driving_events")
     var drivingEvents: [DrivingEvent]
 
+    @Field(key: "manoeuvre_events")
+    var manoeuvreEvents: [ManoeuvreEvent]
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -118,7 +173,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         stopMarkers: [StopMarker],
         topSpeedMph: Double,
         averageSpeedMph: Double,
-        drivingEvents: [DrivingEvent]
+        drivingEvents: [DrivingEvent],
+        manoeuvreEvents: [ManoeuvreEvent] = []
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -131,5 +187,6 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.topSpeedMph = topSpeedMph
         self.averageSpeedMph = averageSpeedMph
         self.drivingEvents = drivingEvents
+        self.manoeuvreEvents = manoeuvreEvents
     }
 }
