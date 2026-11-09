@@ -37,6 +37,10 @@ struct InstructorLessonController: RouteCollection {
         // instead of those edits only ever landing in the local Calendar event.
         instructor.patch("bookings", ":bookingID", "pickup", use: setPickupLocation)
 
+        // One-off catch-up: re-geocodes pickup/dropoff for active upcoming bookings
+        // created before reGeocodePickup/reGeocodeDropoff existed. See handler doc comment.
+        instructor.post("bookings", "backfill-geocodes", use: backfillGeocodes)
+
         // Instructor creates a booking on behalf of a student (no 48h / capacity guards)
         instructor.post("students", ":studentID", "bookings", use: createBookingForStudent)
 
@@ -807,6 +811,41 @@ struct InstructorLessonController: RouteCollection {
             await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
         }
         return .ok
+    }
+
+    // MARK: - POST /instructor/bookings/backfill-geocodes
+    // One-off catch-up for bookings created before reGeocodePickup/reGeocodeDropoff
+    // existed: refreshes pickup/dropoff coordinates for every active booking whose
+    // lesson hasn't happened yet, so journey tracking stops targeting stale or
+    // pickup-as-dropoff-fallback coordinates on lessons already on the calendar.
+    // Safe to re-run — every booking just gets its coordinates recomputed from
+    // whatever pickupLocation/dropoffLocation text it currently has.
+    struct BackfillGeocodesResponse: Content {
+        let bookingsScanned: Int
+        let pickupGeocoded: Int
+    }
+
+    func backfillGeocodes(_ req: Request) async throws -> BackfillGeocodesResponse {
+        let now = Date()
+        let bookings = try await Booking.query(on: req.db)
+            .filter(\.$deletedAt == nil)
+            .join(parent: \Booking.$lesson)
+            .filter(Lesson.self, \.$startsAt >= now)
+            .all()
+
+        var pickupGeocoded = 0
+        for booking in bookings {
+            if let pickup = booking.pickupLocation, !pickup.isEmpty {
+                await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
+                pickupGeocoded += 1
+            }
+            // Always refresh dropoff too, even with no address of its own — its
+            // fallback target is whatever pickup coordinates were just set above.
+            await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+        }
+
+        req.logger.info("instructor.backfillGeocodes: scanned=\(bookings.count) pickupGeocoded=\(pickupGeocoded)")
+        return BackfillGeocodesResponse(bookingsScanned: bookings.count, pickupGeocoded: pickupGeocoded)
     }
 
     // MARK: - POST /instructor/students/:studentID/bookings
