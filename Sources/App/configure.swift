@@ -170,6 +170,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddSocialLinksToInstructorSettings())
     app.migrations.add(AddManoeuvreEventsToLessonJourney())
     app.migrations.add(AddMockTestsToLessonJourney())
+    app.migrations.add(AddIsTestJourneyToLessonJourney())
 
     try app.autoMigrate().wait()
 

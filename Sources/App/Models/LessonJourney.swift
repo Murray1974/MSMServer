@@ -181,6 +181,13 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "mock_tests")
     var mockTests: [MockTestResult]
 
+    /// true for a journey started from the app's standalone "Test Journey" control
+    /// (no real Booking behind `bookingID` — just a freshly-generated UUID), used for
+    /// calibrating detection thresholds outside of a real lesson. false (the default)
+    /// for every normal lesson journey.
+    @Field(key: "is_test_journey")
+    var isTestJourney: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -199,7 +206,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         averageSpeedMph: Double,
         drivingEvents: [DrivingEvent],
         manoeuvreEvents: [ManoeuvreEvent] = [],
-        mockTests: [MockTestResult] = []
+        mockTests: [MockTestResult] = [],
+        isTestJourney: Bool = false
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -214,5 +222,6 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.drivingEvents = drivingEvents
         self.manoeuvreEvents = manoeuvreEvents
         self.mockTests = mockTests
+        self.isTestJourney = isTestJourney
     }
 }

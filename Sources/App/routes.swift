@@ -2225,6 +2225,21 @@ public func routes(_ app: Application) throws {
         let journeysUpdated: Int
     }
 
+    struct TestJourneySummary: Content {
+        /// The journey's `bookingID` field — for a test journey this is just a
+        /// freshly-generated UUID, not a real booking. Pass it straight back to
+        /// `GET /instructor/bookings/:bookingID/journey` to fetch full detail.
+        let id: UUID
+        let startedAt: Date
+        let endedAt: Date
+        let endedReason: String
+        let distanceMiles: Double
+        let topSpeedMph: Double
+        let averageSpeedMph: Double
+        let drivingEventsCount: Int
+        let manoeuvreEventsCount: Int
+    }
+
     struct LessonJourneyUploadInput: Decodable {
         let bookingID: UUID
         let startedAt: Date
@@ -2232,6 +2247,7 @@ public func routes(_ app: Application) throws {
         let endedReason: String
         let points: [JourneyPointInput]
         let mockTestWindows: [MockTestWindowInput]?
+        let isTestJourney: Bool?
     }
 
     /// Slices `points` to just those falling within marked mock-test windows, then
@@ -2722,9 +2738,38 @@ public func routes(_ app: Application) throws {
         journey.drivingEvents = accelEvents + corneringEvents
         journey.manoeuvreEvents = detectManoeuvres(input.points)
         journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: input.points)
+        journey.isTestJourney = input.isTestJourney ?? false
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
         return .created
+    }
+
+    // GET /instructor/journeys/test — standalone test journeys (not tied to a real
+    // lesson Booking), for the "Test Journey" history list. Lightweight rows only —
+    // full detail still comes from the existing per-ID journey endpoint below, which
+    // works unchanged since `bookingID` here is just a freshly-generated UUID with no
+    // FK constraint behind it.
+    financeProtected.get("instructor", "journeys", "test") { req async throws -> [TestJourneySummary] in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        let journeys = try await LessonJourney.query(on: req.db)
+            .filter(\.$isTestJourney == true)
+            .sort(\.$startedAt, .descending)
+            .all()
+        return journeys.map {
+            TestJourneySummary(
+                id: $0.bookingID,
+                startedAt: $0.startedAt,
+                endedAt: $0.endedAt,
+                endedReason: $0.endedReason,
+                distanceMiles: $0.distanceMiles,
+                topSpeedMph: $0.topSpeedMph,
+                averageSpeedMph: $0.averageSpeedMph,
+                drivingEventsCount: $0.drivingEvents.count,
+                manoeuvreEventsCount: $0.manoeuvreEvents.count
+            )
+        }
     }
 
     // GET /instructor/bookings/:bookingID/journey — for the "View Journey" map screen.
