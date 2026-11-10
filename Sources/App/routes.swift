@@ -2600,6 +2600,20 @@ public func routes(_ app: Application) throws {
             let endedAt = points[end].timestamp
             guard endedAt.timeIntervalSince(startedAt) >= minEpisodeDuration else { return }
 
+            // Require at least one genuinely high-yaw sample somewhere in the window.
+            // Confirmed against a real lesson on 10 Nov 2026: accel alone is nearly
+            // useless here — ordinary engine/road vibration at low speed already reads
+            // 0.15-0.47g, so an accel-only window is really just "car went slowly for a
+            // bit" (11 of 12 flagged "P" markers on that lesson were exactly this: sitting
+            // in traffic, pulling away, a long wait at a junction — not a manoeuvre at
+            // all). The one genuine reversing manoeuvre's own accel never exceeded 0.28g
+            // either; its only real signal was yaw. Still need `isCandidate` to allow
+            // accel-only points to *extend* a window (the real manoeuvre's single
+            // qualifying yaw sample sat inside a window that only cleared the 4s minimum
+            // because its accel-only neighbours bridged it), just not to justify one on
+            // its own.
+            guard points[start...end].contains(where: { ($0.yawRateDegPerSec).map { abs($0) >= minYawRateDegPerSec } ?? false }) else { return }
+
             // Net rotation across the window — a three-point turn's ~180° net swing
             // looks very different from a parking manoeuvre's lock-unlock wiggle, which
             // mostly cancels out.
