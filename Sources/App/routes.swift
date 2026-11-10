@@ -2693,6 +2693,25 @@ public func routes(_ app: Application) throws {
         return events
     }
 
+    /// Preserves the instructor's manual confirm/reject verdict (see
+    /// `ManoeuvreEvent.confirmed`'s doc comment) across a re-detection — a plain
+    /// `detectManoeuvres` re-run (periodic upload, or `/admin/journeys/reanalyze` after
+    /// a threshold change) would otherwise regenerate every event fresh with `confirmed
+    /// == nil`, silently discarding review work every time thresholds get tuned, which
+    /// is exactly when this keeps getting re-run. Matches by overlapping time window
+    /// rather than exact equality, since a threshold change can shift a window's
+    /// boundaries slightly while it's still clearly "the same" episode.
+    func carryOverManoeuvreConfirmations(from old: [ManoeuvreEvent], to new: [ManoeuvreEvent]) -> [ManoeuvreEvent] {
+        new.map { event in
+            guard let match = old.first(where: {
+                $0.confirmed != nil && $0.startedAt < event.endedAt && event.startedAt < $0.endedAt
+            }) else { return event }
+            var event = event
+            event.confirmed = match.confirmed
+            return event
+        }
+    }
+
     // POST /instructor/tracking/journey — batch upload of a route. Sent once when
     // JourneyTrackingManager finalizes (geofence reached, manual end, or the 45-minute
     // overrun safety net), and also periodically *during* an active recording
@@ -2720,6 +2739,9 @@ public func routes(_ app: Application) throws {
         } else {
             journey = LessonJourney()
             journey.bookingID = input.bookingID
+            // carryOverManoeuvreConfirmations below reads this before it's otherwise
+            // assigned on a brand-new journey — Fluent's @Field traps on an unset read.
+            journey.manoeuvreEvents = []
         }
         journey.startedAt = input.startedAt
         journey.endedAt = input.endedAt
@@ -2736,7 +2758,7 @@ public func routes(_ app: Application) throws {
         let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
         let accelEvents = detectDrivingEvents(input.points).filter { !corneringTimestamps.contains($0.timestamp) }
         journey.drivingEvents = accelEvents + corneringEvents
-        journey.manoeuvreEvents = detectManoeuvres(input.points)
+        journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(input.points))
         journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: input.points)
         journey.isTestJourney = input.isTestJourney ?? false
         try await journey.save(on: req.db)
@@ -2784,6 +2806,35 @@ public func routes(_ app: Application) throws {
         return try await journey.encodeResponse(for: req)
     }
 
+    // POST /instructor/bookings/:bookingID/journey/manoeuvres/confirm — the
+    // instructor's retroactive "was this actually a manoeuvre?" verdict from the
+    // journey map screen. Keyed on `startedAt` (unique enough within one journey's
+    // manoeuvre list — same identity the client already uses for `ManoeuvreEvent.id`)
+    // rather than array position, so it's unaffected by the list being regenerated in a
+    // different order/length by a later reanalyze.
+    financeProtected.post("instructor", "bookings", ":bookingID", "journey", "manoeuvres", "confirm") { req async throws -> HTTPStatus in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+        struct ConfirmManoeuvreInput: Decodable {
+            let startedAt: Date
+            let confirmed: Bool
+        }
+        let input = try req.content.decode(ConfirmManoeuvreInput.self)
+        guard let journey = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == bookingID)
+            .first()
+        else { throw Abort(.notFound) }
+        guard let index = journey.manoeuvreEvents.firstIndex(where: { $0.startedAt == input.startedAt }) else {
+            throw Abort(.notFound)
+        }
+        journey.manoeuvreEvents[index].confirmed = input.confirmed
+        try await journey.save(on: req.db)
+        return .ok
+    }
+
     // POST /admin/journeys/reanalyze — re-runs the current driving-event/manoeuvre/
     // mock-test detection logic against every already-recorded journey's stored GPS
     // points, in place, and re-saves them. Lets a threshold or logic fix (like the
@@ -2806,7 +2857,7 @@ public func routes(_ app: Application) throws {
             let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
             let accelEvents = detectDrivingEvents(inputPoints).filter { !corneringTimestamps.contains($0.timestamp) }
             journey.drivingEvents = accelEvents + corneringEvents
-            journey.manoeuvreEvents = detectManoeuvres(inputPoints)
+            journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(inputPoints))
             let windows = journey.mockTests.map { MockTestWindowInput(startedAt: $0.startedAt, endedAt: $0.endedAt) }
             journey.mockTests = buildMockTestResults(windows, allPoints: inputPoints)
             try await journey.save(on: req.db)

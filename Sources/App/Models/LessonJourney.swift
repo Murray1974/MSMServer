@@ -64,6 +64,16 @@ struct ManoeuvreEvent: Codable {
     /// Count of near-complete stops within the episode (likely gear-change points
     /// between forward/reverse phases). 0 for "emergencyStop".
     let pauseCount: Int
+    /// Instructor's own retroactive verdict — nil until reviewed on the journey map
+    /// screen. Confirmed against a real lesson on 10 Nov 2026: GPS+motion data alone
+    /// can't reliably tell a genuine manoeuvre apart from, e.g., a small loop through
+    /// ordinary side roads to turn the car around — both look like a sequence of
+    /// low-speed turns. This is the ground truth that heuristic can't produce on its
+    /// own. `carryOverManoeuvreConfirmations` (routes.swift) preserves this across a
+    /// re-detection (threshold change, reanalyze) by matching on overlapping time
+    /// windows, since a plain re-run would otherwise regenerate every event fresh with
+    /// this nil.
+    var confirmed: Bool? = nil
 }
 
 /// A single stationary period (≥5 minutes) detected within a recorded route — purely
