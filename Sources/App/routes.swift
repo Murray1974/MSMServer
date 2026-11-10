@@ -2615,7 +2615,13 @@ public func routes(_ app: Application) throws {
         journey.stopMarkers = detectStopMarkers(input.points)
         journey.topSpeedMph = topSpeedMph(input.points)
         journey.averageSpeedMph = averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds)
-        journey.drivingEvents = detectDrivingEvents(input.points) + detectHarshCornering(input.points)
+        // A hard turn's lateral g can also trip the magnitude-based brake/accel detector
+        // at the same instant — same underlying force, counted twice under two labels.
+        // Cornering is the more specific/accurate read of that instant, so it wins.
+        let corneringEvents = detectHarshCornering(input.points)
+        let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
+        let accelEvents = detectDrivingEvents(input.points).filter { !corneringTimestamps.contains($0.timestamp) }
+        journey.drivingEvents = accelEvents + corneringEvents
         journey.manoeuvreEvents = detectManoeuvres(input.points)
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
