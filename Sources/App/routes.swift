@@ -2221,6 +2221,10 @@ public func routes(_ app: Application) throws {
         let endedAt: Date
     }
 
+    struct ReanalyzeJourneysResult: Content {
+        let journeysUpdated: Int
+    }
+
     struct LessonJourneyUploadInput: Decodable {
         let bookingID: UUID
         let startedAt: Date
@@ -2709,6 +2713,36 @@ public func routes(_ app: Application) throws {
             .first()
         else { return Response(status: .noContent) }
         return try await journey.encodeResponse(for: req)
+    }
+
+    // POST /admin/journeys/reanalyze — re-runs the current driving-event/manoeuvre/
+    // mock-test detection logic against every already-recorded journey's stored GPS
+    // points, in place, and re-saves them. Lets a threshold or logic fix (like the
+    // 10 Nov 2026 harsh-event/rotation fixes) apply retroactively to lessons already
+    // recorded, without needing to re-drive them. Raw points are never touched or
+    // re-fetched from the client — only the derived fields are recomputed.
+    financeProtected.post("admin", "journeys", "reanalyze") { req async throws -> ReanalyzeJourneysResult in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+
+        let journeys = try await LessonJourney.query(on: req.db).all()
+        for journey in journeys {
+            let inputPoints = journey.points.map {
+                JourneyPointInput(
+                    latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp,
+                    speedMph: $0.speedMph, yawRateDegPerSec: $0.yawRateDegPerSec, accelMagnitudeG: $0.accelMagnitudeG
+                )
+            }
+            let corneringEvents = detectHarshCornering(inputPoints)
+            let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
+            let accelEvents = detectDrivingEvents(inputPoints).filter { !corneringTimestamps.contains($0.timestamp) }
+            journey.drivingEvents = accelEvents + corneringEvents
+            journey.manoeuvreEvents = detectManoeuvres(inputPoints)
+            let windows = journey.mockTests.map { MockTestWindowInput(startedAt: $0.startedAt, endedAt: $0.endedAt) }
+            journey.mockTests = buildMockTestResults(windows, allPoints: inputPoints)
+            try await journey.save(on: req.db)
+        }
+        return ReanalyzeJourneysResult(journeysUpdated: journeys.count)
     }
 
     // POST /instructor/lessons/:lessonID/discount — applies a one-off, instructor's-
