@@ -116,6 +116,34 @@ struct DrivingEvent: Codable {
     }
 }
 
+/// One point's resolved speed limit — see `SpeedLimitLookupService` for how this is
+/// looked up (snapped to the nearest OpenStreetMap road) and what `isEstimated` means.
+/// Populated lazily, only once `POST .../journey/speed-limits/refresh` is called — never
+/// at upload/finalize time (see that service's doc comment for why).
+struct SpeedLimitPoint: Codable {
+    let timestamp: Date
+    /// nil when no road was found within snapping distance, or a nearby road's limit
+    /// couldn't be resolved at all (an untagged trunk/primary/secondary/tertiary road —
+    /// see `SpeedLimitLookupService`).
+    let speedLimitMph: Double?
+    let isEstimated: Bool
+    let roadName: String?
+}
+
+/// A sustained period of travelling faster than the resolved speed limit for that road.
+/// Only ever built from points with a non-nil, resolved `SpeedLimitPoint` — an "unknown
+/// limit" point can't produce a speeding event by definition.
+struct SpeedingEvent: Codable {
+    let startedAt: Date
+    let endedAt: Date
+    let latitude: Double
+    let longitude: Double
+    let maxSpeedMph: Double
+    let speedLimitMph: Double
+    let isEstimatedLimit: Bool
+    let roadName: String?
+}
+
 /// One instructor-marked "mock test" window, analysed in isolation from the rest of the
 /// lesson's own route/metrics. The window is carved out of the same single continuous
 /// recording — not a second, independently-run recording — by slicing the lesson's
@@ -198,6 +226,14 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "is_test_journey")
     var isTestJourney: Bool
 
+    /// Lazily-populated speed limit per point — see `SpeedLimitPoint`'s doc comment.
+    /// Empty until the journey map screen has been opened at least once.
+    @Field(key: "speed_limit_points")
+    var speedLimitPoints: [SpeedLimitPoint]
+
+    @Field(key: "speeding_events")
+    var speedingEvents: [SpeedingEvent]
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -217,7 +253,9 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         drivingEvents: [DrivingEvent],
         manoeuvreEvents: [ManoeuvreEvent] = [],
         mockTests: [MockTestResult] = [],
-        isTestJourney: Bool = false
+        isTestJourney: Bool = false,
+        speedLimitPoints: [SpeedLimitPoint] = [],
+        speedingEvents: [SpeedingEvent] = []
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -233,5 +271,7 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.manoeuvreEvents = manoeuvreEvents
         self.mockTests = mockTests
         self.isTestJourney = isTestJourney
+        self.speedLimitPoints = speedLimitPoints
+        self.speedingEvents = speedingEvents
     }
 }

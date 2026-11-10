@@ -2712,6 +2712,62 @@ public func routes(_ app: Application) throws {
         }
     }
 
+    /// Groups consecutive points travelling faster than their resolved speed limit (plus
+    /// a tolerance, to absorb ordinary GPS speed jitter rather than flagging it) into
+    /// episodes, the same windowing shape as `detectManoeuvres`. A point with no resolved
+    /// limit (nil) always closes whatever episode was open — it can't extend one.
+    func detectSpeedingEvents(_ points: [RoutePoint], speedLimits: [SpeedLimitPoint]) -> [SpeedingEvent] {
+        guard points.count == speedLimits.count, !points.isEmpty else { return [] }
+        let toleranceMph = 5.0
+        let minEpisodeDuration: TimeInterval = 5
+
+        struct Episode {
+            var startIndex: Int
+            var lastIndex: Int
+            var maxSpeedMph: Double
+            var speedLimitMph: Double
+            var isEstimated: Bool
+            var roadName: String?
+        }
+        var events: [SpeedingEvent] = []
+        var episode: Episode?
+
+        func closeEpisode() {
+            guard let ep = episode else { return }
+            let duration = points[ep.lastIndex].timestamp.timeIntervalSince(points[ep.startIndex].timestamp)
+            if duration >= minEpisodeDuration {
+                let midIndex = (ep.startIndex + ep.lastIndex) / 2
+                events.append(SpeedingEvent(
+                    startedAt: points[ep.startIndex].timestamp, endedAt: points[ep.lastIndex].timestamp,
+                    latitude: points[midIndex].latitude, longitude: points[midIndex].longitude,
+                    maxSpeedMph: ep.maxSpeedMph, speedLimitMph: ep.speedLimitMph,
+                    isEstimatedLimit: ep.isEstimated, roadName: ep.roadName
+                ))
+            }
+            episode = nil
+        }
+
+        for i in 0..<points.count {
+            guard let limit = speedLimits[i].speedLimitMph, let speed = points[i].speedMph,
+                  speed > limit + toleranceMph else {
+                closeEpisode()
+                continue
+            }
+            if var ep = episode {
+                ep.lastIndex = i
+                ep.maxSpeedMph = max(ep.maxSpeedMph, speed)
+                episode = ep
+            } else {
+                episode = Episode(
+                    startIndex: i, lastIndex: i, maxSpeedMph: speed, speedLimitMph: limit,
+                    isEstimated: speedLimits[i].isEstimated, roadName: speedLimits[i].roadName
+                )
+            }
+        }
+        closeEpisode()
+        return events
+    }
+
     // POST /instructor/tracking/journey — batch upload of a route. Sent once when
     // JourneyTrackingManager finalizes (geofence reached, manual end, or the 45-minute
     // overrun safety net), and also periodically *during* an active recording
@@ -2742,6 +2798,11 @@ public func routes(_ app: Application) throws {
             // carryOverManoeuvreConfirmations below reads this before it's otherwise
             // assigned on a brand-new journey — Fluent's @Field traps on an unset read.
             journey.manoeuvreEvents = []
+            // Never touched by this handler at all (only the speed-limits/refresh
+            // endpoint sets these) — still must be assigned before `.save()`, or Fluent
+            // traps trying to serialize an unset @Field on the INSERT.
+            journey.speedLimitPoints = []
+            journey.speedingEvents = []
         }
         journey.startedAt = input.startedAt
         journey.endedAt = input.endedAt
@@ -2833,6 +2894,34 @@ public func routes(_ app: Application) throws {
         journey.manoeuvreEvents[index].confirmed = input.confirmed
         try await journey.save(on: req.db)
         return .ok
+    }
+
+    // POST /instructor/bookings/:bookingID/journey/speed-limits/refresh — looks up each
+    // point's speed limit from OpenStreetMap and derives speeding events, then returns
+    // the updated journey. Deliberately separate from the upload/finalize/reanalyze
+    // pipeline (see SpeedLimitLookupService's doc comment) — the client calls this
+    // lazily, once, the first time a journey's map screen is opened with no speed limit
+    // data yet, not on every upload.
+    financeProtected.post("instructor", "bookings", ":bookingID", "journey", "speed-limits", "refresh") { req async throws -> Response in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+        guard let journey = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == bookingID)
+            .first()
+        else { throw Abort(.notFound) }
+
+        let lookup = SpeedLimitLookupService(client: req.client, logger: req.logger)
+        let results = await lookup.lookupSpeedLimits(for: journey.points.map { ($0.latitude, $0.longitude, $0.timestamp) })
+        let speedLimitPoints = results.map {
+            SpeedLimitPoint(timestamp: $0.timestamp, speedLimitMph: $0.speedLimitMph, isEstimated: $0.isEstimated, roadName: $0.roadName)
+        }
+        journey.speedLimitPoints = speedLimitPoints
+        journey.speedingEvents = detectSpeedingEvents(journey.points, speedLimits: speedLimitPoints)
+        try await journey.save(on: req.db)
+        return try await journey.encodeResponse(for: req)
     }
 
     // POST /admin/journeys/reanalyze — re-runs the current driving-event/manoeuvre/

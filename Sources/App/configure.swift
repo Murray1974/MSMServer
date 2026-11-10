@@ -171,6 +171,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddManoeuvreEventsToLessonJourney())
     app.migrations.add(AddMockTestsToLessonJourney())
     app.migrations.add(AddIsTestJourneyToLessonJourney())
+    app.migrations.add(AddSpeedLimitsToLessonJourney())
 
     try app.autoMigrate().wait()
 
