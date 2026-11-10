@@ -2434,7 +2434,17 @@ public func routes(_ app: Application) throws {
 
         let harshAccelG = 0.3
         let minSpeedMph = 5.0
-        let minDeltaMph = 1.0
+        // Rate-based, not a raw mph delta — a 1mph change over an 8s gap is
+        //0.125mph/s (nothing), but the old `abs(deltaMph) >= 1.0` gate let it
+        // through purely because the accel gate (which sits close to its own
+        // threshold almost constantly from ordinary road vibration) happened to
+        // pass too. Confirmed against a real lesson on 10 Nov 2026: 178 events in
+        // 45 minutes, median rate only 0.75mph/s — only 1 of those 178 would have
+        // cleared a genuine harsh-rate bar. Matched to the same mph/s thresholds
+        // the GPS-delta fallback below already uses, so "harsh" means the same
+        // thing on both paths.
+        let hardBrakeRateMphPerSec = -6.0
+        let rapidAccelRateMphPerSec = 5.0
         let minDt = 0.5
         let maxDt = 8.0
 
@@ -2446,10 +2456,18 @@ public func routes(_ app: Application) throws {
             let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
             guard dt >= minDt, dt <= maxDt else { continue }
             let deltaMph = toSpeed - fromSpeed
-            guard abs(deltaMph) >= minDeltaMph else { continue }
+            let ratePerSecond = deltaMph / dt
+            let type: String
+            if ratePerSecond <= hardBrakeRateMphPerSec {
+                type = "hardBrake"
+            } else if ratePerSecond >= rapidAccelRateMphPerSec {
+                type = "rapidAccel"
+            } else {
+                continue
+            }
 
             events.append(DrivingEvent(
-                type: deltaMph < 0 ? "hardBrake" : "rapidAccel",
+                type: type,
                 latitude: points[i].latitude,
                 longitude: points[i].longitude,
                 timestamp: points[i].timestamp,
@@ -2571,12 +2589,21 @@ public func routes(_ app: Application) throws {
             // Net rotation across the window — a three-point turn's ~180° net swing
             // looks very different from a parking manoeuvre's lock-unlock wiggle, which
             // mostly cancels out.
+            // Confirmed against a real lesson on 10 Nov 2026: every single manoeuvre
+            // window's GPS fixes were 4-93s apart (the 15m distanceFilter samples less
+            // often, not more, while crawling through a slow manoeuvre) — never under
+            // the old `dt <= 3` cutoff, so every sample was discarded and rotation
+            // summed to exactly 0 every time, meaning turnInRoad could never fire.
+            // Cap each sample's contribution at 3s of its instantaneous yaw rate
+            // instead of discarding it outright — keeps the original "don't trust one
+            // sample to represent more than 3s" intent without zeroing out real gaps,
+            // and avoids wildly overcounting a long stationary pause.
             var netRotation = 0.0
             for j in (start + 1)...end {
                 guard let yawRate = points[j].yawRateDegPerSec else { continue }
                 let dt = points[j].timestamp.timeIntervalSince(points[j - 1].timestamp)
-                guard dt > 0, dt <= 3 else { continue }
-                netRotation += yawRate * dt
+                guard dt > 0 else { continue }
+                netRotation += yawRate * min(dt, 3.0)
             }
             let rotationDegrees = abs(netRotation)
 
