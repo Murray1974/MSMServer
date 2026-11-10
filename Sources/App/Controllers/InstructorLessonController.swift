@@ -833,6 +833,8 @@ struct InstructorLessonController: RouteCollection {
     struct BackfillGeocodesResponse: Content {
         let bookingsScanned: Int
         let pickupGeocoded: Int
+        let pickupSucceeded: Int
+        let dropoffSucceeded: Int
     }
 
     func backfillGeocodes(_ req: Request) async throws -> BackfillGeocodesResponse {
@@ -844,18 +846,24 @@ struct InstructorLessonController: RouteCollection {
             .all()
 
         var pickupGeocoded = 0
+        var pickupSucceeded = 0
+        var dropoffSucceeded = 0
         for booking in bookings {
             if let pickup = booking.pickupLocation, !pickup.isEmpty {
-                await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
                 pickupGeocoded += 1
+                if await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db) {
+                    pickupSucceeded += 1
+                }
             }
             // Always refresh dropoff too, even with no address of its own — its
             // fallback target is whatever pickup coordinates were just set above.
-            await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+            if await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db) {
+                dropoffSucceeded += 1
+            }
         }
 
-        req.logger.info("instructor.backfillGeocodes: scanned=\(bookings.count) pickupGeocoded=\(pickupGeocoded)")
-        return BackfillGeocodesResponse(bookingsScanned: bookings.count, pickupGeocoded: pickupGeocoded)
+        req.logger.info("instructor.backfillGeocodes: scanned=\(bookings.count) pickupGeocoded=\(pickupGeocoded) pickupSucceeded=\(pickupSucceeded) dropoffSucceeded=\(dropoffSucceeded)")
+        return BackfillGeocodesResponse(bookingsScanned: bookings.count, pickupGeocoded: pickupGeocoded, pickupSucceeded: pickupSucceeded, dropoffSucceeded: dropoffSucceeded)
     }
 
     // MARK: - GET /instructor/students/:studentID/pickup-locations

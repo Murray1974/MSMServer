@@ -123,18 +123,20 @@ final class Booking: Model, Content, @unchecked Sendable {
     /// from the lazy geocode goes stale and the journey-recording geofence keeps
     /// targeting the old drop-off point. Falls back to the pickup coordinates when the
     /// address is cleared, same as the initial lazy-geocode logic.
-    func reGeocodeDropoff(client: Client, logger: Logger, on db: Database) async {
+    @discardableResult
+    func reGeocodeDropoff(client: Client, logger: Logger, on db: Database) async -> Bool {
         guard let address = dropoffLocation, !address.isEmpty else {
             dropoffLatitude = pickupLatitude
             dropoffLongitude = pickupLongitude
             try? await save(on: db)
-            return
+            return pickupLatitude != nil
         }
         let nominatim = NominatimService(client: client, logger: logger)
-        guard let coords = await nominatim.geocode(address: address) else { return }
+        guard let coords = await nominatim.geocode(address: address) else { return false }
         dropoffLatitude = coords.latitude
         dropoffLongitude = coords.longitude
         try? await save(on: db)
+        return true
     }
 
     /// Re-geocodes `pickupLocation` and overwrites `pickupLatitude`/`pickupLongitude`,
@@ -143,17 +145,19 @@ final class Booking: Model, Content, @unchecked Sendable {
     /// cached lat/lon from the lazy geocode (TrackingSchedulerLifecycle) goes stale — and
     /// since `dropoffLocation` falls back to these same coordinates when unset, a stale
     /// pickup also silently drags a stale drop-off along with it.
-    func reGeocodePickup(client: Client, logger: Logger, on db: Database) async {
+    @discardableResult
+    func reGeocodePickup(client: Client, logger: Logger, on db: Database) async -> Bool {
         guard let address = pickupLocation, !address.isEmpty else {
             pickupLatitude = nil
             pickupLongitude = nil
             try? await save(on: db)
-            return
+            return false
         }
         let nominatim = NominatimService(client: client, logger: logger)
-        guard let coords = await nominatim.geocode(address: address) else { return }
+        guard let coords = await nominatim.geocode(address: address) else { return false }
         pickupLatitude = coords.latitude
         pickupLongitude = coords.longitude
         try? await save(on: db)
+        return true
     }
 }

@@ -9,6 +9,27 @@ import Foundation
 /// Usage mirrors StripeService: `let nominatim = NominatimService(client: req.client,
 /// logger: req.logger)` inside a route, or `NominatimService(client: app.client, logger:
 /// app.logger)` inside the tracking scheduler.
+/// Nominatim's usage policy caps requests at 1/second across the whole app — not per
+/// caller. A single `NominatimService` instance is created fresh per call site (per
+/// request, or per booking in a loop like `backfillGeocodes`), so the throttle has to
+/// live outside any one instance to actually be global. An actor gives safe shared
+/// mutable state across concurrent requests without a lock.
+private actor NominatimRateLimiter {
+    static let shared = NominatimRateLimiter()
+    private var lastRequestAt: Date?
+    private let minInterval: TimeInterval = 1.1
+
+    func waitForTurn() async {
+        if let last = lastRequestAt {
+            let elapsed = Date().timeIntervalSince(last)
+            if elapsed < minInterval {
+                try? await Task.sleep(nanoseconds: UInt64((minInterval - elapsed) * 1_000_000_000))
+            }
+        }
+        lastRequestAt = Date()
+    }
+}
+
 struct NominatimService {
     private let client: Client
     private let logger: Logger
@@ -50,6 +71,7 @@ struct NominatimService {
     }
 
     private func query(_ q: String) async -> Coordinates? {
+        await NominatimRateLimiter.shared.waitForTurn()
         let encoded = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
         let uri = URI(string: "https://nominatim.openstreetmap.org/search?q=\(encoded)&format=json&limit=1")
 
