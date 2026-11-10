@@ -952,8 +952,10 @@ struct InstructorLessonController: RouteCollection {
         )
         booking.pickupLocation = input.pickupLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
         booking.pickupSource = booking.pickupLocation != nil ? "instructor" : nil
+        // If no dropoff was explicitly entered, assume the lesson ends back where it
+        // started — same assumption the student-booking path makes.
         let trimmedDropoff = input.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
-        booking.dropoffLocation = (trimmedDropoff?.isEmpty ?? true) ? nil : trimmedDropoff
+        booking.dropoffLocation = (trimmedDropoff?.isEmpty ?? true) ? booking.pickupLocation : trimmedDropoff
         try await booking.save(on: req.db)
 
         let bookingID = try booking.requireID()

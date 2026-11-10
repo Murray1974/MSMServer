@@ -188,7 +188,10 @@ struct StudentBookingsController: RouteCollection {
             booking.pickupSource = defaultPickupSource
             booking.pickupLocation = defaultPickupLocation
         }
-        booking.dropoffLocation = input.dropoffLocation
+        // If no dropoff was explicitly chosen, assume the lesson ends back where it
+        // started, same as the instructor-booking path (createBookingForStudent).
+        let trimmedDropoff = input.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        booking.dropoffLocation = (trimmedDropoff?.isEmpty ?? true) ? booking.pickupLocation : trimmedDropoff
 
         try await booking.save(on: req.db)
 
