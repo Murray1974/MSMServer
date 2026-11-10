@@ -2216,12 +2216,55 @@ public func routes(_ app: Application) throws {
         let accelMagnitudeG: Double?
     }
 
+    struct MockTestWindowInput: Decodable {
+        let startedAt: Date
+        let endedAt: Date
+    }
+
     struct LessonJourneyUploadInput: Decodable {
         let bookingID: UUID
         let startedAt: Date
         let endedAt: Date
         let endedReason: String
         let points: [JourneyPointInput]
+        let mockTestWindows: [MockTestWindowInput]?
+    }
+
+    /// Slices `points` to just those falling within marked mock-test windows, then
+    /// re-runs the exact same detection functions used for the full lesson over each
+    /// slice — so a mock test gets its own independent distance/speed/event metrics,
+    /// computed the same way a whole lesson's would be, scoped only to that window.
+    /// A plain loop (not .map/.compactMap) deliberately avoids wrapping these calls in
+    /// another closure — nesting them inside one escalates Swift 6 concurrency-checking
+    /// from a warning (as these functions already get when called directly, below) to a
+    /// hard build error requiring the entire local-function call graph to be @Sendable.
+    func buildMockTestResults(_ windows: [MockTestWindowInput], allPoints: [JourneyPointInput]) -> [MockTestResult] {
+        var results: [MockTestResult] = []
+        for window in windows {
+            let slice = allPoints.filter { $0.timestamp >= window.startedAt && $0.timestamp <= window.endedAt }
+            guard slice.count > 1 else { continue }
+
+            let distanceMiles = routeDistanceMiles(slice)
+            let durationSeconds = window.endedAt.timeIntervalSince(window.startedAt)
+            let corneringEvents = detectHarshCornering(slice)
+            let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
+            let accelEvents = detectDrivingEvents(slice).filter { !corneringTimestamps.contains($0.timestamp) }
+
+            results.append(MockTestResult(
+                startedAt: window.startedAt,
+                endedAt: window.endedAt,
+                points: slice.map {
+                    RoutePoint(latitude: $0.latitude, longitude: $0.longitude, timestamp: $0.timestamp, speedMph: $0.speedMph,
+                               yawRateDegPerSec: $0.yawRateDegPerSec, accelMagnitudeG: $0.accelMagnitudeG)
+                },
+                distanceMiles: distanceMiles,
+                topSpeedMph: topSpeedMph(slice),
+                averageSpeedMph: averageSpeedMph(distanceMiles: distanceMiles, durationSeconds: durationSeconds),
+                drivingEvents: accelEvents + corneringEvents,
+                manoeuvreEvents: detectManoeuvres(slice)
+            ))
+        }
+        return results
     }
 
     /// Great-circle distance in metres between two coordinates.
@@ -2623,6 +2666,7 @@ public func routes(_ app: Application) throws {
         let accelEvents = detectDrivingEvents(input.points).filter { !corneringTimestamps.contains($0.timestamp) }
         journey.drivingEvents = accelEvents + corneringEvents
         journey.manoeuvreEvents = detectManoeuvres(input.points)
+        journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: input.points)
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
         return .created

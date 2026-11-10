@@ -106,6 +106,25 @@ struct DrivingEvent: Codable {
     }
 }
 
+/// One instructor-marked "mock test" window, analysed in isolation from the rest of the
+/// lesson's own route/metrics. The window is carved out of the same single continuous
+/// recording — not a second, independently-run recording — by slicing the lesson's
+/// already-captured points to the marked start/end timestamps and re-running the exact
+/// same detection functions (`routeDistanceMiles`, `detectDrivingEvents`,
+/// `detectHarshCornering`, `detectManoeuvres`, etc., see `POST /instructor/tracking/journey`
+/// in routes.swift) over just that slice. The parent `LessonJourney`'s own fields are
+/// computed over the full route regardless of any mock test windows inside it.
+struct MockTestResult: Codable {
+    let startedAt: Date
+    let endedAt: Date
+    let points: [RoutePoint]
+    let distanceMiles: Double
+    let topSpeedMph: Double
+    let averageSpeedMph: Double
+    let drivingEvents: [DrivingEvent]
+    let manoeuvreEvents: [ManoeuvreEvent]
+}
+
 /// The recorded GPS route for one lesson, uploaded by the instructor's phone — see
 /// JourneyTrackingManager (Instructor-server-side-app) for how the route is captured
 /// client-side, and `POST /instructor/tracking/journey` for the upload. One row per
@@ -157,6 +176,11 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "manoeuvre_events")
     var manoeuvreEvents: [ManoeuvreEvent]
 
+    /// Instructor-marked mock-test windows within this same recording — see
+    /// `MockTestResult`'s doc comment. Empty for the vast majority of lessons.
+    @Field(key: "mock_tests")
+    var mockTests: [MockTestResult]
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -174,7 +198,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         topSpeedMph: Double,
         averageSpeedMph: Double,
         drivingEvents: [DrivingEvent],
-        manoeuvreEvents: [ManoeuvreEvent] = []
+        manoeuvreEvents: [ManoeuvreEvent] = [],
+        mockTests: [MockTestResult] = []
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -188,5 +213,6 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.averageSpeedMph = averageSpeedMph
         self.drivingEvents = drivingEvents
         self.manoeuvreEvents = manoeuvreEvents
+        self.mockTests = mockTests
     }
 }
