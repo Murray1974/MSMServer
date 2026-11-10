@@ -2582,7 +2582,7 @@ public func routes(_ app: Application) throws {
                 type: "emergencyStop",
                 latitude: points[i].latitude, longitude: points[i].longitude,
                 startedAt: points[i - 1].timestamp, endedAt: points[i].timestamp,
-                rotationDegrees: 0, pauseCount: 0
+                rotationDegrees: 0, pauseCount: 0, direction: nil
             ))
         }
 
@@ -2650,6 +2650,12 @@ public func routes(_ app: Application) throws {
                 netRotation += yawRate * min(dt, 3.0)
             }
             let rotationDegrees = abs(netRotation)
+            // Unverified sign convention — see the doc comment on `ManoeuvreEvent.direction`.
+            // Swap "left"/"right" here if the first real labelled test journey shows it backwards.
+            let minDirectionDegrees = 10.0
+            let direction: String? = rotationDegrees < minDirectionDegrees
+                ? nil
+                : (netRotation > 0 ? "left" : "right")
 
             // Pause points: GPS speed dropping near-zero then rising again — a proxy
             // for a gear change between forward/reverse phases, without needing to know
@@ -2667,7 +2673,7 @@ public func routes(_ app: Application) throws {
                 type: rotationDegrees >= turnInRoadRotationDegrees ? "turnInRoad" : "parkingManoeuvre",
                 latitude: points[midIndex].latitude, longitude: points[midIndex].longitude,
                 startedAt: startedAt, endedAt: endedAt,
-                rotationDegrees: rotationDegrees, pauseCount: pauseCount
+                rotationDegrees: rotationDegrees, pauseCount: pauseCount, direction: direction
             ))
         }
 
