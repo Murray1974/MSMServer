@@ -2444,11 +2444,21 @@ public func routes(_ app: Application) throws {
         // threshold almost constantly from ordinary road vibration) happened to
         // pass too. Confirmed against a real lesson on 10 Nov 2026: 178 events in
         // 45 minutes, median rate only 0.75mph/s — only 1 of those 178 would have
-        // cleared a genuine harsh-rate bar. Matched to the same mph/s thresholds
-        // the GPS-delta fallback below already uses, so "harsh" means the same
-        // thing on both paths.
-        let hardBrakeRateMphPerSec = -6.0
-        let rapidAccelRateMphPerSec = 5.0
+        // cleared a 6/5mph/s bar.
+        //
+        // -6.0/5.0 (matching the GPS-delta fallback below) then undershot the other
+        // way: the instructor's own deliberate rapid accel on Greenway, Crediton only
+        // measured 3.76mph/s (12.7->23.9mph in 3s, accel sensor peaked 0.61g), and his
+        // brake into the Cowley Bridge roundabout only 2.53mph/s (22.1->17.0mph in 2s,
+        // 0.47g) — both real, both well above the ~0.3g noise floor, neither cleared
+        // 6/5. The 2-4s GPS-fix spacing spreads a short sharp motion over a longer
+        // measured interval than it actually took, so genuine harsh moments read as
+        // more modest mph/s rates than a driver would describe them as. -2.5/3.5
+        // brings both into view (confirmed against the real data), along with 7
+        // more events clustered into just two other moments in the same lesson —
+        // not spread continuously like the old noise was.
+        let hardBrakeRateMphPerSec = -2.5
+        let rapidAccelRateMphPerSec = 3.5
         let minDt = 0.5
         let maxDt = 8.0
 
