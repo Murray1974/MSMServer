@@ -2650,8 +2650,7 @@ public func routes(_ app: Application) throws {
                 netRotation += yawRate * min(dt, 3.0)
             }
             let rotationDegrees = abs(netRotation)
-            // Unverified sign convention — see the doc comment on `ManoeuvreEvent.direction`.
-            // Swap "left"/"right" here if the first real labelled test journey shows it backwards.
+            // Sign convention confirmed 11 Nov 2026 — see the doc comment on `ManoeuvreEvent.direction`.
             let minDirectionDegrees = 10.0
             let direction: String? = rotationDegrees < minDirectionDegrees
                 ? nil

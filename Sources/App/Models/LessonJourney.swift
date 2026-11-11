@@ -68,12 +68,13 @@ struct ManoeuvreEvent: Codable {
     /// for `rotationDegrees`. nil for "emergencyStop" (no rotation at all) and for any
     /// episode whose net rotation rounds to ~0° (wheel wiggled both ways and cancelled
     /// out — no dominant direction to report).
-    /// ⚠️ Sign convention UNVERIFIED against a real labelled manoeuvre as of 10 Nov
-    /// 2026 — CMAttitude's yaw-sign convention in `.xMagneticNorthZVertical` wasn't
-    /// confirmed against an actual "park on the left" vs "park on the right" journey.
-    /// Check this against the first real confirmed-direction test journey; if it's
-    /// backwards, flip the single comparison in `detectManoeuvres`'s `closeWindow`
-    /// (routes.swift) rather than anything here.
+    /// Sign convention CONFIRMED 11 Nov 2026 against a real labelled test journey: a
+    /// turn-in-the-road done forward-right, reverse-left, forward-right (one
+    /// continuous clockwise rotation — alternating lock direction between forward and
+    /// reverse phases is exactly what keeps a three-point turn rotating the same way
+    /// throughout) was detected as "right", matching the actual clockwise sweep. If a
+    /// future labelled journey ever contradicts this, flip the single comparison in
+    /// `detectManoeuvres`'s `closeWindow` (routes.swift) rather than anything here.
     let direction: String?
     /// Instructor's own retroactive verdict — nil until reviewed on the journey map
     /// screen. Confirmed against a real lesson on 10 Nov 2026: GPS+motion data alone
