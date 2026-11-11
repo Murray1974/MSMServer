@@ -2506,7 +2506,36 @@ public func routes(_ app: Application) throws {
                 deltaMph: deltaMph
             ))
         }
-        return events
+        return mergeAdjacentDrivingEvents(events)
+    }
+
+    /// One real sustained brake/accel can clear the per-sample threshold above on
+    /// several consecutive GPS fixes in a row — confirmed against a real lesson on 11
+    /// Nov 2026 where a single stop from 45mph to 17mph over 6 seconds came out as 5
+    /// separate "hardBrake" events. Collapses same-type events that are close enough
+    /// together in time to plausibly be one continuous episode into a single event
+    /// spanning the whole run (fromMph of the first sample, toMph of the last).
+    /// 3s is deliberately tight — close to the native GPS sampling gap — so genuinely
+    /// separate braking taps a few seconds apart (e.g. two different junctions) are
+    /// left alone; only near-back-to-back samples of the *same* type get merged.
+    func mergeAdjacentDrivingEvents(_ events: [DrivingEvent], maxGapSeconds: TimeInterval = 3.0) -> [DrivingEvent] {
+        guard events.count > 1 else { return events }
+        var merged: [DrivingEvent] = [events[0]]
+        for next in events.dropFirst() {
+            let last = merged[merged.count - 1]
+            if next.type == last.type, next.timestamp.timeIntervalSince(last.timestamp) <= maxGapSeconds {
+                merged[merged.count - 1] = DrivingEvent(
+                    type: last.type,
+                    latitude: next.latitude, longitude: next.longitude,
+                    timestamp: next.timestamp,
+                    fromMph: last.fromMph, toMph: next.toMph,
+                    deltaMph: next.toMph - last.fromMph
+                )
+            } else {
+                merged.append(next)
+            }
+        }
+        return merged
     }
 
     /// Original GPS-speed-delta heuristic — kept only as a fallback for journeys
@@ -2713,6 +2742,7 @@ public func routes(_ app: Application) throws {
             }) else { return event }
             var event = event
             event.confirmed = match.confirmed
+            event.confirmedType = match.confirmedType
             return event
         }
     }
@@ -2887,6 +2917,9 @@ public func routes(_ app: Application) throws {
         struct ConfirmManoeuvreInput: Decodable {
             let startedAt: Date
             let confirmed: Bool
+            // Only meaningful when confirmed == true — the instructor's own pick from
+            // the fixed manoeuvre-type list (see ManoeuvreTypePicker, client side).
+            let confirmedType: String?
         }
         let input = try req.content.decode(ConfirmManoeuvreInput.self)
         guard let journey = try await LessonJourney.query(on: req.db)
@@ -2897,6 +2930,7 @@ public func routes(_ app: Application) throws {
             throw Abort(.notFound)
         }
         journey.manoeuvreEvents[index].confirmed = input.confirmed
+        journey.manoeuvreEvents[index].confirmedType = input.confirmed ? input.confirmedType : nil
         try await journey.save(on: req.db)
         return .ok
     }

@@ -86,6 +86,15 @@ struct ManoeuvreEvent: Codable {
     /// windows, since a plain re-run would otherwise regenerate every event fresh with
     /// this nil.
     var confirmed: Bool? = nil
+    /// The instructor's own label for which real manoeuvre this was — parallel park,
+    /// turn in the road, etc. — picked from a fixed list after confirming `confirmed =
+    /// true`. nil whenever `confirmed` isn't `true` (rejecting or un-reviewing clears
+    /// it). This is the ground truth `type`/`rotationDegrees` can't produce alone (see
+    /// the doc comment above `type`) — collecting enough of these against the detected
+    /// rotation/pauseCount/duration shape is what future tuning of the
+    /// turnInRoad/parkingManoeuvre split should be based on, instead of guessing at
+    /// another threshold.
+    var confirmedType: String? = nil
 }
 
 /// A single stationary period (≥5 minutes) detected within a recorded route — purely
