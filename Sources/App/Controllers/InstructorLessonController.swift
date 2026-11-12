@@ -37,6 +37,11 @@ struct InstructorLessonController: RouteCollection {
         // instead of those edits only ever landing in the local Calendar event.
         instructor.patch("bookings", ":bookingID", "pickup", use: setPickupLocation)
 
+        // Ranked pickup/dropoff suggestions for a booking, drawn from this student's own
+        // booking history (see suggestedLocations doc comment below).
+        instructor.get("bookings", ":bookingID", "pickup-suggestions", use: pickupSuggestions)
+        instructor.get("bookings", ":bookingID", "dropoff-suggestions", use: dropoffSuggestions)
+
         // One-off catch-up: re-geocodes pickup/dropoff for active upcoming bookings
         // created before reGeocodePickup/reGeocodeDropoff existed. See handler doc comment.
         instructor.post("bookings", "backfill-geocodes", use: backfillGeocodes)
@@ -821,6 +826,117 @@ struct InstructorLessonController: RouteCollection {
             await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
         }
         return .ok
+    }
+
+    // MARK: - GET /instructor/bookings/:bookingID/pickup-suggestions
+    // MARK: - GET /instructor/bookings/:bookingID/dropoff-suggestions
+    //
+    // Suggests addresses from this student's own past bookings, ranked so a recurring
+    // pattern (the same college run every Tuesday at 4pm) surfaces above plain recency:
+    // a past booking whose weekday AND time-of-day both match this booking's lesson
+    // outranks a weekday-only match, which outranks everything else. This sits alongside
+    // the existing local/per-device ClientExtrasStore recents (pickup) and free-text entry
+    // (dropoff) on the client — it doesn't replace either, just ranks real booking history
+    // above them.
+    struct LocationSuggestion: Content {
+        let location: String
+        let reason: String  // "sameDayTime" | "sameDay" | "recent"
+        let lastUsedAt: Date
+    }
+
+    private func suggestedLocations(
+        forStudent studentID: UUID,
+        excludingBooking bookingID: UUID,
+        targetStartsAt: Date,
+        locationOf: (Booking) -> String?,
+        on db: Database
+    ) async throws -> [LocationSuggestion] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+
+        let targetWeekday = cal.component(.weekday, from: targetStartsAt)
+        let targetMinutes = cal.component(.hour, from: targetStartsAt) * 60 + cal.component(.minute, from: targetStartsAt)
+
+        let bookings = try await Booking.query(on: db)
+            .filter(\.$user.$id == studentID)
+            .filter(\.$id != bookingID)
+            .filter(\.$deletedAt == nil)
+            .join(parent: \Booking.$lesson)
+            .sort(Lesson.self, \.$startsAt, .descending)
+            .with(\.$lesson)
+            .limit(100)
+            .all()
+
+        struct Ranked { let score: Int; let lastUsedAt: Date; let reason: String }
+        var best: [String: Ranked] = [:]
+
+        for booking in bookings {
+            guard let raw = locationOf(booking)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { continue }
+            let startsAt = booking.lesson.startsAt
+            let weekday = cal.component(.weekday, from: startsAt)
+            let minutesOfDay = cal.component(.hour, from: startsAt) * 60 + cal.component(.minute, from: startsAt)
+            let sameDay = weekday == targetWeekday
+            let sameTime = abs(minutesOfDay - targetMinutes) <= 60
+
+            let (score, reason): (Int, String) =
+                sameDay && sameTime ? (2, "sameDayTime") :
+                sameDay ? (1, "sameDay") :
+                (0, "recent")
+
+            if let existing = best[raw] {
+                if score > existing.score || (score == existing.score && startsAt > existing.lastUsedAt) {
+                    best[raw] = Ranked(score: score, lastUsedAt: startsAt, reason: reason)
+                }
+            } else {
+                best[raw] = Ranked(score: score, lastUsedAt: startsAt, reason: reason)
+            }
+        }
+
+        let rank: (String) -> Int = { $0 == "sameDayTime" ? 2 : ($0 == "sameDay" ? 1 : 0) }
+        return best
+            .map { LocationSuggestion(location: $0.key, reason: $0.value.reason, lastUsedAt: $0.value.lastUsedAt) }
+            .sorted {
+                if $0.reason != $1.reason { return rank($0.reason) > rank($1.reason) }
+                return $0.lastUsedAt > $1.lastUsedAt
+            }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private func targetBooking(_ req: Request) async throws -> Booking {
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "bookingID missing or invalid")
+        }
+        guard let booking = try await Booking.query(on: req.db)
+            .filter(\.$id == bookingID)
+            .with(\.$lesson)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Booking not found")
+        }
+        return booking
+    }
+
+    func pickupSuggestions(_ req: Request) async throws -> [LocationSuggestion] {
+        let booking = try await targetBooking(req)
+        return try await suggestedLocations(
+            forStudent: booking.$user.id,
+            excludingBooking: try booking.requireID(),
+            targetStartsAt: booking.lesson.startsAt,
+            locationOf: { $0.pickupLocation },
+            on: req.db
+        )
+    }
+
+    func dropoffSuggestions(_ req: Request) async throws -> [LocationSuggestion] {
+        let booking = try await targetBooking(req)
+        return try await suggestedLocations(
+            forStudent: booking.$user.id,
+            excludingBooking: try booking.requireID(),
+            targetStartsAt: booking.lesson.startsAt,
+            locationOf: { $0.dropoffLocation },
+            on: req.db
+        )
     }
 
     // MARK: - POST /instructor/bookings/backfill-geocodes
