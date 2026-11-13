@@ -103,6 +103,11 @@ struct TestRouteController: RouteCollection {
         let ext = (input.file.filename as NSString).pathExtension
         let filename = id.uuidString + (ext.isEmpty ? "" : ".\(ext)")
         let relativePath = "\(kind.subdirectory)/\(filename)"
+        let uploadsDir = req.application.directory.workingDirectory + kind.subdirectory
+        // writeFile(at:) doesn't create intermediate directories — missing this (as
+        // VehicleController.createExpense does for uploads/receipts) throws a 500
+        // "No such file or directory" on the very first upload of a given kind.
+        try FileManager.default.createDirectory(atPath: uploadsDir, withIntermediateDirectories: true)
         let fullPath = req.application.directory.workingDirectory + relativePath
         try await req.fileio.writeFile(input.file.data, at: fullPath)
 
