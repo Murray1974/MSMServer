@@ -172,6 +172,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddMockTestsToLessonJourney())
     app.migrations.add(AddIsTestJourneyToLessonJourney())
     app.migrations.add(AddSpeedLimitsToLessonJourney())
+    app.migrations.add(CreateTestRoute())
 
     try app.autoMigrate().wait()
 

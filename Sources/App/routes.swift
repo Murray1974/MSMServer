@@ -2963,6 +2963,23 @@ public func routes(_ app: Application) throws {
         return try await journey.encodeResponse(for: req)
     }
 
+    // Test Routes (Resources > Mock Test > Test Routes, client side) — named routes the
+    // instructor pre-builds, each with an optional GPX track and a separate directions
+    // file. Plain CRUD plus one upload/download/remove pair per file kind, all on
+    // TestRouteController, following the same local-disk-upload pattern as
+    // DocumentController's licence/profile photos.
+    let testRouteController = TestRouteController()
+    financeProtected.get("instructor", "test-routes", use: testRouteController.list)
+    financeProtected.post("instructor", "test-routes", use: testRouteController.create)
+    financeProtected.patch("instructor", "test-routes", ":routeID", use: testRouteController.rename)
+    financeProtected.delete("instructor", "test-routes", ":routeID", use: testRouteController.delete)
+    financeProtected.on(.POST, "instructor", "test-routes", ":routeID", "gpx", body: .collect(maxSize: "15mb"), use: testRouteController.uploadGPX)
+    financeProtected.get("instructor", "test-routes", ":routeID", "gpx", use: testRouteController.downloadGPX)
+    financeProtected.delete("instructor", "test-routes", ":routeID", "gpx", use: testRouteController.removeGPX)
+    financeProtected.on(.POST, "instructor", "test-routes", ":routeID", "directions", body: .collect(maxSize: "25mb"), use: testRouteController.uploadDirections)
+    financeProtected.get("instructor", "test-routes", ":routeID", "directions", use: testRouteController.downloadDirections)
+    financeProtected.delete("instructor", "test-routes", ":routeID", "directions", use: testRouteController.removeDirections)
+
     // POST /admin/journeys/reanalyze — re-runs the current driving-event/manoeuvre/
     // mock-test detection logic against every already-recorded journey's stored GPS
     // points, in place, and re-saves them. Lets a threshold or logic fix (like the
