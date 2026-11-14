@@ -2428,6 +2428,48 @@ public func routes(_ app: Application) throws {
         return events
     }
 
+    /// A single GPS fix occasionally reports an implausible speed (commonly 0.0, from
+    /// a momentary signal glitch) sandwiched between two readings that are themselves
+    /// consistent with each other and with steady driving either side. Confirmed
+    /// against a real journey on 14 Nov 2026: a lone 0.0mph fix landed between
+    /// neighbours reading 29.6mph and 26.5mph, ~2s either side — the driver confirmed
+    /// the car never actually stopped or even slowed meaningfully at that moment — and
+    /// without this fix it produced both a false "emergencyStop"/"hardBrake" (the drop
+    /// to 0) and a matching false "rapidAccel" immediately after (the "recovery" back
+    /// up). No real vehicle brakes to a stop and is back at 26.5mph two seconds later —
+    /// that's ~13mph/s sustained re-acceleration, several times harder than this same
+    /// journey's own genuine, driver-confirmed rapid-accel event (+5.2mph/s). Detects
+    /// that round-trip signature (implausible drop immediately followed by an
+    /// implausible recovery) and overwrites the middle point's speed with a
+    /// straight-line interpolation between its neighbours, so no detector downstream —
+    /// `detectHarshCornering`, `detectDrivingEvents`, `detectManoeuvres` — ever sees an
+    /// event that was never really there. Runs once per upload/reanalysis, before all
+    /// three, so none of them need their own copy of this check.
+    func sanitizeSpeedGlitches(_ points: [JourneyPointInput]) -> [JourneyPointInput] {
+        guard points.count > 2 else { return points }
+        let implausibleRateMphPerSec = 8.0
+        var sanitized = points
+        for i in 1..<(points.count - 1) {
+            guard let prevSpeed = points[i - 1].speedMph,
+                  let speed = points[i].speedMph,
+                  let nextSpeed = points[i + 1].speedMph else { continue }
+            let dt1 = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            let dt2 = points[i + 1].timestamp.timeIntervalSince(points[i].timestamp)
+            guard dt1 > 0, dt1 <= 4, dt2 > 0, dt2 <= 4 else { continue }
+            let dropRate = (speed - prevSpeed) / dt1
+            let recoverRate = (nextSpeed - speed) / dt2
+            guard dropRate <= -implausibleRateMphPerSec, recoverRate >= implausibleRateMphPerSec else { continue }
+            let totalDt = points[i + 1].timestamp.timeIntervalSince(points[i - 1].timestamp)
+            let interpolated = totalDt > 0 ? prevSpeed + (nextSpeed - prevSpeed) * (dt1 / totalDt) : prevSpeed
+            sanitized[i] = JourneyPointInput(
+                latitude: points[i].latitude, longitude: points[i].longitude, timestamp: points[i].timestamp,
+                speedMph: interpolated, yawRateDegPerSec: points[i].yawRateDegPerSec,
+                accelMagnitudeG: points[i].accelMagnitudeG
+            )
+        }
+        return sanitized
+    }
+
     /// Detects harsh braking/acceleration from the phone's accelerometer
     /// (`accelMagnitudeG`), the way commercial telematics products do it (commonly
     /// 0.3-0.45g for a light vehicle) — not from GPS speed deltas, which get smoothed
@@ -2599,14 +2641,36 @@ public func routes(_ app: Application) throws {
 
         // MARK: Emergency stop — sharper than detectDrivingEvents' "hardBrake", and
         // requires actually reaching a stop, not just a big speed drop.
+        //
+        // GPS fixes occasionally report a single bad `speedMph` reading of ~0 in the
+        // middle of otherwise-steady driving (signal glitch, not a real stop) — this
+        // alone used to satisfy "fromSpeed >= 15, toSpeed <= 2, rate <= -10mph/s" and
+        // fire a false emergencyStop. Confirmed against a real journey on 14 Nov 2026:
+        // a single point read 0.0mph sandwiched between 29.6mph and 26.5mph neighbours
+        // one GPS fix either side (~2s apart each way), with accelMagnitudeG at that
+        // same point an unremarkable 0.356g — nothing like the 1.47g the journey's one
+        // genuine, driver-confirmed hard stop registered. The real tell, used below: a
+        // car that has actually just performed an emergency stop cannot be back at
+        // 26.5mph two seconds later — that implies ~13mph/s sustained
+        // re-acceleration, well beyond any real pull-away (detectDrivingEvents' own
+        // "rapidAccel" bar is 3.5mph/s). Reject the stop when the very next fix shows
+        // that implausible a rebound rather than a vehicle that actually stayed down
+        // near walking pace.
         let minSpeedBeforeStopMph = 15.0
         let stoppedThresholdMph = 2.0
         let hardestBrakeThreshold = -10.0 // mph/sec
+        let implausibleReboundRateMphPerSec = 8.0
         for i in 1..<points.count {
             guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph,
                   fromSpeed >= minSpeedBeforeStopMph, toSpeed <= stoppedThresholdMph else { continue }
             let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
             guard dt > 0, dt <= 4, (toSpeed - fromSpeed) / dt <= hardestBrakeThreshold else { continue }
+            if i + 1 < points.count, let nextSpeed = points[i + 1].speedMph {
+                let dt2 = points[i + 1].timestamp.timeIntervalSince(points[i].timestamp)
+                if dt2 > 0, dt2 <= 4, (nextSpeed - toSpeed) / dt2 >= implausibleReboundRateMphPerSec {
+                    continue
+                }
+            }
             events.append(ManoeuvreEvent(
                 type: "emergencyStop",
                 latitude: points[i].latitude, longitude: points[i].longitude,
@@ -2814,6 +2878,9 @@ public func routes(_ app: Application) throws {
         let instructor = try req.auth.require(User.self)
         guard instructor.role == "instructor" else { throw Abort(.forbidden) }
         let input = try req.content.decode(LessonJourneyUploadInput.self)
+        // Only the derived detection fields below read this — the raw stored route
+        // (`points`, just below) keeps the untouched GPS trace for the map.
+        let sanitizedPoints = sanitizeSpeedGlitches(input.points)
 
         let distanceMiles = routeDistanceMiles(input.points)
         let durationSeconds = input.endedAt.timeIntervalSince(input.startedAt)
@@ -2850,12 +2917,12 @@ public func routes(_ app: Application) throws {
         // A hard turn's lateral g can also trip the magnitude-based brake/accel detector
         // at the same instant — same underlying force, counted twice under two labels.
         // Cornering is the more specific/accurate read of that instant, so it wins.
-        let corneringEvents = detectHarshCornering(input.points)
+        let corneringEvents = detectHarshCornering(sanitizedPoints)
         let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
-        let accelEvents = detectDrivingEvents(input.points).filter { !corneringTimestamps.contains($0.timestamp) }
+        let accelEvents = detectDrivingEvents(sanitizedPoints).filter { !corneringTimestamps.contains($0.timestamp) }
         journey.drivingEvents = accelEvents + corneringEvents
-        journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(input.points))
-        journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: input.points)
+        journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(sanitizedPoints))
+        journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: sanitizedPoints)
         journey.isTestJourney = input.isTestJourney ?? false
         try await journey.save(on: req.db)
         req.logger.notice("[Journey] Saved bookingID=\(input.bookingID) points=\(input.points.count) reason=\(input.endedReason)")
@@ -2998,13 +3065,14 @@ public func routes(_ app: Application) throws {
                     speedMph: $0.speedMph, yawRateDegPerSec: $0.yawRateDegPerSec, accelMagnitudeG: $0.accelMagnitudeG
                 )
             }
-            let corneringEvents = detectHarshCornering(inputPoints)
+            let sanitizedPoints = sanitizeSpeedGlitches(inputPoints)
+            let corneringEvents = detectHarshCornering(sanitizedPoints)
             let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
-            let accelEvents = detectDrivingEvents(inputPoints).filter { !corneringTimestamps.contains($0.timestamp) }
+            let accelEvents = detectDrivingEvents(sanitizedPoints).filter { !corneringTimestamps.contains($0.timestamp) }
             journey.drivingEvents = accelEvents + corneringEvents
-            journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(inputPoints))
+            journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(sanitizedPoints))
             let windows = journey.mockTests.map { MockTestWindowInput(startedAt: $0.startedAt, endedAt: $0.endedAt) }
-            journey.mockTests = buildMockTestResults(windows, allPoints: inputPoints)
+            journey.mockTests = buildMockTestResults(windows, allPoints: sanitizedPoints)
             try await journey.save(on: req.db)
         }
         return ReanalyzeJourneysResult(journeysUpdated: journeys.count)
