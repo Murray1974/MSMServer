@@ -255,6 +255,15 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "speeding_events")
     var speedingEvents: [SpeedingEvent]
 
+    /// Which named Test Route (`TestRoute.swift`, Resources > Mock Test > Test Routes)
+    /// this journey was driven against, for grouping test results by route + time of
+    /// day. nil for every real lesson journey, and for any test journey not yet tagged
+    /// — assignable any time after the fact via `PATCH
+    /// /instructor/journeys/test/:bookingID/route`, not just at recording time. A plain
+    /// field, not `@Parent`, matching `bookingID`'s own pattern on this model.
+    @OptionalField(key: "test_route_id")
+    var testRouteID: UUID?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 

@@ -2238,6 +2238,7 @@ public func routes(_ app: Application) throws {
         let averageSpeedMph: Double
         let drivingEventsCount: Int
         let manoeuvreEventsCount: Int
+        let testRouteID: UUID?
     }
 
     struct LessonJourneyUploadInput: Decodable {
@@ -2968,9 +2969,52 @@ public func routes(_ app: Application) throws {
                 topSpeedMph: $0.topSpeedMph,
                 averageSpeedMph: $0.averageSpeedMph,
                 drivingEventsCount: $0.drivingEvents.count,
-                manoeuvreEventsCount: $0.manoeuvreEvents.count
+                manoeuvreEventsCount: $0.manoeuvreEvents.count,
+                testRouteID: $0.testRouteID
             )
         }
+    }
+
+    // PATCH /instructor/journeys/test/:bookingID/route — tag (or re-tag, or clear with
+    // testRouteID: null) which named Test Route a test journey was driven against.
+    // Separate from the main upload/finalize endpoint since this is an after-the-fact
+    // note the instructor adds, not part of what the phone captures while recording —
+    // works identically on a journey recorded moments ago or weeks ago.
+    financeProtected.patch("instructor", "journeys", "test", ":bookingID", "route") { req async throws -> TestJourneySummary in
+        let instructor = try req.auth.require(User.self)
+        guard instructor.role == "instructor" else { throw Abort(.forbidden) }
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+        struct Input: Decodable { let testRouteID: UUID? }
+        let input = try req.content.decode(Input.self)
+
+        guard let journey = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == bookingID)
+            .filter(\.$isTestJourney == true)
+            .first()
+        else { throw Abort(.notFound) }
+
+        if let testRouteID = input.testRouteID {
+            guard try await TestRoute.find(testRouteID, on: req.db) != nil else {
+                throw Abort(.badRequest, reason: "No such test route")
+            }
+        }
+        journey.testRouteID = input.testRouteID
+        try await journey.save(on: req.db)
+
+        return TestJourneySummary(
+            id: journey.bookingID,
+            startedAt: journey.startedAt,
+            endedAt: journey.endedAt,
+            endedReason: journey.endedReason,
+            distanceMiles: journey.distanceMiles,
+            topSpeedMph: journey.topSpeedMph,
+            averageSpeedMph: journey.averageSpeedMph,
+            drivingEventsCount: journey.drivingEvents.count,
+            manoeuvreEventsCount: journey.manoeuvreEvents.count,
+            testRouteID: journey.testRouteID
+        )
     }
 
     // GET /instructor/bookings/:bookingID/journey — for the "View Journey" map screen.
