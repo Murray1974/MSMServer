@@ -54,10 +54,15 @@ struct TestAppointmentController: RouteCollection {
     }
 
     struct DVSAFaultSheet: Codable {
-        var v: Int = 2
+        var v: Int = 3 // 3 adds testRouteID — older sheets decode fine, missing key just nils it
         var attemptNumber: Int?
         var etpa: Bool
         var entries: [DVSAFaultEntry]
+        // Which named Test Route (Resources > Mock Test > Test Routes) this test was
+        // driven on — for grouping pass/fail results by route. Settable at first-entry
+        // time or retrospectively via "Edit Result" on an already-recorded test, same
+        // as every other field in this sheet.
+        var testRouteID: UUID?
     }
 
     // MARK: - Shared DTO
@@ -84,6 +89,7 @@ struct TestAppointmentController: RouteCollection {
         var attemptNumber: Int?
         var etpa: Bool?
         var faultEntries: [DVSAFaultEntry]?
+        var testRouteID: UUID?
         var createdAt: Date?
     }
 
@@ -145,6 +151,7 @@ struct TestAppointmentController: RouteCollection {
             attemptNumber: sheet?.attemptNumber,
             etpa: sheet?.etpa,
             faultEntries: sheet?.entries,
+            testRouteID: sheet?.testRouteID,
             createdAt: appt.createdAt
         )
     }
@@ -565,6 +572,7 @@ struct TestAppointmentController: RouteCollection {
         var attemptNumber: Int?
         var etpa: Bool?
         var faultEntries: [DVSAFaultEntry]?
+        var testRouteID: UUID?
     }
 
     func addResult(_ req: Request) async throws -> TestAppointmentDTO {
@@ -580,7 +588,8 @@ struct TestAppointmentController: RouteCollection {
         let sheet = DVSAFaultSheet(
             attemptNumber: body.attemptNumber,
             etpa: body.etpa ?? false,
-            entries: body.faultEntries ?? []
+            entries: body.faultEntries ?? [],
+            testRouteID: body.testRouteID
         )
         appt.faults = encodeFaultSheet(sheet)
         try await appt.save(on: req.db)
