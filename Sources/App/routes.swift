@@ -2519,6 +2519,22 @@ public func routes(_ app: Application) throws {
         let rapidAccelRateMphPerSec = 3.5
         let minDt = 0.5
         let maxDt = 8.0
+        // JourneyTrackingManager fires a GPS fix every 15m travelled (`distanceFilter`),
+        // not on a fixed timer — so dt between fixes is a direct function of speed: at
+        // highway speed (~20m/s) that's ~0.75-1s between fixes, but a genuine slowdown
+        // toward a near-stop covers 15m much more slowly, stretching dt out to 2-3s.
+        // A single GPS-speed sample's ordinary jitter (a couple of mph either way) is
+        // roughly constant in absolute terms regardless of underlying speed, so dividing
+        // it by the ~1s dt that highway cruising naturally produces inflates it into a
+        // rate that clears the thresholds above purely from gap width, not real
+        // braking/accelerating. Confirmed against a real journey on 14 Nov 2026: every
+        // one of 13 hardBrake/rapidAccel hits during steady 40-58mph driving had dt
+        // exactly 1.0s and the driver confirmed none were real, while every one of this
+        // same journey's 5 driver-confirmed real events (and the one from an earlier
+        // calibration session this threshold was originally tuned against) had dt of
+        // 2.0-3.0s. Requiring dt > 1.0s here cleanly keeps every confirmed-real example
+        // on record while dropping all 13 of that one journey's false ones.
+        let minDtForHarshEvent = 1.0
 
         var events: [DrivingEvent] = []
         for i in 1..<points.count {
@@ -2526,7 +2542,7 @@ public func routes(_ app: Application) throws {
             guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph else { continue }
             guard max(fromSpeed, toSpeed) >= minSpeedMph else { continue }
             let dt = points[i].timestamp.timeIntervalSince(points[i - 1].timestamp)
-            guard dt >= minDt, dt <= maxDt else { continue }
+            guard dt >= minDt, dt <= maxDt, dt > minDtForHarshEvent else { continue }
             let deltaMph = toSpeed - fromSpeed
             let ratePerSecond = deltaMph / dt
             let type: String
