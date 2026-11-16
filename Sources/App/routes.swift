@@ -3029,6 +3029,58 @@ public func routes(_ app: Application) throws {
         return try await journey.encodeResponse(for: req)
     }
 
+    // GET /instructor/bookings/:bookingID/journey/gpx — "Map It": turns an already-
+    // recorded journey's GPS points straight into a downloadable GPX track, for the
+    // instructor to share into TomTom (same share-sheet mechanism already used for
+    // TestRoute's manually-uploaded GPX files) without needing a separate dedicated GPS
+    // recorder. Built on the fly from `LessonJourney.points` — nothing is written to disk.
+    financeProtected.get("instructor", "bookings", ":bookingID", "journey", "gpx") { req async throws -> Response in
+        guard let bookingID = req.parameters.get("bookingID", as: UUID.self) else {
+            throw Abort(.badRequest)
+        }
+        guard let journey = try await LessonJourney.query(on: req.db)
+            .filter(\.$bookingID == bookingID)
+            .first()
+        else { throw Abort(.notFound, reason: "No journey recorded for this booking.") }
+
+        guard !journey.points.isEmpty else {
+            throw Abort(.badRequest, reason: "This journey has no recorded points.")
+        }
+
+        func xmlEscape(_ value: String) -> String {
+            value.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+
+        let iso = ISO8601DateFormatter()
+        let trackName = "MSM Journey \(iso.string(from: journey.startedAt).prefix(10))"
+
+        let trkpts = journey.points.map { point in
+            "      <trkpt lat=\"\(point.latitude)\" lon=\"\(point.longitude)\"><time>\(iso.string(from: point.timestamp))</time></trkpt>"
+        }.joined(separator: "\n")
+
+        let gpx = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" creator="MSM Instructor App" xmlns="http://www.topografix.com/GPX/1/1">
+          <trk>
+            <name>\(xmlEscape(trackName))</name>
+            <trkseg>
+        \(trkpts)
+            </trkseg>
+          </trk>
+        </gpx>
+        """
+
+        let filename = "msm-journey-\(iso.string(from: journey.startedAt).prefix(10)).gpx"
+        let response = Response(status: .ok)
+        response.headers.contentType = HTTPMediaType(type: "application", subType: "gpx+xml")
+        response.headers.replaceOrAdd(name: .contentDisposition, value: "attachment; filename=\(filename)")
+        response.body = .init(string: gpx)
+        return response
+    }
+
     // POST /instructor/bookings/:bookingID/journey/manoeuvres/confirm — the
     // instructor's retroactive "was this actually a manoeuvre?" verdict from the
     // journey map screen. Keyed on `startedAt` (unique enough within one journey's
