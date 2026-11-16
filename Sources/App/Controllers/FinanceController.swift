@@ -907,6 +907,17 @@ struct FinanceController {
             .all()
 
         let now = Date()
+
+        // Students with at least one active booking for a lesson that hasn't started
+        // yet — used to flag clients who have nothing on the books, independent of
+        // how recently they were last actually taught.
+        let upcomingBookings = try await Booking.query(on: req.db)
+            .filter(\.$deletedAt == nil)
+            .join(Lesson.self, on: \Booking.$lesson.$id == \Lesson.$id)
+            .filter(Lesson.self, \.$startsAt > now)
+            .all()
+        let studentIDsWithUpcomingLesson = Set(upcomingBookings.map { $0.$user.id })
+
         let rows = profiles.map { profile -> ClientLastLessonRow in
             let firstName = profile.firstName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let lastName = profile.lastName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -921,7 +932,8 @@ struct FinanceController {
                 studentID: profile.$user.id,
                 name: displayName,
                 lastAttendedLessonAt: profile.lastAttendedLessonAt,
-                daysSinceLastLesson: days
+                daysSinceLastLesson: days,
+                hasUpcomingLesson: studentIDsWithUpcomingLesson.contains(profile.$user.id)
             )
         }
 

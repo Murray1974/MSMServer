@@ -11,4 +11,8 @@ struct ClientLastLessonRow: Content {
     /// Nil when the student has never had an attended lesson — treated as the most
     /// overdue case by the controller's sort, not excluded from the list.
     let daysSinceLastLesson: Int?
+    /// True when the student has at least one active (non-cancelled) booking for a
+    /// lesson that hasn't started yet — lets the client flag "no upcoming lesson" even
+    /// for a client who was seen recently.
+    let hasUpcomingLesson: Bool
 }
