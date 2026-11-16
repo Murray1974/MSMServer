@@ -908,6 +908,13 @@ struct FinanceController {
 
         let now = Date()
 
+        // Calendar-day (midnight-to-midnight UK time), not a raw 24-hour elapsed check —
+        // a lesson at 11pm yesterday evaluated at 9am today is 10 hours ago but should
+        // read as "yesterday" (1 day), not "today" (0 days).
+        var ukCalendar = Calendar(identifier: .gregorian)
+        ukCalendar.timeZone = TimeZone(identifier: "Europe/London") ?? .current
+        let todayStart = ukCalendar.startOfDay(for: now)
+
         // Students with at least one active booking for a lesson that hasn't started
         // yet — used to flag clients who have nothing on the books, independent of
         // how recently they were last actually taught.
@@ -925,7 +932,7 @@ struct FinanceController {
             let displayName = fullName.isEmpty ? (profile.email ?? "Unknown") : fullName
 
             let days = profile.lastAttendedLessonAt.map {
-                Calendar.current.dateComponents([.day], from: $0, to: now).day ?? 0
+                ukCalendar.dateComponents([.day], from: ukCalendar.startOfDay(for: $0), to: todayStart).day ?? 0
             }
 
             return ClientLastLessonRow(
