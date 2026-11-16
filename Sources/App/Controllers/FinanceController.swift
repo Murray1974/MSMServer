@@ -896,6 +896,49 @@ struct FinanceController {
             $0.studentName.localizedCaseInsensitiveCompare($1.studentName) == .orderedAscending
         }
     }
+
+    /// Active clients sorted by longest-since-last-lesson first, for the instructor app's
+    /// Smart Stack follow-up card. Reuses `StudentProfile.lastAttendedLessonAt` rather than
+    /// re-deriving it from `ConfirmedLesson` history — that field is already the
+    /// authoritative source the 14/21/28-day inactivity system itself relies on.
+    func clientsByLastLesson(req: Request) async throws -> [ClientLastLessonRow] {
+        let profiles = try await StudentProfile.query(on: req.db)
+            .filter(\.$accountStatus == "active")
+            .all()
+
+        let now = Date()
+        let rows = profiles.map { profile -> ClientLastLessonRow in
+            let firstName = profile.firstName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let lastName = profile.lastName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = fullName.isEmpty ? (profile.email ?? "Unknown") : fullName
+
+            let days = profile.lastAttendedLessonAt.map {
+                Calendar.current.dateComponents([.day], from: $0, to: now).day ?? 0
+            }
+
+            return ClientLastLessonRow(
+                studentID: profile.$user.id,
+                name: displayName,
+                lastAttendedLessonAt: profile.lastAttendedLessonAt,
+                daysSinceLastLesson: days
+            )
+        }
+
+        // Never-attended clients are the most overdue, not an edge case to drop — sort
+        // them ahead of every real day-count, then real counts longest-since first.
+        return rows.sorted { lhs, rhs in
+            switch (lhs.daysSinceLastLesson, rhs.daysSinceLastLesson) {
+            case (nil, nil): return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            case (nil, _): return true
+            case (_, nil): return false
+            case let (l?, r?): return l == r
+                ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                : l > r
+            }
+        }
+    }
+
     func chargeLesson(req: Request) async throws -> LedgerEntry {
         let instructorID = try req.auth.require(User.self).requireID()
         guard let lessonID = req.parameters.get("lessonID", as: UUID.self) else {

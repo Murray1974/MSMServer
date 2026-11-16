@@ -3605,6 +3605,7 @@ public func routes(_ app: Application) throws {
     financeProtected.post("finance", "lessons", ":lessonID", "charge", use: finance.chargeLesson)
     financeProtected.post("instructor", "lessons", ":lessonID", "apply-late-charge", use: finance.applyLateChargeToLesson)
     financeProtected.get("finance", "students", use: finance.studentBalances)
+    financeProtected.get("finance", "clients", "last-lesson", use: finance.clientsByLastLesson)
     financeProtected.get("finance", "students", ":studentID", "transactions", use: finance.studentTransactions)
     financeProtected.get("finance", "students", ":studentID", "outstanding-lessons", use: finance.outstandingLessons)
     financeProtected.get("finance", "business-summary", use: finance.businessSummary)
