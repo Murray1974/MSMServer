@@ -165,6 +165,24 @@ struct SpeedingEvent: Codable {
     let roadName: String?
 }
 
+/// A sustained speed reduction over a short distance (e.g. scrubbing speed smoothly on
+/// approach to a junction or bend) that never crossed the `hardBrake` threshold in
+/// `detectDrivingEvents` — see `detectSpeedReductionEvents` in routes.swift. This is
+/// deliberately the complement of a harsh-braking event, not a replacement for one: a
+/// well-driven approach (early, smooth, controlled) is exactly the case that should show
+/// up here instead of as nothing at all, which is what happened before this existed.
+struct SpeedReductionEvent: Codable {
+    let startedAt: Date
+    let endedAt: Date
+    let startLatitude: Double
+    let startLongitude: Double
+    let endLatitude: Double
+    let endLongitude: Double
+    let fromMph: Double
+    let toMph: Double
+    let distanceMetres: Double
+}
+
 /// One instructor-marked "mock test" window, analysed in isolation from the rest of the
 /// lesson's own route/metrics. The window is carved out of the same single continuous
 /// recording — not a second, independently-run recording — by slicing the lesson's
@@ -255,6 +273,10 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
     @Field(key: "speeding_events")
     var speedingEvents: [SpeedingEvent]
 
+    /// See `SpeedReductionEvent`'s doc comment — added 17 Nov 2026.
+    @Field(key: "speed_reduction_events")
+    var speedReductionEvents: [SpeedReductionEvent]
+
     /// Which named Test Route (`TestRoute.swift`, Resources > Mock Test > Test Routes)
     /// this journey was driven against, for grouping test results by route + time of
     /// day. nil for every real lesson journey, and for any test journey not yet tagged
@@ -285,7 +307,8 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         mockTests: [MockTestResult] = [],
         isTestJourney: Bool = false,
         speedLimitPoints: [SpeedLimitPoint] = [],
-        speedingEvents: [SpeedingEvent] = []
+        speedingEvents: [SpeedingEvent] = [],
+        speedReductionEvents: [SpeedReductionEvent] = []
     ) {
         self.id = id
         self.bookingID = bookingID
@@ -303,5 +326,6 @@ final class LessonJourney: Model, Content, @unchecked Sendable {
         self.isTestJourney = isTestJourney
         self.speedLimitPoints = speedLimitPoints
         self.speedingEvents = speedingEvents
+        self.speedReductionEvents = speedReductionEvents
     }
 }

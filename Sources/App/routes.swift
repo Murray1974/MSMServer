@@ -2448,6 +2448,106 @@ public func routes(_ app: Application) throws {
         return events
     }
 
+    /// Catches a sustained speed scrub over a short distance — e.g. anticipating a
+    /// junction or bend and slowing early and smoothly — that never crosses
+    /// `detectDrivingEvents`' harsh-braking threshold and so would otherwise leave no
+    /// trace at all. Deliberately the complement of harsh braking, not a weaker version
+    /// of it: a well-driven approach is exactly the thing this should surface, separate
+    /// from anything already flagged as abrupt.
+    ///
+    /// Single pass, peak-to-trough: `windowStart` tracks the most recent local speed
+    /// high. Once speed drops below it, scans forward to find the lowest point before
+    /// speed climbs back up (the "trough"), bounded by `maxWindowDistanceMetres` so a
+    /// long, gradual motorway slowdown doesn't get swept in — this is about a *short*
+    /// distance, not overall deceleration. `excludingTimestamps` is the already-detected
+    /// hardBrake/rapidAccel set, so one abrupt moment doesn't also get double-reported
+    /// here as a "smooth" reduction it wasn't part of.
+    func detectSpeedReductionEvents(_ points: [JourneyPointInput], excludingTimestamps: Set<Date>) -> [SpeedReductionEvent] {
+        guard points.count > 1 else { return [] }
+        let maxWindowDistanceMetres = 150.0
+        let minDropMph = 15.0
+        let minStartSpeedMph = 20.0
+
+        var events: [SpeedReductionEvent] = []
+        var windowStart = 0
+        var i = 1
+
+        while i < points.count {
+            guard let startSpeed = points[windowStart].speedMph, let currentSpeed = points[i].speedMph else {
+                // Either end of the window has no speed reading — advance windowStart
+                // too, not just i, or a nil at windowStart (e.g. the very first point in
+                // the whole journey, confirmed as the cause of a real zero-events bug
+                // on 17 Nov 2026) permanently anchors the window there and the detector
+                // never fires again for the rest of the journey.
+                windowStart = i
+                i += 1
+                continue
+            }
+
+            // No drop yet — this point is a new local high, so the window resets here.
+            if currentSpeed >= startSpeed {
+                windowStart = i
+                i += 1
+                continue
+            }
+
+            let distanceSoFar = haversineMetres(
+                (points[windowStart].latitude, points[windowStart].longitude),
+                (points[i].latitude, points[i].longitude)
+            )
+            // This slowdown has run too long without resolving — it's gradual/sustained
+            // rather than a short scrub, so it's out of scope here. Slide the window
+            // forward and re-evaluate from the new start without advancing i.
+            if distanceSoFar > maxWindowDistanceMetres {
+                windowStart += 1
+                continue
+            }
+
+            // Walk forward to the bottom of this slowdown rather than firing on the
+            // first point that happens to be lower than the peak.
+            var trough = i
+            var j = i + 1
+            while j < points.count,
+                  let troughSpeed = points[trough].speedMph, let nextSpeed = points[j].speedMph,
+                  nextSpeed <= troughSpeed,
+                  haversineMetres(
+                      (points[windowStart].latitude, points[windowStart].longitude),
+                      (points[j].latitude, points[j].longitude)
+                  ) <= maxWindowDistanceMetres {
+                trough = j
+                j += 1
+            }
+
+            if let fromSpeed = points[windowStart].speedMph, let toSpeed = points[trough].speedMph {
+                let troughDistance = haversineMetres(
+                    (points[windowStart].latitude, points[windowStart].longitude),
+                    (points[trough].latitude, points[trough].longitude)
+                )
+                let hasAbruptEventInWindow = excludingTimestamps.contains { ts in
+                    ts >= points[windowStart].timestamp && ts <= points[trough].timestamp
+                }
+                if fromSpeed - toSpeed >= minDropMph, fromSpeed >= minStartSpeedMph,
+                   troughDistance <= maxWindowDistanceMetres, !hasAbruptEventInWindow {
+                    events.append(SpeedReductionEvent(
+                        startedAt: points[windowStart].timestamp,
+                        endedAt: points[trough].timestamp,
+                        startLatitude: points[windowStart].latitude,
+                        startLongitude: points[windowStart].longitude,
+                        endLatitude: points[trough].latitude,
+                        endLongitude: points[trough].longitude,
+                        fromMph: fromSpeed,
+                        toMph: toSpeed,
+                        distanceMetres: troughDistance
+                    ))
+                }
+            }
+
+            windowStart = trough
+            i = trough + 1
+        }
+        return events
+    }
+
     /// A single GPS fix occasionally reports an implausible speed (commonly 0.0, from
     /// a momentary signal glitch) sandwiched between two readings that are themselves
     /// consistent with each other and with steady driving either side. Confirmed
@@ -2957,6 +3057,9 @@ public func routes(_ app: Application) throws {
         let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
         let accelEvents = detectDrivingEvents(sanitizedPoints).filter { !corneringTimestamps.contains($0.timestamp) }
         journey.drivingEvents = accelEvents + corneringEvents
+        journey.speedReductionEvents = detectSpeedReductionEvents(
+            sanitizedPoints, excludingTimestamps: Set(accelEvents.map(\.timestamp))
+        )
         journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(sanitizedPoints))
         journey.mockTests = buildMockTestResults(input.mockTestWindows ?? [], allPoints: sanitizedPoints)
         journey.isTestJourney = input.isTestJourney ?? false
@@ -3201,6 +3304,9 @@ public func routes(_ app: Application) throws {
             let corneringTimestamps = Set(corneringEvents.map(\.timestamp))
             let accelEvents = detectDrivingEvents(sanitizedPoints).filter { !corneringTimestamps.contains($0.timestamp) }
             journey.drivingEvents = accelEvents + corneringEvents
+            journey.speedReductionEvents = detectSpeedReductionEvents(
+                sanitizedPoints, excludingTimestamps: Set(accelEvents.map(\.timestamp))
+            )
             journey.manoeuvreEvents = carryOverManoeuvreConfirmations(from: journey.manoeuvreEvents, to: detectManoeuvres(sanitizedPoints))
             let windows = journey.mockTests.map { MockTestWindowInput(startedAt: $0.startedAt, endedAt: $0.endedAt) }
             journey.mockTests = buildMockTestResults(windows, allPoints: sanitizedPoints)
