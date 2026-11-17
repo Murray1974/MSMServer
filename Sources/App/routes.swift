@@ -2377,61 +2377,35 @@ public func routes(_ app: Application) throws {
         return (bearing + 360).truncatingRemainder(dividingBy: 360)
     }
 
-    /// Detects sharp turns from the phone's fused yaw rate (`yawRateDegPerSec`) combined
-    /// with GPS speed — the same real-sensor approach commercial telematics use for
-    /// lateral g, and the same signal `detectManoeuvres` already relies on at low speed.
-    /// Far less noisy than estimating turn rate from GPS bearing deltas between
-    /// successive fixes (the original approach, kept below as
-    /// `detectHarshCorneringFromBearingFallback`): yaw rate comes straight off the gyro
-    /// rather than being derived from fix-to-fix position noise, which is exactly the
-    /// same accuracy gap `detectDrivingEvents` closed for braking/acceleration by
-    /// switching from GPS speed deltas to `accelMagnitudeG`.
-    /// Requires a minimum speed — a three-point turn or tight parking manoeuvre at
-    /// near-zero speed is `detectManoeuvres`' domain, not this one; the speed gate here
-    /// keeps the two from double-counting the same low-speed wheel movement.
-    /// `harshLateralG` is carried over unchanged from the old bearing-based version —
-    /// it hasn't yet been through the same real-data confirmation pass that tuned
-    /// `detectDrivingEvents`' thresholds, so treat it as a starting point pending that.
+    /// Detects sharp turns from GPS heading change alone — no accelerometer involved.
+    /// Estimates lateral g-force from how fast the bearing is rotating combined with
+    /// speed (centripetal acceleration ≈ v × dθ/dt). GPS-only, so noisier in principle
+    /// than real sensor-based telematics; thresholds below are hand-picked starting
+    /// points, not calibrated against real driving data (same caveat as
+    /// detectDrivingEvents). Requires a minimum speed — heading is meaningless/noisy
+    /// near-stationary, so without this a three-point turn or tight parking maneuver
+    /// would register as constant harsh cornering.
+    ///
+    /// TRIED AND REVERTED 17 Nov 2026: switched this to use the phone's fused yaw rate
+    /// (`yawRateDegPerSec`) instead, on the theory that a real gyro signal would be less
+    /// noisy than GPS bearing deltas — the same accuracy gap `detectDrivingEvents` closed
+    /// for braking/acceleration by switching to `accelMagnitudeG`. Confirmed wrong against
+    /// a real lesson the same day (Daniel Meredith, 17 Nov): 585 "harshCornering" events
+    /// fired on a single lesson, several with lateralG above 4g (physically impossible for
+    /// this car). Cross-checking each flagged point against this same GPS-bearing method
+    /// showed only 3 of the 585 agreed — the other 582 were spurious. At highway speed
+    /// (confirmed in the ~50mph range) the reported yaw rate swung ±100deg/s between
+    /// consecutive samples while the GPS bearing over the same points moved smoothly and
+    /// slowly (a gentle multi-second bend), with no correlation between the two —
+    /// `yawRateDegPerSec` is fused from gyro+accelerometer+**compass**, and a car body's
+    /// magnetometer interference at speed is the likely cause. That noise doesn't show up
+    /// in `detectManoeuvres`, which only uses yaw rate for *net rotation over a whole
+    /// low-speed episode* (the noise partly cancels out over several seconds of
+    /// integration) rather than a single instantaneous per-point threshold crossing — so
+    /// don't assume this same noise invalidates that detector too. If yaw rate is ever
+    /// revisited here, it needs to be smoothed/averaged over a window, not read per-point.
     func detectHarshCornering(_ points: [JourneyPointInput]) -> [DrivingEvent] {
         guard points.count > 2 else { return [] }
-        guard points.contains(where: { $0.yawRateDegPerSec != nil }) else {
-            return detectHarshCorneringFromBearingFallback(points)
-        }
-
-        let minSpeedMph = 10.0
-        let harshLateralG = 0.3
-
-        var events: [DrivingEvent] = []
-        for point in points {
-            guard let speed = point.speedMph, speed >= minSpeedMph else { continue }
-            guard let yawRateDegPerSec = point.yawRateDegPerSec else { continue }
-
-            let yawRateRadPerSec = abs(yawRateDegPerSec) * .pi / 180
-            let speedMetresPerSec = speed * 0.44704
-            let lateralG = (speedMetresPerSec * yawRateRadPerSec) / 9.81
-
-            guard lateralG >= harshLateralG else { continue }
-            events.append(DrivingEvent(
-                type: "harshCornering",
-                latitude: point.latitude,
-                longitude: point.longitude,
-                timestamp: point.timestamp,
-                fromMph: speed,
-                toMph: speed,
-                deltaMph: 0,
-                lateralG: lateralG
-            ))
-        }
-        return events
-    }
-
-    /// Original GPS-bearing-delta estimate — kept only as a fallback for journeys
-    /// recorded before yaw rate capture was added, so old data still gets *some* signal
-    /// rather than none. See `detectHarshCornering` for why this isn't the primary path
-    /// any more. No accelerometer/gyro involved: estimates lateral g-force from how fast
-    /// the GPS bearing is rotating combined with speed (centripetal acceleration ≈ v ×
-    /// dθ/dt) — noisier than the real-sensor approach above.
-    func detectHarshCorneringFromBearingFallback(_ points: [JourneyPointInput]) -> [DrivingEvent] {
         let minSpeedMph = 10.0
         let minDt = 1.0
         let maxDt = 12.0
