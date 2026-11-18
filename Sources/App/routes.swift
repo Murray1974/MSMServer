@@ -2538,7 +2538,8 @@ public func routes(_ app: Application) throws {
                         fromMph: fromSpeed,
                         toMph: toSpeed,
                         distanceMetres: troughDistance,
-                        pattern: classifySpeedReductionPattern(windowStart: windowStart, trough: trough, points: points)
+                        pattern: classifySpeedReductionPattern(windowStart: windowStart, trough: trough, points: points),
+                        resolvedIntoStop: reductionResolvedIntoStop(troughIndex: trough, points: points)
                     ))
                 }
             }
@@ -2570,6 +2571,35 @@ public func routes(_ app: Application) throws {
             rates.append(max((s1 - s2) / dt, 0))
         }
         return classifyIntensityPattern(rates)
+    }
+
+    /// Whether a speed-reduction event's trough was a genuine stop — not just the
+    /// lowest point before speed picked back up again (e.g. slowing for a bend, or
+    /// easing off behind a car that then pulled away). Deliberately simpler than
+    /// trying to detect *why* the car stopped (junction vs give-way vs queue vs
+    /// pedestrian crossing, which would need external map data) — only whether speed
+    /// actually came down to a stop, which is the part that matters for interpreting
+    /// the braking shape: the front/back-loaded "misjudged the gap" narrative only
+    /// holds together if the car was committing to a full stop.
+    ///
+    /// Originally required the next sample to *also* be near-zero, for some minimum
+    /// held duration — reverted 18 Nov 2026 after validating against 169 real
+    /// speed-reduction events from 23 real journeys and getting zero matches. Cause,
+    /// confirmed by inspecting the raw points directly: `CLLocationManager`'s
+    /// `distanceFilter` only fires a new fix once the car has moved ~15m, so while
+    /// genuinely stationary there's usually exactly *one* near-zero sample — the next
+    /// recorded fix only arrives once the car is moving again, often already well
+    /// above any "still stopped" threshold. A single sample at or below the same
+    /// `stoppedThresholdMph` `detectManoeuvres`' emergencyStop already uses is in
+    /// practice the strongest signal this data can offer. Re-checked against the
+    /// same real data: every trough that reached this threshold showed a smooth,
+    /// multi-sample continuous decline into it (not an isolated glitch sandwiched
+    /// between two unrelated high readings), so a single low reading here is trusted
+    /// at face value.
+    func reductionResolvedIntoStop(troughIndex: Int, points: [JourneyPointInput]) -> Bool {
+        let stoppedThresholdMph = 2.0
+        guard let troughSpeed = points[troughIndex].speedMph else { return false }
+        return troughSpeed <= stoppedThresholdMph
     }
 
     /// A single GPS fix occasionally reports an implausible speed (commonly 0.0, from

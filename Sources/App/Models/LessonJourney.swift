@@ -194,11 +194,22 @@ struct SpeedReductionEvent: Codable {
     /// reduction never crosses the accelerometer threshold the hardBrake version
     /// relies on, by definition, so there's no sensor signal to classify here.
     let pattern: String?
+    /// Whether the trough reached a genuine stop, rather than just being the lowest
+    /// point before speed picked back up again — see `reductionResolvedIntoStop` in
+    /// routes.swift. The front/back-loaded "misjudged the gap" narrative only makes
+    /// sense once this is true; a reduction that never actually stopped is a
+    /// different situation (overtake, lane change, easing behind traffic that moved
+    /// off again) and shouldn't be graded the same way. Defaults false for any
+    /// journey decoded before this field existed — `POST /admin/journeys/reanalyze`
+    /// resaves every stored journey with a real value immediately after this
+    /// shipped, so that default is only ever a momentary gap, not a lasting
+    /// misclassification.
+    let resolvedIntoStop: Bool
 
     init(
         startedAt: Date, endedAt: Date, startLatitude: Double, startLongitude: Double,
         endLatitude: Double, endLongitude: Double, fromMph: Double, toMph: Double,
-        distanceMetres: Double, pattern: String? = nil
+        distanceMetres: Double, pattern: String? = nil, resolvedIntoStop: Bool = false
     ) {
         self.startedAt = startedAt
         self.endedAt = endedAt
@@ -210,6 +221,22 @@ struct SpeedReductionEvent: Codable {
         self.toMph = toMph
         self.distanceMetres = distanceMetres
         self.pattern = pattern
+        self.resolvedIntoStop = resolvedIntoStop
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        endedAt = try c.decode(Date.self, forKey: .endedAt)
+        startLatitude = try c.decode(Double.self, forKey: .startLatitude)
+        startLongitude = try c.decode(Double.self, forKey: .startLongitude)
+        endLatitude = try c.decode(Double.self, forKey: .endLatitude)
+        endLongitude = try c.decode(Double.self, forKey: .endLongitude)
+        fromMph = try c.decode(Double.self, forKey: .fromMph)
+        toMph = try c.decode(Double.self, forKey: .toMph)
+        distanceMetres = try c.decode(Double.self, forKey: .distanceMetres)
+        pattern = try c.decodeIfPresent(String.self, forKey: .pattern)
+        resolvedIntoStop = try c.decodeIfPresent(Bool.self, forKey: .resolvedIntoStop) ?? false
     }
 }
 
