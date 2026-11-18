@@ -188,6 +188,29 @@ struct SpeedReductionEvent: Codable {
     let fromMph: Double
     let toMph: Double
     let distanceMetres: Double
+    /// Same frontLoaded/backLoaded/sustained bucketing as `DrivingEvent.pattern`, but
+    /// derived from the GPS speed trend across this event's window rather than
+    /// `accelMagnitudeG` — see `classifySpeedReductionPattern` in routes.swift. A
+    /// reduction never crosses the accelerometer threshold the hardBrake version
+    /// relies on, by definition, so there's no sensor signal to classify here.
+    let pattern: String?
+
+    init(
+        startedAt: Date, endedAt: Date, startLatitude: Double, startLongitude: Double,
+        endLatitude: Double, endLongitude: Double, fromMph: Double, toMph: Double,
+        distanceMetres: Double, pattern: String? = nil
+    ) {
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.startLatitude = startLatitude
+        self.startLongitude = startLongitude
+        self.endLatitude = endLatitude
+        self.endLongitude = endLongitude
+        self.fromMph = fromMph
+        self.toMph = toMph
+        self.distanceMetres = distanceMetres
+        self.pattern = pattern
+    }
 }
 
 /// One instructor-marked "mock test" window, analysed in isolation from the rest of the

@@ -2537,7 +2537,8 @@ public func routes(_ app: Application) throws {
                         endLongitude: points[trough].longitude,
                         fromMph: fromSpeed,
                         toMph: toSpeed,
-                        distanceMetres: troughDistance
+                        distanceMetres: troughDistance,
+                        pattern: classifySpeedReductionPattern(windowStart: windowStart, trough: trough, points: points)
                     ))
                 }
             }
@@ -2546,6 +2547,29 @@ public func routes(_ app: Application) throws {
             i = trough + 1
         }
         return events
+    }
+
+    /// Reuses `classifyIntensityPattern`'s frontLoaded/backLoaded/sustained bucketing
+    /// for a speed-reduction event, but feeds it deceleration rate (mph/s) derived
+    /// from consecutive GPS speed samples across the event's own window, instead of
+    /// `accelMagnitudeG` — a speed reduction has, by definition, no sensor reading
+    /// that ever cleared `detectDrivingEvents`' accel threshold, so there's no sensor
+    /// signal to classify; GPS speed trend is the only data available. Each rate is a
+    /// single interval's own deceleration — not cumulative, not smoothed — exactly
+    /// analogous to one accelMagnitudeG reading representing that moment's braking
+    /// force. Negative rates (speed momentarily rose within the window) are floored
+    /// to 0 rather than passed through, since `classifyIntensityPattern` only looks
+    /// for where the intensity peak sits, not direction.
+    func classifySpeedReductionPattern(windowStart: Int, trough: Int, points: [JourneyPointInput]) -> String? {
+        guard trough > windowStart else { return nil }
+        var rates: [Double] = []
+        for idx in windowStart..<trough {
+            guard let s1 = points[idx].speedMph, let s2 = points[idx + 1].speedMph else { continue }
+            let dt = points[idx + 1].timestamp.timeIntervalSince(points[idx].timestamp)
+            guard dt > 0 else { continue }
+            rates.append(max((s1 - s2) / dt, 0))
+        }
+        return classifyIntensityPattern(rates)
     }
 
     /// A single GPS fix occasionally reports an implausible speed (commonly 0.0, from
