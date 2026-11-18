@@ -2703,21 +2703,70 @@ public func routes(_ app: Application) throws {
     func mergeAdjacentDrivingEvents(_ events: [DrivingEvent], maxGapSeconds: TimeInterval = 3.0) -> [DrivingEvent] {
         guard events.count > 1 else { return events }
         var merged: [DrivingEvent] = [events[0]]
+        // Parallel to `merged` — runMagnitudes[k] holds the |deltaMph| of every
+        // pre-merge sample folded into merged[k] so far, oldest first. Used to derive
+        // `pattern` (see classifyIntensityPattern) each time another sample joins the
+        // run; thrown away once the run ends, so it costs nothing beyond the merge pass.
+        var runMagnitudes: [[Double]] = [[abs(events[0].deltaMph)]]
         for next in events.dropFirst() {
             let last = merged[merged.count - 1]
             if next.type == last.type, next.timestamp.timeIntervalSince(last.timestamp) <= maxGapSeconds {
+                runMagnitudes[runMagnitudes.count - 1].append(abs(next.deltaMph))
                 merged[merged.count - 1] = DrivingEvent(
                     type: last.type,
                     latitude: next.latitude, longitude: next.longitude,
                     timestamp: next.timestamp,
                     fromMph: last.fromMph, toMph: next.toMph,
-                    deltaMph: next.toMph - last.fromMph
+                    deltaMph: next.toMph - last.fromMph,
+                    pattern: classifyIntensityPattern(runMagnitudes[runMagnitudes.count - 1])
                 )
             } else {
                 merged.append(next)
+                runMagnitudes.append([abs(next.deltaMph)])
             }
         }
         return merged
+    }
+
+    /// Classifies how a merged hardBrake/rapidAccel event's intensity varied across its
+    /// constituent GPS fixes — see `DrivingEvent.pattern`'s doc comment. Added 18 Nov
+    /// 2026 at the user's request: a brake that ramps up and peaks at the end (misjudged
+    /// gap, late correction) reads very differently to an instructor than one that's
+    /// hard immediately and eases off (reactive but recovered), and the per-point
+    /// `deltaMph` values a merge run is built from already distinguish these — they were
+    /// just being discarded once collapsed into one event.
+    ///
+    /// Each `magnitudes` entry is one GPS-fix-to-GPS-fix step within the run, spaced by
+    /// the 15m location `distanceFilter`, not by time — so a short, sharp 2-3 second
+    /// brake may only have 2-3 steps (not enough to call a shape; see the count guard
+    /// below), while a longer, more gradual braking episode covering more ground
+    /// naturally yields more steps and a more resolvable pattern. That asymmetry is
+    /// expected, not a bug: this is deliberately a coarse 4-bucket label, not a
+    /// continuous curve, given how few samples a typical event has to work with.
+    func classifyIntensityPattern(_ magnitudes: [Double]) -> String? {
+        guard magnitudes.count >= 3 else { return nil }
+        let n = magnitudes.count
+        guard let maxV = magnitudes.max(), let minV = magnitudes.min(), maxV > 0 else { return nil }
+
+        // Pulsed: more than one local peak (strictly greater than both neighbours) —
+        // e.g. stutter-braking across multiple hazards, rather than one continuous event.
+        var localPeaks = 0
+        for i in 0..<n {
+            let prev = i > 0 ? magnitudes[i - 1] : -Double.infinity
+            let next = i < n - 1 ? magnitudes[i + 1] : -Double.infinity
+            if magnitudes[i] > prev, magnitudes[i] > next { localPeaks += 1 }
+        }
+        if localPeaks >= 2 { return "pulsed" }
+
+        // Sustained: intensity stays within a narrow band of its peak throughout —
+        // usually good, continuous anticipatory braking rather than a single harsh jolt.
+        if (maxV - minV) / maxV < 0.35 { return "sustained" }
+
+        guard let peakIndex = magnitudes.firstIndex(of: maxV) else { return nil }
+        let thirdSize = max(1, n / 3)
+        if peakIndex < thirdSize { return "frontLoaded" }
+        if peakIndex >= n - thirdSize { return "backLoaded" }
+        return nil // peak sits in the middle third — no clean front/back-loaded story
     }
 
     /// Original GPS-speed-delta heuristic — kept only as a fallback for journeys
