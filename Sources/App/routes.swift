@@ -2661,6 +2661,7 @@ public func routes(_ app: Application) throws {
         let minDtForHarshEvent = 1.0
 
         var events: [DrivingEvent] = []
+        var flaggedIndices: [Int] = []
         for i in 1..<points.count {
             guard let accel = points[i].accelMagnitudeG, accel >= harshAccelG else { continue }
             guard let fromSpeed = points[i - 1].speedMph, let toSpeed = points[i].speedMph else { continue }
@@ -2687,8 +2688,9 @@ public func routes(_ app: Application) throws {
                 toMph: toSpeed,
                 deltaMph: deltaMph
             ))
+            flaggedIndices.append(i)
         }
-        return mergeAdjacentDrivingEvents(events)
+        return mergeAdjacentDrivingEvents(events, at: flaggedIndices, in: points)
     }
 
     /// One real sustained brake/accel can clear the per-sample threshold above on
@@ -2700,63 +2702,122 @@ public func routes(_ app: Application) throws {
     /// 3s is deliberately tight — close to the native GPS sampling gap — so genuinely
     /// separate braking taps a few seconds apart (e.g. two different junctions) are
     /// left alone; only near-back-to-back samples of the *same* type get merged.
-    func mergeAdjacentDrivingEvents(_ events: [DrivingEvent], maxGapSeconds: TimeInterval = 3.0) -> [DrivingEvent] {
-        guard events.count > 1 else { return events }
+    ///
+    /// `indices[k]` is `events[k]`'s position in `points` — needed (alongside `points`
+    /// itself) to expand each merged run's `pattern` into the surrounding raw samples
+    /// (see `expandEventWindow`), not just the samples that individually crossed the
+    /// harsh threshold. Doesn't touch fromMph/toMph/deltaMph, which still describe only
+    /// the core threshold-crossing run exactly as before.
+    func mergeAdjacentDrivingEvents(_ events: [DrivingEvent], at indices: [Int] = [], in points: [JourneyPointInput] = [], maxGapSeconds: TimeInterval = 3.0) -> [DrivingEvent] {
+        guard !events.isEmpty else { return events }
         var merged: [DrivingEvent] = [events[0]]
-        // Parallel to `merged` — runMagnitudes[k] holds the |deltaMph| of every
-        // pre-merge sample folded into merged[k] so far, oldest first. Used to derive
-        // `pattern` (see classifyIntensityPattern) each time another sample joins the
-        // run; thrown away once the run ends, so it costs nothing beyond the merge pass.
-        var runMagnitudes: [[Double]] = [[abs(events[0].deltaMph)]]
-        for next in events.dropFirst() {
-            let last = merged[merged.count - 1]
-            if next.type == last.type, next.timestamp.timeIntervalSince(last.timestamp) <= maxGapSeconds {
-                runMagnitudes[runMagnitudes.count - 1].append(abs(next.deltaMph))
-                merged[merged.count - 1] = DrivingEvent(
-                    type: last.type,
-                    latitude: next.latitude, longitude: next.longitude,
-                    timestamp: next.timestamp,
-                    fromMph: last.fromMph, toMph: next.toMph,
-                    deltaMph: next.toMph - last.fromMph,
-                    pattern: classifyIntensityPattern(runMagnitudes[runMagnitudes.count - 1])
-                )
-            } else {
-                merged.append(next)
-                runMagnitudes.append([abs(next.deltaMph)])
+        var runStartIndices = [indices.first ?? 0]
+        var runEndIndices = [indices.first ?? 0]
+
+        if events.count > 1 {
+            for k in 1..<events.count {
+                let next = events[k]
+                let nextIndex = indices.indices.contains(k) ? indices[k] : runEndIndices.last!
+                let last = merged[merged.count - 1]
+                if next.type == last.type, next.timestamp.timeIntervalSince(last.timestamp) <= maxGapSeconds {
+                    runEndIndices[runEndIndices.count - 1] = nextIndex
+                    merged[merged.count - 1] = DrivingEvent(
+                        type: last.type,
+                        latitude: next.latitude, longitude: next.longitude,
+                        timestamp: next.timestamp,
+                        fromMph: last.fromMph, toMph: next.toMph,
+                        deltaMph: next.toMph - last.fromMph
+                    )
+                } else {
+                    merged.append(next)
+                    runStartIndices.append(nextIndex)
+                    runEndIndices.append(nextIndex)
+                }
             }
+        }
+
+        guard !points.isEmpty else { return merged }
+        for k in merged.indices {
+            let (windowStart, windowEnd) = expandEventWindow(
+                coreStart: runStartIndices[k], coreEnd: runEndIndices[k], type: merged[k].type, points: points
+            )
+            let magnitudes = (windowStart...windowEnd).compactMap { points[$0].accelMagnitudeG }
+            let e = merged[k]
+            merged[k] = DrivingEvent(
+                type: e.type, latitude: e.latitude, longitude: e.longitude, timestamp: e.timestamp,
+                fromMph: e.fromMph, toMph: e.toMph, deltaMph: e.deltaMph, lateralG: e.lateralG,
+                pattern: classifyIntensityPattern(magnitudes)
+            )
         }
         return merged
     }
 
-    /// Classifies how a merged hardBrake/rapidAccel event's intensity varied across its
-    /// constituent GPS fixes — see `DrivingEvent.pattern`'s doc comment. Added 18 Nov
-    /// 2026 at the user's request: a brake that ramps up and peaks at the end (misjudged
-    /// gap, late correction) reads very differently to an instructor than one that's
-    /// hard immediately and eases off (reactive but recovered), and the per-point
-    /// `deltaMph` values a merge run is built from already distinguish these — they were
-    /// just being discarded once collapsed into one event.
+    /// Expands a run's core threshold-crossing span (`coreStart...coreEnd`, indices
+    /// into `points`) outward into the surrounding raw samples, to capture the gradual
+    /// lead-in/taper around it — e.g. pressure building for a couple of seconds before
+    /// finally crossing the harsh-event threshold, which `detectDrivingEvents` alone
+    /// would never see since it only looks at samples that individually cleared 0.3g.
+    /// Added 18 Nov 2026 at the user's request, after real data showed the
+    /// threshold-only chain almost never produced more than one sample per event (115
+    /// hardBrake/rapidAccel events across 41 real journeys, only 1 had 3+ chained
+    /// samples) — i.e. the shape that matters (gradual build-up vs. sudden peak) mostly
+    /// lives in samples that never individually crossed the threshold at all.
     ///
-    /// Each `magnitudes` entry is one GPS-fix-to-GPS-fix step within the run, spaced by
-    /// the 15m location `distanceFilter`, not by time — so a short, sharp 2-3 second
-    /// brake may only have 2-3 steps (not enough to call a shape; see the count guard
-    /// below), while a longer, more gradual braking episode covering more ground
-    /// naturally yields more steps and a more resolvable pattern. That asymmetry is
-    /// expected, not a bug: this is deliberately a coarse 4-bucket label, not a
-    /// continuous curve, given how few samples a typical event has to work with.
+    /// Stops expanding in each direction as soon as the trend reverses (speed stops
+    /// falling for a brake, stops rising for an accel) or the gap to the next/previous
+    /// sample exceeds maxDt — both signal a different episode, not more of this one.
+    /// Capped at maxExtraPoints each side as a backstop against pathological data.
+    func expandEventWindow(coreStart: Int, coreEnd: Int, type: String, points: [JourneyPointInput]) -> (Int, Int) {
+        let maxDt = 8.0
+        let maxExtraPoints = 8
+
+        func isContinuing(from: Int, to: Int) -> Bool {
+            guard let fromSpeed = points[from].speedMph, let toSpeed = points[to].speedMph else { return false }
+            let dt = points[to].timestamp.timeIntervalSince(points[from].timestamp)
+            guard dt > 0, dt <= maxDt else { return false }
+            return type == "hardBrake" ? toSpeed <= fromSpeed : toSpeed >= fromSpeed
+        }
+
+        var start = coreStart
+        var extended = 0
+        while start > 0, extended < maxExtraPoints, isContinuing(from: start - 1, to: start) {
+            start -= 1
+            extended += 1
+        }
+
+        var end = coreEnd
+        extended = 0
+        while end < points.count - 1, extended < maxExtraPoints, isContinuing(from: end, to: end + 1) {
+            end += 1
+            extended += 1
+        }
+
+        return (start, end)
+    }
+
+    /// Classifies how intensity varied across a (possibly window-expanded) span of
+    /// `accelMagnitudeG` samples — see `DrivingEvent.pattern`'s doc comment and
+    /// `expandEventWindow`. A brake that ramps up and peaks at the end (misjudged gap,
+    /// late correction) reads very differently to an instructor than one that's hard
+    /// immediately and eases off (reactive but recovered).
+    ///
+    /// This is deliberately a coarse 3-bucket label, not a continuous curve — even with
+    /// window expansion, a typical event only has a handful of raw samples (GPS fixes
+    /// are spaced by the 15m location `distanceFilter`, not by time) to work with.
+    ///
+    /// There was originally a 4th bucket, "pulsed" (2+ local peaks, meant to catch
+    /// stutter-braking across multiple hazards) — dropped before shipping, 18 Nov 2026,
+    /// after checking real `accelMagnitudeG` sequences for events it fired on: the raw
+    /// signal genuinely bounces 2-3x in magnitude within a single, cleanly-decelerating
+    /// brake (e.g. 0.267→0.168→0.48→0.197→0.313 while speed fell smoothly throughout) —
+    /// that's sensor/road noise, not evidence of distinct braking actions, and it fired
+    /// on 93 of 122 real events. frontLoaded/backLoaded/sustained below only look at
+    /// *where* the single overall peak sits and how much the range varies, which is far
+    /// less sensitive to this noise level than counting local ups-and-downs.
     func classifyIntensityPattern(_ magnitudes: [Double]) -> String? {
         guard magnitudes.count >= 3 else { return nil }
         let n = magnitudes.count
         guard let maxV = magnitudes.max(), let minV = magnitudes.min(), maxV > 0 else { return nil }
-
-        // Pulsed: more than one local peak (strictly greater than both neighbours) —
-        // e.g. stutter-braking across multiple hazards, rather than one continuous event.
-        var localPeaks = 0
-        for i in 0..<n {
-            let prev = i > 0 ? magnitudes[i - 1] : -Double.infinity
-            let next = i < n - 1 ? magnitudes[i + 1] : -Double.infinity
-            if magnitudes[i] > prev, magnitudes[i] > next { localPeaks += 1 }
-        }
-        if localPeaks >= 2 { return "pulsed" }
 
         // Sustained: intensity stays within a narrow band of its peak throughout —
         // usually good, continuous anticipatory braking rather than a single harsh jolt.

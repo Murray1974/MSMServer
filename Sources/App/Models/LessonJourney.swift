@@ -124,10 +124,10 @@ struct DrivingEvent: Codable {
     /// Estimated lateral g-force, only set for "harshCornering" events.
     let lateralG: Double?
     /// How intensity varied across the event's span — "frontLoaded" | "backLoaded" |
-    /// "sustained" | "pulsed", or nil when there weren't enough constituent GPS fixes
-    /// to classify a shape, or no clean pattern emerged. Only set for "hardBrake"/
-    /// "rapidAccel" events that `mergeAdjacentDrivingEvents` merged from 3+ consecutive
-    /// flagged points — see that function and `classifyIntensityPattern`.
+    /// "sustained", or nil when there weren't enough raw GPS fixes in the surrounding
+    /// window to classify a shape, or no clean pattern emerged. Only set for
+    /// "hardBrake"/"rapidAccel" events — see `expandEventWindow`/`classifyIntensityPattern`
+    /// in routes.swift for how the window is built and classified.
     let pattern: String?
 
     init(type: String, latitude: Double, longitude: Double, timestamp: Date,
