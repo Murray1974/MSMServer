@@ -2606,6 +2606,10 @@ public func routes(_ app: Application) throws {
     /// wiggle (already handled by `detectManoeuvres`) never gets mislabelled as a harsh
     /// driving event here.
     ///
+    /// Horizontal-plane only as of 18 Nov 2026 — `JourneyTrackingManager` excludes the
+    /// vertical/Z component client-side so a pothole or speed bump, which is
+    /// predominantly vertical, doesn't read as a harsh brake/accel.
+    ///
     /// Falls back to the old GPS-speed-delta heuristic for journeys with no
     /// accelerometer data at all (recorded before motion-sensor capture was added).
     func detectDrivingEvents(_ points: [JourneyPointInput]) -> [DrivingEvent] {

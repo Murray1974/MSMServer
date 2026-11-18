@@ -778,8 +778,22 @@ struct InstructorLessonController: RouteCollection {
         return .ok
     }
 
+    /// Response for both setDropoffLocation/setPickupLocation below — `geocoded: false`
+    /// tells the client the address text was saved but no map coordinate could be found
+    /// for it, so tracking/journey-recording will keep using whatever coordinate was
+    /// already there (if any) rather than the address just typed. Added 18 Nov 2026
+    /// after a real incident: an instructor retyped a pickup address with a typo'd road
+    /// name ("Hale Road" instead of "Hele Road"), geocoding silently failed, and
+    /// journey recording kept geofencing on the student's old (unrelated) pickup point
+    /// for the whole lesson with no indication anything was wrong — this endpoint
+    /// previously always returned a flat 200 regardless of whether reGeocodePickup/
+    /// reGeocodeDropoff actually found a match.
+    struct GeocodeOutcome: Content {
+        let geocoded: Bool
+    }
+
     // MARK: - PATCH /instructor/bookings/:bookingID/dropoff
-    func setDropoffLocation(_ req: Request) async throws -> HTTPStatus {
+    func setDropoffLocation(_ req: Request) async throws -> GeocodeOutcome {
         struct Body: Content {
             var dropoffLocation: String?
         }
@@ -796,12 +810,14 @@ struct InstructorLessonController: RouteCollection {
         let raw = body.dropoffLocation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         booking.dropoffLocation = raw.isEmpty ? nil : raw
         try await booking.save(on: req.db)
-        await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
-        return .ok
+        let resolved = await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
+        // Clearing the address entirely is a deliberate action, not a failed geocode —
+        // only a non-empty address that couldn't be resolved counts as `geocoded: false`.
+        return GeocodeOutcome(geocoded: raw.isEmpty || resolved)
     }
 
     // MARK: - PATCH /instructor/bookings/:bookingID/pickup
-    func setPickupLocation(_ req: Request) async throws -> HTTPStatus {
+    func setPickupLocation(_ req: Request) async throws -> GeocodeOutcome {
         struct Body: Content {
             var pickupLocation: String?
         }
@@ -819,13 +835,13 @@ struct InstructorLessonController: RouteCollection {
         booking.pickupLocation = raw.isEmpty ? nil : raw
         booking.pickupSource = booking.pickupLocation != nil ? "instructor" : nil
         try await booking.save(on: req.db)
-        await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
+        let resolved = await booking.reGeocodePickup(client: req.client, logger: req.logger, on: req.db)
         // Pickup coordinates feed dropoff's fallback (see reGeocodeDropoff), so a
         // dropoff that was itself never explicitly set needs re-deriving here too.
         if booking.dropoffLocation == nil || booking.dropoffLocation!.isEmpty {
             await booking.reGeocodeDropoff(client: req.client, logger: req.logger, on: req.db)
         }
-        return .ok
+        return GeocodeOutcome(geocoded: raw.isEmpty || resolved)
     }
 
     // MARK: - GET /instructor/bookings/:bookingID/pickup-suggestions
